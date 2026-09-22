@@ -1,0 +1,20 @@
+{
+  "name": "factory",
+  "version": "0.1.0",
+  "description": "Run source-grounded development Objectives in a target repository.",
+  "author": { "name": "Clockgrove", "url": "https://github.com/clockgrove" },
+  "repository": "https://github.com/clockgrove/factory-rebuild",
+  "license": "MIT",
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Factory",
+    "shortDescription": "Run development Objectives in a target repository",
+    "longDescription": "Compile repository Objectives into Work Items, execute with an installed harness, validate exact results, and deliver through GitHub.",
+    "developerName": "Clockgrove",
+    "category": "Developer Tools",
+    "capabilities": ["Read", "Write"],
+    "defaultPrompt": [
+      "Use Factory to inspect a development Objective in my repository"
+    ]
+  }
+}

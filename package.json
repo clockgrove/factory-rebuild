@@ -1,0 +1,40 @@
+{
+  "name": "@clockgrove/factory",
+  "version": "0.1.0",
+  "description": "Objective-driven development plugin for a target repository",
+  "type": "module",
+  "license": "MIT",
+  "bin": {
+    "factory": "./dist/cli.js"
+  },
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "files": [
+    "dist",
+    "skills",
+    ".codex-plugin",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "eslint src",
+    "format:check": "prettier --check .",
+    "format": "prettier --write .",
+    "test": "node --test",
+    "package": "npm pack --dry-run"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.36.0",
+    "@types/node": "^24.5.2",
+    "eslint": "^9.36.0",
+    "prettier": "^3.6.2",
+    "typescript": "^5.9.2",
+    "typescript-eslint": "^8.44.1"
+  }
+}

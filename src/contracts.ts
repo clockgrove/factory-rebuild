@@ -1,0 +1,218 @@
+export type Repository = `${string}/${string}`;
+
+export interface WorkItem {
+  id: string;
+  title: string;
+  goal: string;
+  acceptance: string[];
+  citations: { path: string; heading?: string }[];
+  dependencies: string[];
+  ownedPaths: string[];
+  resources?: string[];
+  validation: {
+    command: string;
+    provenance: "base-observed" | "source-declared";
+    source?: string;
+  }[];
+  brief: string;
+  mediaIntents?: unknown[];
+  sourceAssets?: string[];
+  expectedOutputRoles?: string[];
+}
+
+export interface WorkGraph {
+  objective: number;
+  baseSha: string;
+  items: WorkItem[];
+}
+
+export interface PlanningRequest<T> {
+  objective: string;
+  baseSha: string;
+  sources: { path: string; content: string }[];
+  schema: unknown;
+  resultType?: T;
+}
+export interface PlanningModel {
+  generateStructured<T>(request: PlanningRequest<T>): Promise<T>;
+}
+
+export interface ExecutionRequest {
+  item: WorkItem;
+  baseSha: string;
+  sourceAssets?: ContentRef[];
+}
+export interface ExecutionHandle {
+  provider: string;
+  identity: string;
+  data?: unknown;
+}
+export interface ExecutionObservation {
+  state: "running" | "complete" | "failed" | "cancelled";
+  detail?: string;
+}
+export interface ExecutionResult {
+  treeSha: string;
+  changeRef: string;
+  assets?: ProducedAssetSet[];
+  evidence?: unknown;
+}
+export interface ExecutionDriver {
+  availableSlots(): Promise<number | "unknown">;
+  start(request: ExecutionRequest): Promise<ExecutionHandle>;
+  observe(handle: ExecutionHandle): Promise<ExecutionObservation>;
+  cancel(handle: ExecutionHandle): Promise<void>;
+  collect(handle: ExecutionHandle): Promise<ExecutionResult>;
+}
+
+export interface HarnessRequest {
+  item: WorkItem;
+  worktree: string;
+  sourceAssets?: ContentRef[];
+}
+export interface HarnessHandle {
+  identity: string;
+  data?: unknown;
+}
+export interface HarnessObservation {
+  state: "running" | "complete" | "failed" | "cancelled";
+  detail?: string;
+}
+export interface HarnessResult {
+  assets?: ProducedAssetSet[];
+  evidence?: unknown;
+}
+export interface AgentHarness {
+  start(request: HarnessRequest): Promise<HarnessHandle>;
+  observe(handle: HarnessHandle): Promise<HarnessObservation>;
+  cancel(handle: HarnessHandle): Promise<void>;
+  collect(handle: HarnessHandle): Promise<HarnessResult>;
+}
+
+export interface SandboxRequest {
+  item: WorkItem;
+  baseSha: string;
+}
+export interface SandboxHandle {
+  identity: string;
+  data?: unknown;
+}
+export interface SandboxInput {
+  path: string;
+  digest: string;
+}
+export interface SandboxCommand {
+  command: string;
+  cwd?: string;
+}
+export interface RemoteProcess {
+  identity: string;
+  data?: unknown;
+}
+export interface RemoteObservation {
+  state: "running" | "complete" | "failed";
+  detail?: string;
+}
+export interface SandboxOutput {
+  path: string;
+  digest?: string;
+}
+export interface SandboxProvider {
+  create(request: SandboxRequest): Promise<SandboxHandle>;
+  upload(handle: SandboxHandle, input: SandboxInput): Promise<void>;
+  execute(
+    handle: SandboxHandle,
+    command: SandboxCommand,
+  ): Promise<RemoteProcess>;
+  observe(process: RemoteProcess): Promise<RemoteObservation>;
+  download(handle: SandboxHandle, output: SandboxOutput): Promise<void>;
+  destroy(handle: SandboxHandle): Promise<void>;
+}
+
+export interface DeliveryRequest {
+  item: WorkItem;
+  baseSha: string;
+  treeSha: string;
+  branch: string;
+}
+export interface DeliveryResult {
+  branch: string;
+  pullRequest: number;
+  headSha: string;
+}
+export interface DeliveryObservation {
+  state: "open" | "merged" | "closed";
+  checks: "pending" | "passing" | "failing";
+}
+export interface MergeResult {
+  integratedSha: string;
+}
+export interface DeliveryStrategy {
+  publish(request: DeliveryRequest): Promise<DeliveryResult>;
+  observe(result: DeliveryResult): Promise<DeliveryObservation>;
+  merge(result: DeliveryResult): Promise<MergeResult>;
+}
+
+export interface ContentMetadata {
+  mediaType: string;
+  visibility: "private" | "repository";
+  provenance?: unknown;
+}
+export interface ContentRef {
+  digest: string;
+  bytes: number;
+  mediaType: string;
+}
+export interface ContentStore {
+  put(
+    stream: ReadableStream<Uint8Array>,
+    metadata: ContentMetadata,
+  ): Promise<ContentRef>;
+  open(ref: ContentRef): Promise<ReadableStream<Uint8Array>>;
+  verify(ref: ContentRef): Promise<void>;
+  materialize(ref: ContentRef, destination: string): Promise<void>;
+}
+
+export interface ProducedAssetSet {
+  id: string;
+  members: {
+    role: string;
+    path: string;
+    mediaType: string;
+    destination?: string;
+  }[];
+  provenance?: unknown;
+}
+
+export interface GraphProjection {
+  graph: WorkGraph;
+  objectiveIssue: number;
+}
+export interface ProjectedGraph {
+  issueByItemId: Record<string, number>;
+}
+export interface PullRequestPublication {
+  branch: string;
+  base: string;
+  treeSha: string;
+  title: string;
+  body: string;
+}
+export interface PullRequestIdentity {
+  number: number;
+  branch: string;
+  headSha: string;
+}
+export interface PullRequestObservation {
+  state: "open" | "merged" | "closed";
+  checks: "pending" | "passing" | "failing";
+}
+export interface GitHubGateway {
+  projectGraph(request: GraphProjection): Promise<ProjectedGraph>;
+  publish(request: PullRequestPublication): Promise<PullRequestIdentity>;
+  observe(identity: PullRequestIdentity): Promise<PullRequestObservation>;
+  merge(
+    identity: PullRequestIdentity,
+    expectedHead: string,
+  ): Promise<MergeResult>;
+}
