@@ -29,3 +29,14 @@ The same archived commit was inspected for these behaviors. The clean destinatio
 | `src/graph.ts`, `src/github.ts`   | `src/github.ts`                                     | Project linked Work Item issues and native blocked-by dependencies alongside the Objective.                                    |
 | `src/runtime/process-group.ts`    | `src/process.ts`, `src/execution/local.ts`          | Bind a detached worker to a Linux PID and start time, signal only the owned group, and verify that live group members exit.    |
 | `src/backends/codex-sdk-local.ts` | `src/execution/worker.ts`, `src/execution/local.ts` | Run one SDK attempt in an identifiable worker process and collect its durable result after controller restart.                 |
+
+## Slice 3 extraction
+
+The same audited commit supplied the delivery checklist. GitHub's current versioned stack and asynchronous merge API was also checked against official documentation before implementation. The clean delivery code retains only the behavior needed by regular and immutable native linear PR paths.
+
+| Archived path                      | Clean destination                                          | Behavior retained                                                                                                                                                                              |
+| ---------------------------------- | ---------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/publication/delivery.ts`      | `src/delivery/plan.ts`                                     | Partition maximal unbranched linear chains; end a chain at forks and start a new one at multi-parent joins. No archived delivery-hint protocol was copied.                                     |
+| `src/publication/publisher.ts`     | `src/delivery/regular.ts`, `src/delivery/native-runner.ts` | Push deterministic branches, open predecessor-based PRs, and check exact publication heads.                                                                                                    |
+| `src/publication/github-stacks.ts` | `src/delivery/native-stack.ts`                             | Use the versioned GitHub native-stack create/read API and asynchronous merge result; reconcile stack identity and wait for merged PR evidence.                                                 |
+| `src/publication/stack-manager.ts` | `src/delivery/native-runner.ts`                            | Persist stack and pending merge identity, stop on external head/topology mutation, and verify the integrated default-branch result. The archived receipt and lease machinery was not retained. |

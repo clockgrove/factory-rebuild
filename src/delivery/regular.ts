@@ -18,6 +18,18 @@ export class RegularDelivery implements DeliveryStrategy {
   async publish(request: DeliveryRequest): Promise<DeliveryResult> {
     const commit = this.commitByTree.get(request.treeSha);
     if (!commit) throw new Error("Validated commit is missing for result tree");
+    const base = request.baseBranch ?? this.github.defaultBranch();
+    const existing = this.github.findOpenPullRequest(
+      request.branch,
+      base,
+      commit,
+    );
+    if (existing)
+      return {
+        branch: existing.branch,
+        pullRequest: existing.number,
+        headSha: existing.headSha,
+      };
     git(
       this.checkout,
       "push",
@@ -26,7 +38,7 @@ export class RegularDelivery implements DeliveryStrategy {
     );
     const pr = await this.github.publish({
       branch: request.branch,
-      base: this.github.defaultBranch(),
+      base,
       treeSha: request.treeSha,
       title: request.item.title,
       body: `Implements Work Item ${request.item.id}.\n\nValidated tree: ${request.treeSha}`,

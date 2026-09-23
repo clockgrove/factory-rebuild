@@ -6,12 +6,14 @@ export function command(
   args: string[],
   cwd?: string,
   env?: NodeJS.ProcessEnv,
+  input?: string,
 ): string {
   const result = spawnSync(file, args, {
     cwd,
     env,
     encoding: "utf8",
     maxBuffer: Number.MAX_SAFE_INTEGER,
+    input,
   });
   if (result.error) throw result.error;
   if (result.status !== 0) {

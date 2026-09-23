@@ -20,6 +20,7 @@ import { compileObjective } from "./compiler.js";
 import { RealGitHubGateway } from "./github.js";
 import { CodexHarness, LocalExecutionDriver } from "./execution/local.js";
 import { RegularDelivery } from "./delivery/regular.js";
+import { runNativeGraph } from "./delivery/native-runner.js";
 import { git, linuxProcessIdentity } from "./process.js";
 import { validateTree, validateWorkItem } from "./validation.js";
 import { readyItems } from "./scheduler.js";
@@ -125,11 +126,8 @@ export async function runObjective(
   objective: number,
 ): Promise<FactoryState> {
   validateTarget(config.repository, config.checkout);
-  if (config.execution.kind !== "local" || config.delivery.kind !== "regular") {
-    throw new Error(
-      "Current trunk supports local execution and regular delivery only",
-    );
-  }
+  if (config.execution.kind !== "local")
+    throw new Error("Current trunk supports local execution only");
   const root = stateRoot(config.repository);
   mkdirSync(root, { recursive: true });
   const lock = join(root, "controller.lock");
@@ -230,134 +228,154 @@ export async function runObjective(
       new CodexHarness(credentials, config.policy.network),
       config.execution.concurrency,
     );
-    const commits = new Map<string, string>();
-    const delivery = new RegularDelivery(config.checkout, github, commits);
-    let mergeTail: Promise<void> = Promise.resolve();
-    const execute = async (
-      item: WorkItem,
-      itemBase: string,
-      existingHandle?: NonNullable<FactoryState["work"][string]["execution"]>,
-    ): Promise<void> => {
-      const work = state.work[item.id]!;
-      try {
-        const handle =
-          existingHandle ??
-          (await driver!.start({
+    if (config.delivery.kind === "native-stack") {
+      await runNativeGraph({
+        config,
+        objective,
+        root,
+        state,
+        driver,
+        github,
+        save: () => save(path, state),
+        active,
+        cancelled: () => cancellationRequested,
+      });
+    } else {
+      const commits = new Map<string, string>();
+      const delivery = new RegularDelivery(config.checkout, github, commits);
+      let mergeTail: Promise<void> = Promise.resolve();
+      const execute = async (
+        item: WorkItem,
+        itemBase: string,
+        existingHandle?: NonNullable<FactoryState["work"][string]["execution"]>,
+      ): Promise<void> => {
+        const work = state.work[item.id]!;
+        try {
+          const handle =
+            existingHandle ??
+            (await driver!.start({
+              item,
+              baseSha: itemBase,
+              attemptId: work.attempt,
+            }));
+          if (!existingHandle) {
+            work.execution = handle;
+            save(path, state);
+          }
+          if (cancellationRequested) {
+            await driver!.cancel(handle);
+            throw new Error("Objective cancelled");
+          }
+          const result = await driver!.collect(handle);
+          if (cancellationRequested) throw new Error("Objective cancelled");
+          work.treeSha = result.treeSha;
+          work.step = "validate";
+          save(path, state);
+          work.validation = validateWorkItem(
+            config.checkout,
+            join(root, "validation"),
+            item,
+            result.changeRef,
+            result.treeSha,
+          );
+          work.step = "deliver";
+          save(path, state);
+          commits.set(result.treeSha, result.changeRef);
+          const branch = `factory/objective-${objective}/${item.id}`;
+          const published = await delivery.publish({
             item,
             baseSha: itemBase,
-            attemptId: work.attempt,
-          }));
-        if (!existingHandle) {
-          work.execution = handle;
+            treeSha: result.treeSha,
+            branch,
+          });
+          work.pullRequest = published.pullRequest;
           save(path, state);
-        }
-        if (cancellationRequested) {
-          await driver!.cancel(handle);
-          throw new Error("Objective cancelled");
-        }
-        const result = await driver!.collect(handle);
-        if (cancellationRequested) throw new Error("Objective cancelled");
-        work.treeSha = result.treeSha;
-        work.step = "validate";
-        save(path, state);
-        work.validation = validateWorkItem(
-          config.checkout,
-          join(root, "validation"),
-          item,
-          result.changeRef,
-          result.treeSha,
-        );
-        work.step = "deliver";
-        save(path, state);
-        commits.set(result.treeSha, result.changeRef);
-        const branch = `factory/objective-${objective}/${item.id}`;
-        const published = await delivery.publish({
-          item,
-          baseSha: itemBase,
-          treeSha: result.treeSha,
-          branch,
-        });
-        work.pullRequest = published.pullRequest;
-        save(path, state);
-        const integrate = mergeTail.then(async () => {
-          const merged = await delivery.merge(published);
-          git(config.checkout, "fetch", "origin", github.defaultBranch());
-          const observedHead = git(config.checkout, "rev-parse", "FETCH_HEAD");
-          if (observedHead !== merged.integratedSha) {
-            throw new Error(
-              `Default branch moved after PR #${published.pullRequest} merged; expected ${merged.integratedSha}, observed ${observedHead}`,
+          const integrate = mergeTail.then(async () => {
+            const merged = await delivery.merge(published);
+            git(config.checkout, "fetch", "origin", github.defaultBranch());
+            const observedHead = git(
+              config.checkout,
+              "rev-parse",
+              "FETCH_HEAD",
             );
-          }
-          state.integratedSha = observedHead;
-          work.status = "done";
-          work.completedAt = new Date().toISOString();
-          delete work.step;
+            if (observedHead !== merged.integratedSha) {
+              throw new Error(
+                `Default branch moved after PR #${published.pullRequest} merged; expected ${merged.integratedSha}, observed ${observedHead}`,
+              );
+            }
+            state.integratedSha = observedHead;
+            work.status = "done";
+            work.completedAt = new Date().toISOString();
+            delete work.step;
+            save(path, state);
+          });
+          mergeTail = integrate.then(
+            () => undefined,
+            () => undefined,
+          );
+          await integrate;
+          github.closeIssue(
+            projected.issueByItemId[item.id]!,
+            `Completed by PR #${published.pullRequest}; validated tree ${result.treeSha}.`,
+          );
+        } catch (error) {
+          if (work.status !== "done")
+            work.status = cancellationRequested ? "cancelled" : "failed";
+          work.error = error instanceof Error ? error.message : String(error);
           save(path, state);
-        });
-        mergeTail = integrate.then(
-          () => undefined,
-          () => undefined,
-        );
-        await integrate;
-        github.closeIssue(
-          projected.issueByItemId[item.id]!,
-          `Completed by PR #${published.pullRequest}; validated tree ${result.treeSha}.`,
-        );
-      } catch (error) {
-        if (work.status !== "done")
-          work.status = cancellationRequested ? "cancelled" : "failed";
-        work.error = error instanceof Error ? error.message : String(error);
-        save(path, state);
-        throw error;
-      }
-    };
-    for (const item of graph.items) {
-      const work = state.work[item.id]!;
-      if (work.status !== "running") continue;
-      if (work.step !== "execute" || !work.execution || !work.baseSha) {
-        throw new Error(
-          `Work Item ${item.id} has ambiguous active state at ${work.step ?? "unknown"}; operator direction required`,
-        );
-      }
-      const promise = execute(item, work.baseSha, work.execution).finally(
-        () => {
-          active.delete(item.id);
-        },
-      );
-      void promise.catch(() => undefined);
-      active.set(item.id, promise);
-    }
-    while (graph.items.some((item) => state.work[item.id]?.status !== "done")) {
-      if (cancellationRequested) throw new Error("Objective cancelled");
-      const available = await driver.availableSlots();
-      const slots = Math.min(
-        config.execution.concurrency - active.size,
-        available,
-      );
-      const ready = readyItems(
-        graph,
-        state.work,
-        new Set(active.keys()),
-        slots,
-      );
-      for (const item of ready) {
+          throw error;
+        }
+      };
+      for (const item of graph.items) {
         const work = state.work[item.id]!;
-        work.status = "running";
-        work.step = "execute";
-        work.attempt = randomUUID();
-        work.startedAt = new Date().toISOString();
-        const itemBase = state.integratedSha ?? baseSha;
-        work.baseSha = itemBase;
-        save(path, state);
-        const promise = execute(item, itemBase).finally(() => {
-          active.delete(item.id);
-        });
+        if (work.status !== "running") continue;
+        if (work.step !== "execute" || !work.execution || !work.baseSha) {
+          throw new Error(
+            `Work Item ${item.id} has ambiguous active state at ${work.step ?? "unknown"}; operator direction required`,
+          );
+        }
+        const promise = execute(item, work.baseSha, work.execution).finally(
+          () => {
+            active.delete(item.id);
+          },
+        );
         void promise.catch(() => undefined);
         active.set(item.id, promise);
       }
-      if (!active.size)
-        throw new Error("No ready Work Item; graph cannot progress");
-      await Promise.race(active.values());
+      while (
+        graph.items.some((item) => state.work[item.id]?.status !== "done")
+      ) {
+        if (cancellationRequested) throw new Error("Objective cancelled");
+        const available = await driver.availableSlots();
+        const slots = Math.min(
+          config.execution.concurrency - active.size,
+          available,
+        );
+        const ready = readyItems(
+          graph,
+          state.work,
+          new Set(active.keys()),
+          slots,
+        );
+        for (const item of ready) {
+          const work = state.work[item.id]!;
+          work.status = "running";
+          work.step = "execute";
+          work.attempt = randomUUID();
+          work.startedAt = new Date().toISOString();
+          const itemBase = state.integratedSha ?? baseSha;
+          work.baseSha = itemBase;
+          save(path, state);
+          const promise = execute(item, itemBase).finally(() => {
+            active.delete(item.id);
+          });
+          void promise.catch(() => undefined);
+          active.set(item.id, promise);
+        }
+        if (!active.size)
+          throw new Error("No ready Work Item; graph cannot progress");
+        await Promise.race(active.values());
+      }
     }
     git(config.checkout, "fetch", "origin", github.defaultBranch());
     const integratedSha = state.integratedSha!;

@@ -12,6 +12,33 @@ import { command } from "./process.js";
 export class RealGitHubGateway implements GitHubGateway {
   constructor(readonly repository: string) {}
 
+  findOpenPullRequest(
+    branch: string,
+    base: string,
+    headSha: string,
+  ): PullRequestIdentity | undefined {
+    const pulls = JSON.parse(
+      command("gh", [
+        "pr",
+        "list",
+        "-R",
+        this.repository,
+        "--state",
+        "open",
+        "--head",
+        branch,
+        "--json",
+        "number,headRefOid,baseRefName",
+      ]),
+    ) as { number: number; headRefOid: string; baseRefName: string }[];
+    if (pulls.length > 1) throw new Error(`Multiple open PRs for ${branch}`);
+    const pull = pulls[0];
+    if (!pull) return undefined;
+    if (pull.headRefOid !== headSha || pull.baseRefName !== base)
+      throw new Error(`Existing PR for ${branch} changed head or base`);
+    return { number: pull.number, branch, headSha };
+  }
+
   defaultBranch(): string {
     const result = JSON.parse(
       command("gh", [
