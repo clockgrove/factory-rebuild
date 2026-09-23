@@ -8,10 +8,16 @@ import type {
   ExecutionDriver,
   ExecutionHandle,
   GitHubGateway,
+  PlanningModel,
   NativeStackLayer,
 } from "../contracts.js";
 import { git } from "../process.js";
-import { validateWorkItem } from "../validation.js";
+import {
+  AcceptanceDecisionRequired,
+  reviewAcceptance,
+  validateWorkItem,
+} from "../validation.js";
+import { planningSources } from "../compiler.js";
 import { linearDeliveryUnits } from "./plan.js";
 import { materializeAssetSet, selectedInputsForItem } from "../media.js";
 import { itemsConflict } from "../scheduler.js";
@@ -29,6 +35,7 @@ export async function runNativeGraph(args: {
   delivery: DeliveryStrategy;
   contentStore: ContentStore;
   github: GitHubGateway;
+  planningModel: PlanningModel;
   save: () => void;
   active: Map<string, Promise<void>>;
   cancelled: () => boolean;
@@ -274,6 +281,7 @@ export async function runNativeGraph(args: {
           item,
           work.changeRef!,
           work.treeSha!,
+          state.baseSha,
           (entry) =>
             args.diagnostics?.emit({
               runId: state.runId,
@@ -290,6 +298,39 @@ export async function runNativeGraph(args: {
               detail: entry.output,
             }),
         );
+        const reviewResult = () =>
+          reviewAcceptance({
+            model: args.planningModel,
+            checkout: config.checkout,
+            baseSha: itemBase,
+            commit: work.changeRef!,
+            evidence: work.validation!,
+            criteria: item.acceptance,
+            sources: planningSources(
+              args.objectiveBody,
+              state.baseSha,
+              config.checkout,
+            ),
+            decisions: work.acceptanceDecisions,
+          });
+        work.validation = args.diagnostics
+          ? await args.diagnostics.span(
+              {
+                runId: state.runId,
+                itemId: item.id,
+                attemptId: work.attempt,
+                operation: "acceptance-review",
+                metadata: { treeSha: work.treeSha! },
+              },
+              reviewResult,
+              (result) => ({ criteria: result.criteria?.length ?? 0 }),
+              (error) =>
+                error instanceof AcceptanceDecisionRequired
+                  ? "waiting"
+                  : "failed",
+            )
+          : await reviewResult();
+        delete work.acceptancePending;
         work.step = "deliver";
         save();
         const publish = () =>
@@ -327,6 +368,13 @@ export async function runNativeGraph(args: {
         save();
       };
       const task = perform().catch((error: unknown) => {
+        if (error instanceof AcceptanceDecisionRequired) {
+          work.status = "waiting";
+          work.step = "approve-result";
+          work.acceptancePending = error.pending;
+          save();
+          return;
+        }
         if (work.status !== "done" && work.status !== "published") {
           work.status = args.cancelled() ? "cancelled" : "failed";
           work.error = error instanceof Error ? error.message : String(error);

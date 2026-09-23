@@ -274,12 +274,29 @@ test("regular application path runs a source-grounded concurrent DAG with stable
               event.durationMs >= 0,
           ),
         );
+      assert.ok(
+        timeline.some(
+          (event) =>
+            event.itemId === id &&
+            event.operation === "acceptance-review" &&
+            event.outcome === "completed" &&
+            event.durationMs >= 0,
+        ),
+      );
     }
     assert.ok(
       timeline.some(
         (event) =>
           event.operation === "objective-finalization" &&
           event.outcome === "completed",
+      ),
+    );
+    assert.ok(
+      timeline.some(
+        (event) =>
+          event.operation === "objective-validation" &&
+          event.outcome === "completed" &&
+          event.durationMs >= 0,
       ),
     );
   });

@@ -76,3 +76,7 @@ The audited archive commit's `src/application/plan.ts`, `src/application/compile
 ## Agent-readable diagnostics (#28)
 
 The public plan and issue #28 supplied this slice's behavior. No archived telemetry source, log format, or recovery journal was inspected or copied. The clean `src/diagnostics.ts` reads snapshot-derived status and appends private observations; `src/validation.ts` captures actual command output and `src/execution/worker.ts` records SDK stream events when supplied. These local records are never read for continuation, replay, or scheduling.
+
+## Command trust and result acceptance (#20)
+
+The clean implementation extends `src/compiler.ts`, `src/validation.ts`, and the existing regular/native runners from the public #20 acceptance and current #19 planning contract. No additional archived source, test, state format, or validator protocol was inspected or copied. Command authority is checked against pinned source lines or a named tracked base file; npm script and lifecycle implementation is also compared with the accepted base before execution. Result review uses one bounded exact-tree packet and one specific human fallback, with decisions in the existing atomic snapshot. There is no judge loop or secondary validation ledger.

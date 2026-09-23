@@ -12,7 +12,11 @@ import {
 } from "./completion.js";
 import {
   compilePlan,
+  finalObjectiveCommands,
+  objectiveCriteria,
+  planningSources,
   resolvePlan,
+  validateCommandProvenance,
   verifyPlanCandidate,
   type PlanCandidate,
 } from "./compiler.js";
@@ -27,8 +31,13 @@ import { assetSelectionDigest, verifyHydratedAssets } from "./media.js";
 import { runNativeGraph } from "./delivery/native-runner.js";
 import { linearDeliveryUnits } from "./delivery/plan.js";
 import { runRegularGraph } from "./delivery/regular-runner.js";
-import { git, linuxProcessIdentity } from "./process.js";
-import { validateTree } from "./validation.js";
+import { git, linuxProcessIdentity, pinnedGit } from "./process.js";
+import {
+  AcceptanceDecisionRequired,
+  assertPinnedNpmScripts,
+  reviewAcceptance,
+  validateTree,
+} from "./validation.js";
 import { DiagnosticEmitter, StateDiagnostics } from "./diagnostics.js";
 import {
   acquireControllerLock,
@@ -133,29 +142,6 @@ export async function decidePlan(
     });
     throw error;
   }
-}
-
-function objectiveCommands(
-  body: string,
-  graph: FactoryState["graph"],
-): string[] {
-  const match = body.match(
-    /^## Final validation\s*\n([\s\S]*?)(?=^## |$(?![\s\S]))/im,
-  );
-  const declared = match?.[1]
-    ?.split("\n")
-    .map((line) => line.match(/^\s*-\s+(.+?)\s*$/)?.[1])
-    .filter((line): line is string => Boolean(line))
-    .map((line) => line.replace(/^`|`$/g, ""));
-  return declared?.length
-    ? declared
-    : [
-        ...new Set(
-          graph.items.flatMap((item) =>
-            item.validation.map((check) => check.command),
-          ),
-        ),
-      ];
 }
 
 export async function runObjective(
@@ -347,7 +333,7 @@ export async function runObjective(
         configDigest,
         baseSha,
         graph,
-        objectiveCommands: objectiveCommands(issue.body, graph),
+        objectiveCommands: finalObjectiveCommands(issue.body),
         objectiveBodyDigest: createHash("sha256")
           .update(issue.body)
           .digest("hex"),
@@ -363,6 +349,11 @@ export async function runObjective(
       );
     }
     const graph = state.graph;
+    validateCommandProvenance(
+      graph,
+      planningSources(issue.body, state.baseSha, config.checkout),
+      config.checkout,
+    );
     stateForSignal = state;
     save(state);
     if (config.delivery.kind === "native-stack") {
@@ -376,6 +367,7 @@ export async function runObjective(
         delivery,
         contentStore,
         github,
+        planningModel,
         save: () => save(state),
         active,
         cancelled: () => cancellationRequested,
@@ -394,6 +386,7 @@ export async function runObjective(
         delivery,
         contentStore,
         github,
+        planningModel,
         save: () => save(state),
         active,
         cancelled: () => cancellationRequested,
@@ -413,18 +406,25 @@ export async function runObjective(
       "rev-parse",
       `${integratedSha}^{tree}`,
     );
+    const finalValidationStarted = Date.now();
     diagnostics.emit({
       runId: state.runId,
       operation: "objective-validation",
       outcome: "started",
       metadata: { integratedSha, treeSha: finalTree },
     });
-    const finalEvidence = validateTree(
+    assertPinnedNpmScripts(
+      config.checkout,
+      state.baseSha,
+      integratedSha,
+      state.objectiveCommands ?? finalObjectiveCommands(issue.body),
+    );
+    const commandEvidence = validateTree(
       config.checkout,
       join(root, "final-validation"),
       integratedSha,
       finalTree,
-      objectiveCommands(issue.body, graph),
+      state.objectiveCommands ?? finalObjectiveCommands(issue.body),
       (entry) =>
         diagnostics.emit({
           runId: state.runId,
@@ -435,6 +435,63 @@ export async function runObjective(
           detail: entry.output,
         }),
     );
+    let finalEvidence;
+    try {
+      const reviewFinal = () =>
+        reviewAcceptance({
+          model: planningModel,
+          checkout: config.checkout,
+          baseSha: state.baseSha,
+          commit: integratedSha,
+          evidence: commandEvidence,
+          criteria: objectiveCriteria(issue.body),
+          sources: planningSources(issue.body, state.baseSha, config.checkout),
+          decisions: state.finalAcceptanceDecisions,
+          observations: JSON.stringify({
+            integratedSha,
+            work: graph.items.map((item) => {
+              const work = state.work[item.id]!;
+              return {
+                id: item.id,
+                status: work.status,
+                treeSha: work.treeSha,
+                validation: work.validation,
+                pullRequest: work.pullRequest,
+                integratedSha: work.integratedSha,
+                selectedAssetSet: work.selectedAssetSet,
+                selection: work.selection,
+              };
+            }),
+          }),
+        });
+      finalEvidence = await diagnostics.span(
+        {
+          runId: state.runId,
+          operation: "objective-acceptance-review",
+          metadata: { treeSha: finalTree, integratedSha },
+        },
+        reviewFinal,
+        (result) => ({ criteria: result.criteria?.length ?? 0 }),
+        (error) =>
+          error instanceof AcceptanceDecisionRequired ? "waiting" : "failed",
+      );
+      delete state.finalAcceptancePending;
+    } catch (error) {
+      if (error instanceof AcceptanceDecisionRequired) {
+        state.finalAcceptancePending = error.pending;
+        save(state);
+        diagnostics.emit({
+          runId: state.runId,
+          operation: "objective-validation",
+          outcome: "waiting",
+          durationMs: Date.now() - finalValidationStarted,
+          metadata: { treeSha: finalTree },
+          detail: error.pending.question,
+        });
+        return state;
+      }
+      throw error;
+    }
     verifyHydratedAssets({
       checkout: config.checkout,
       workRoot: join(root, "hydration"),
@@ -447,6 +504,13 @@ export async function runObjective(
       }),
     });
     state.finalValidation = { ...finalEvidence, passed: true };
+    diagnostics.emit({
+      runId: state.runId,
+      operation: "objective-validation",
+      outcome: "completed",
+      durationMs: Date.now() - finalValidationStarted,
+      metadata: { treeSha: finalTree, integratedSha },
+    });
     save(state);
     await closeObjectiveIssue(state, issue.body, github, () => save(state));
     return state;
@@ -580,6 +644,101 @@ export function retryWorkItem(
     });
   } finally {
     releaseControllerLock(lock, lockHandle);
+  }
+}
+
+/** Record one explicit result decision against the exact pending tree. */
+export function decideResult(
+  config: FactoryConfig,
+  objective: number,
+  input: {
+    item?: string;
+    treeSha: string;
+    actor: string;
+    outcome: "accept" | "refuse";
+    reason: string;
+  },
+): void {
+  const root = stateRoot(config.repository);
+  const lockHandle = acquireControllerLock(
+    join(root, "controller.lock"),
+    objective,
+  );
+  try {
+    const path = statePath(config.repository, objective);
+    const state = readState(config.repository, objective);
+    if (
+      !state ||
+      state.error ||
+      state.cancelledAt ||
+      state.finalValidation?.passed
+    )
+      throw new Error("Objective is not awaiting a result decision");
+    const work = input.item ? state.work[input.item] : undefined;
+    const pending = input.item
+      ? work?.acceptancePending
+      : state.finalAcceptancePending;
+    const commit = input.item ? work?.changeRef : state.integratedSha;
+    if (
+      !pending ||
+      !commit ||
+      (work && (work.status !== "waiting" || work.step !== "approve-result"))
+    )
+      throw new Error(
+        "No specific acceptance criterion is awaiting this decision",
+      );
+    const observedTree = pinnedGit(
+      config.checkout,
+      "rev-parse",
+      `${commit}^{tree}`,
+    );
+    if (pending.treeSha !== input.treeSha || observedTree !== input.treeSha)
+      throw new Error(
+        "Result decision tree differs from the pending exact result",
+      );
+    if (
+      !input.actor.trim() ||
+      !input.reason.trim() ||
+      !["accept", "refuse"].includes(input.outcome)
+    )
+      throw new Error("Result decision requires actor and reason");
+    const decision = {
+      criterion: pending.criterion,
+      treeSha: pending.treeSha,
+      actor: input.actor,
+      at: new Date().toISOString(),
+      outcome: input.outcome,
+      reason: input.reason,
+    };
+    if (work) {
+      work.acceptanceDecisions ??= [];
+      work.acceptanceDecisions.push(decision);
+      delete work.acceptancePending;
+      work.status = input.outcome === "accept" ? "running" : "failed";
+      work.step = "validate";
+      if (input.outcome === "refuse")
+        work.error = `Acceptance refused: ${pending.criterion}`;
+    } else {
+      state.finalAcceptanceDecisions ??= [];
+      state.finalAcceptanceDecisions.push(decision);
+      delete state.finalAcceptancePending;
+      if (input.outcome === "refuse")
+        state.error = `Final acceptance refused: ${pending.criterion}`;
+    }
+    saveState(path, state);
+    new DiagnosticEmitter(config.repository, objective).emit({
+      runId: state.runId,
+      itemId: input.item,
+      attemptId: work?.attempt,
+      operation: input.item
+        ? "acceptance-decision"
+        : "objective-acceptance-decision",
+      outcome: input.outcome === "accept" ? "completed" : "failed",
+      metadata: { treeSha: pending.treeSha },
+      detail: input.reason,
+    });
+  } finally {
+    releaseControllerLock(join(root, "controller.lock"), lockHandle);
   }
 }
 

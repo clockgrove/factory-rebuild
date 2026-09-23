@@ -27,7 +27,7 @@ function options(args: string[], name: string): string[] {
 
 function help(): void {
   console.log(
-    `Factory CLI\n\nCommands:\n  install --repository OWNER/REPO --checkout ABSOLUTE_PATH --concurrency N [--delivery regular|native-stack] [--network host|off] [--config PATH]\n  plan --objective N [--output ABSOLUTE_NEW_FILE] [--config PATH]\n  decide --objective N --plan PLAN_FILE --outcome accept|refuse --actor NAME --reason TEXT [--answer TEXT] --output ABSOLUTE_NEW_FILE [--config PATH]\n  run --objective N [--plan PLAN_FILE] [--config PATH]\n  status --objective N [--json] [--config PATH]\n  diagnostics --objective N [--follow] [--config PATH]\n  logs --objective N --item ID [--follow] [--config PATH]\n  review --objective N --item ID --set SET_ID --output ABSOLUTE_NEW_DIRECTORY [--config PATH]\n  select --objective N --item ID --set SET_ID [--actor NAME] [--reason TEXT] [--bind DEPENDENT_ITEM ...] [--config PATH]\n  cancel --objective N [--config PATH]\n  retry --objective N --item ID [--config PATH]`,
+    `Factory CLI\n\nCommands:\n  install --repository OWNER/REPO --checkout ABSOLUTE_PATH --concurrency N [--delivery regular|native-stack] [--network host|off] [--config PATH]\n  plan --objective N [--output ABSOLUTE_NEW_FILE] [--config PATH]\n  decide --objective N --plan PLAN_FILE --outcome accept|refuse --actor NAME --reason TEXT [--answer TEXT] --output ABSOLUTE_NEW_FILE [--config PATH]\n  run --objective N [--plan PLAN_FILE] [--config PATH]\n  status --objective N [--json] [--config PATH]\n  diagnostics --objective N [--follow] [--config PATH]\n  logs --objective N --item ID [--follow] [--config PATH]\n  decide-result --objective N [--item ID] --tree SHA --outcome accept|refuse --actor NAME --reason TEXT [--config PATH]\n  review --objective N --item ID --set SET_ID --output ABSOLUTE_NEW_DIRECTORY [--config PATH]\n  select --objective N --item ID --set SET_ID [--actor NAME] [--reason TEXT] [--bind DEPENDENT_ITEM ...] [--config PATH]\n  cancel --objective N [--config PATH]\n  retry --objective N --item ID [--config PATH]`,
   );
 }
 
@@ -83,6 +83,7 @@ async function main(): Promise<void> {
       "select",
       "cancel",
       "retry",
+      "decide-result",
     ].includes(command)
   )
     throw new Error(`Unknown command: ${command}`);
@@ -206,6 +207,16 @@ async function main(): Promise<void> {
         `Objective #${objective}: ${state.graph.items.map((item) => describe(item.id)).join(", ")}; final validation ${state.finalValidation?.passed ? "passed" : state.cancelledAt ? "cancelled" : state.error ? "failed" : "pending"}${state.finalValidation?.passed && state.objectiveClosure !== "complete" ? "; Objective GitHub close pending" : ""}${state.error ? `; error: ${state.error}` : ""}${state.githubClosureError ? `; GitHub: ${state.githubClosureError}` : ""}`,
       );
       for (const [id, work] of Object.entries(state.work)) {
+        if (
+          work.status === "waiting" &&
+          work.step === "approve-result" &&
+          work.acceptancePending
+        ) {
+          console.log(
+            `Work Item ${id} awaits criterion decision at tree ${work.acceptancePending.treeSha}: ${work.acceptancePending.criterion}`,
+          );
+          console.log(`  ${work.acceptancePending.question}`);
+        }
         if (work.status !== "waiting" || work.step !== "approve-asset")
           continue;
         console.log(`Work Item ${id} awaits selection. Candidate AssetSets:`);
@@ -213,6 +224,12 @@ async function main(): Promise<void> {
           console.log(
             `  ${set.id}: ${set.members.map((member) => `${member.role} → ${member.destination} (${member.ref.digest})`).join(", ")}`,
           );
+      }
+      if (state.finalAcceptancePending) {
+        console.log(
+          `Objective awaits criterion decision at tree ${state.finalAcceptancePending.treeSha}: ${state.finalAcceptancePending.criterion}`,
+        );
+        console.log(`  ${state.finalAcceptancePending.question}`);
       }
     }
   } else if (command === "diagnostics") {
@@ -281,6 +298,30 @@ async function main(): Promise<void> {
     if (!item) throw new Error("retry requires --item ID");
     application.retryWorkItem(objective, item);
     console.log(`Work Item ${item} is pending for a new explicit attempt`);
+  } else if (command === "decide-result") {
+    const treeSha = option(args, "tree");
+    const actor = option(args, "actor");
+    const reason = option(args, "reason");
+    const outcome = option(args, "outcome");
+    if (
+      !treeSha ||
+      !actor ||
+      !reason ||
+      (outcome !== "accept" && outcome !== "refuse")
+    )
+      throw new Error(
+        "decide-result requires --tree, --outcome, --actor, and --reason",
+      );
+    application.decideResult(objective, {
+      item: option(args, "item"),
+      treeSha,
+      actor,
+      reason,
+      outcome,
+    });
+    console.log(
+      `Recorded ${outcome} for the exact pending criterion at ${treeSha}`,
+    );
   } else if (command === "select") {
     const item = option(args, "item");
     const set = option(args, "set");
@@ -314,7 +355,7 @@ async function main(): Promise<void> {
     console.log(
       state.finalValidation?.passed
         ? `Objective #${objective} completed at ${state.integratedSha}; final validation passed`
-        : `Objective #${objective} awaits asset selection; use status, select, then run`,
+        : `Objective #${objective} awaits a decision; use status for the specific pending criterion or AssetSet`,
     );
   }
 }

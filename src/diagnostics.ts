@@ -108,6 +108,7 @@ export class DiagnosticEmitter {
     completedMetadata?: (
       result: T,
     ) => Record<string, string | number | boolean>,
+    errorOutcome?: (error: unknown) => "waiting" | "failed",
   ): Promise<T> {
     const started = Date.now();
     this.emit({ ...context, outcome: "started" });
@@ -131,7 +132,7 @@ export class DiagnosticEmitter {
     } catch (error) {
       this.emit({
         ...context,
-        outcome: "failed",
+        outcome: errorOutcome?.(error) ?? "failed",
         durationMs: Date.now() - started,
         detail: error instanceof Error ? error.message : String(error),
       });
@@ -256,6 +257,16 @@ export function statusDocument(
       unit.items.map((item) => [item.id, unit.id] as const),
     ),
   );
+  const pendingDecision = (pending: FactoryState["finalAcceptancePending"]) =>
+    pending
+      ? {
+          criterion: redactDiagnosticDetail(pending.criterion, secrets),
+          treeSha: pending.treeSha,
+          source: pending.source,
+          question: redactDiagnosticDetail(pending.question, secrets),
+          detail: redactDiagnosticDetail(pending.detail, secrets),
+        }
+      : null;
   const work = state.graph.items.map((item) => {
     const current = state.work[item.id]!;
     let blockedReason: string | undefined;
@@ -280,7 +291,10 @@ export function statusDocument(
           ? `resource:${conflict.id}`
           : undefined;
     } else if (current.status === "waiting")
-      blockedReason = current.waitingReason ?? "asset-selection";
+      blockedReason =
+        current.step === "approve-result"
+          ? "acceptance-decision"
+          : (current.waitingReason ?? "asset-selection");
     return {
       id: item.id,
       issue: state.issueByItemId[item.id],
@@ -307,6 +321,7 @@ export function statusDocument(
       stack: state.stackNumbers?.[unitByItem.get(item.id) ?? ""] ?? null,
       candidateAssetSets: current.assets?.map((set) => set.id) ?? [],
       selectedAssetSet: current.selectedAssetSet ?? null,
+      acceptancePending: pendingDecision(current.acceptancePending),
       lastError: current.error
         ? redactDiagnosticDetail(current.error, secrets)
         : null,
@@ -319,13 +334,16 @@ export function statusDocument(
       ? ("cancelled" as const)
       : state.error
         ? ("failed" as const)
-        : state.finalValidation?.passed
-          ? ("complete" as const)
-          : ("active" as const),
+        : state.finalAcceptancePending
+          ? ("waiting" as const)
+          : state.finalValidation?.passed
+            ? ("complete" as const)
+            : ("active" as const),
     runId: state.runId,
     baseSha: state.baseSha,
     integratedSha: state.integratedSha ?? null,
     finalValidation: state.finalValidation?.passed ?? false,
+    finalAcceptancePending: pendingDecision(state.finalAcceptancePending),
     objectiveClosure: state.objectiveClosure ?? null,
     lastError:
       state.error || state.githubClosureError
@@ -344,6 +362,7 @@ export class StateDiagnostics {
   private previousReadiness = new Map<string, string>();
   private previousStacks = new Map<string, number>();
   private previousFinal = false;
+  private previousFinalPending?: string | null;
   private previousIntegrated?: string;
   constructor(
     private emitter: DiagnosticEmitter,
@@ -354,6 +373,20 @@ export class StateDiagnostics {
   observe(): void {
     for (const [id, work] of Object.entries(this.state.work)) {
       const before = this.previous.get(id);
+      if (
+        work.acceptancePending &&
+        before?.acceptancePending?.treeSha !== work.acceptancePending.treeSha
+      ) {
+        this.emitter.emit({
+          runId: this.state.runId,
+          itemId: id,
+          attemptId: work.attempt,
+          operation: "acceptance-pending",
+          outcome: before ? "waiting" : "observed",
+          metadata: { treeSha: work.acceptancePending.treeSha },
+          detail: work.acceptancePending.question,
+        });
+      }
       if (
         before?.execution?.identity !== work.execution?.identity &&
         (before?.execution || work.execution)
@@ -432,6 +465,17 @@ export class StateDiagnostics {
       }
       this.previous.set(id, { ...work });
     }
+    const finalPending = this.state.finalAcceptancePending?.treeSha ?? null;
+    if (finalPending && finalPending !== this.previousFinalPending)
+      this.emitter.emit({
+        runId: this.state.runId,
+        operation: "objective-acceptance-pending",
+        outcome:
+          this.previousFinalPending === undefined ? "observed" : "waiting",
+        metadata: { treeSha: finalPending },
+        detail: this.state.finalAcceptancePending?.question,
+      });
+    this.previousFinalPending = finalPending;
     const view = statusDocument(
       this.state,
       this.state.repository,
