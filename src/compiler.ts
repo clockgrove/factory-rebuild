@@ -98,6 +98,27 @@ export function validateGraph(
   validateAndOrderGraph(graph, objective, baseSha, sources);
 }
 
+export function validateCommandProvenance(
+  graph: WorkGraph,
+  sources: { path: string; content: string }[],
+): void {
+  const byPath = new Map(
+    sources.map((source) => [source.path, source.content]),
+  );
+  for (const item of graph.items) {
+    for (const check of item.validation) {
+      if (
+        check.provenance === "source-declared" &&
+        !byPath.get(check.source ?? "")?.includes(check.command)
+      ) {
+        throw new Error(
+          `Work Item ${item.id} cites an undeclared validation command in ${check.source ?? "unknown source"}`,
+        );
+      }
+    }
+  }
+}
+
 export async function compileObjective(
   objective: number,
   body: string,
@@ -121,5 +142,6 @@ export async function compileObjective(
     schema: graphSchema,
   });
   validateGraph(graph, objective, baseSha, new Set(sources.map((s) => s.path)));
+  validateCommandProvenance(graph, sources);
   return graph;
 }

@@ -64,7 +64,7 @@ export function validateAndOrderGraph(
       !item.citations.every((citation) => sources.has(citation.path))
     ) {
       throw new Error(
-        `Work Item ${item.id} lacks acceptance, ownership, or source citations`,
+        `Work Item ${item.id} lacks acceptance, non-goals, ownership, or source citations`,
       );
     }
     for (const check of item.validation) {
