@@ -352,10 +352,7 @@ function commandAuthorizations(
 
 /** Final commands are accepted only as exact lines under the Objective heading. */
 export function finalObjectiveCommands(body: string): string[] {
-  const section =
-    body.match(
-      /^## Final validation\s*\n([\s\S]*?)(?=^## |$(?![\s\S]))/im,
-    )?.[1] ?? "";
+  const section = objectiveSection(body, ["Final validation"]);
   return section.split("\n").flatMap((line) => {
     const match = line.match(/^\s*-\s+(`[^`]+`|[^`]+?)\s*$/);
     return match ? [match[1]!.replace(/^`|`$/g, "")] : [];
@@ -363,20 +360,44 @@ export function finalObjectiveCommands(body: string): string[] {
 }
 
 export function objectiveCriteria(body: string): string[] {
-  const acceptance =
-    body.match(/^## Acceptance\s*\n([\s\S]*?)(?=^## |$(?![\s\S]))/im)?.[1] ??
-    "";
-  const listed = acceptance.split("\n").flatMap((line) => {
-    const match = line.match(/^\s*-\s+(.+?)\s*$/);
-    return match ? [match[1]!] : [];
+  const acceptance = objectiveSection(body, [
+    "Acceptance",
+    "What must be true",
+  ]);
+  const section = acceptance || objectiveSection(body, ["Goal", "Outcome"]);
+  return section.split(/\n\s*\n/).flatMap((paragraph) => {
+    const criteria: string[] = [];
+    for (const line of paragraph.split("\n")) {
+      const text = line.trim();
+      if (!text) continue;
+      const list = text.match(/^(?:[-*]|\d+[.)])\s+(.+)$/);
+      if (list) criteria.push(list[1]!);
+      else if (criteria.length) criteria[criteria.length - 1] += ` ${text}`;
+      else criteria.push(text);
+    }
+    return criteria;
   });
-  if (listed.length) return listed;
-  const goal =
-    body.match(/^## Goal\s*\n([\s\S]*?)(?=^## |$(?![\s\S]))/im)?.[1] ?? "";
-  return goal
-    .split(/\n\s*\n/)
-    .map((paragraph) => paragraph.trim())
-    .filter(Boolean);
+}
+
+function objectiveSection(body: string, names: string[]): string {
+  const lines = body.split("\n");
+  const start = lines.findIndex((line) => {
+    const heading = line.match(/^(#{2,3})\s+(.+?)\s*$/);
+    return Boolean(
+      heading &&
+      names.some((name) => heading[2]!.toLowerCase() === name.toLowerCase()),
+    );
+  });
+  if (start < 0) return "";
+  const level = lines[start]!.match(/^#+/)![0].length;
+  const end = lines.findIndex(
+    (line, index) =>
+      index > start && new RegExp(`^#{1,${level}}\\s+`).test(line),
+  );
+  return lines
+    .slice(start + 1, end < 0 ? undefined : end)
+    .join("\n")
+    .trim();
 }
 
 function exactLine(content: string, command: string): boolean {
@@ -396,7 +417,10 @@ function authorizedCommand(
   checkout: string,
 ): boolean {
   if (!check.command.trim() || !check.source) return false;
-  if (check.provenance === "source-declared")
+  if (
+    check.provenance === "source-declared" &&
+    check.source !== "OPERATOR_DECISION"
+  )
     return sources.some(
       (source) =>
         source.path === check.source &&

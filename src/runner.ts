@@ -16,6 +16,7 @@ import {
   objectiveCriteria,
   planningSources,
   resolvePlan,
+  validateCommandProvenance,
   verifyPlanCandidate,
   type PlanCandidate,
 } from "./compiler.js";
@@ -253,6 +254,11 @@ export async function runObjective(
       };
     }
     const graph = state.graph;
+    validateCommandProvenance(
+      graph,
+      planningSources(issue.body, state.baseSha, config.checkout),
+      config.checkout,
+    );
     stateForSignal = state;
     saveState(path, state);
     if (config.delivery.kind === "native-stack") {

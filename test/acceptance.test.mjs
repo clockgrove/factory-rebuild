@@ -168,6 +168,18 @@ test("Objective criteria use explicit acceptance or the source Goal", () => {
     ),
     ["Deliver a complete result."],
   );
+  assert.deepEqual(
+    objectiveCriteria(
+      "### Outcome\n\nDeliver a result.\n\n### Acceptance\n\n- First observable check\n- Second observable check\n\n### Boundaries\nNo deployment\n",
+    ),
+    ["First observable check", "Second observable check"],
+  );
+  assert.deepEqual(
+    objectiveCriteria(
+      "### Outcome\n\nDeliver a result.\n\n### What must be true\n\nA user sees the result.\n\n### Boundaries\nNo deployment\n",
+    ),
+    ["A user sees the result."],
+  );
 });
 
 test("result review auto-accepts sourced evidence, otherwise asks one exact-tree decision", async () => {
