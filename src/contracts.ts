@@ -1,5 +1,12 @@
 export type Repository = `${string}/${string}`;
 
+export interface SourceAssetBinding {
+  path: string;
+  role: string;
+  mediaType: string;
+  visibility: "private" | "repository";
+}
+
 export interface WorkItem {
   id: string;
   title: string;
@@ -16,7 +23,8 @@ export interface WorkItem {
     source?: string;
   }[];
   brief: string;
-  sourceAssets?: string[];
+  /** Legacy path entries remain readable in schemaVersion 1 snapshots. */
+  sourceAssets?: (string | SourceAssetBinding)[];
   expectedOutputRoles?: string[];
   minimumAssetSets?: number;
   requiredLfsRoles?: string[];
@@ -43,7 +51,7 @@ export interface ExecutionRequest {
   item: WorkItem;
   baseSha: string;
   attemptId?: string;
-  sourceAssets?: ContentRef[];
+  sourceAssets?: { binding: SourceAssetBinding; ref: ContentRef }[];
 }
 export interface ExecutionHandle {
   provider: string;
@@ -72,7 +80,7 @@ export interface HarnessRequest {
   item: WorkItem;
   worktree: string;
   attemptId?: string;
-  sourceAssets?: ContentRef[];
+  sourceAssets?: { binding: SourceAssetBinding; ref: ContentRef }[];
 }
 export interface HarnessHandle {
   identity: string;
@@ -184,7 +192,10 @@ export interface ProducedAssetSet {
     path: string;
     mediaType: string;
     destination?: string;
+    /** Uninterpreted, harness-declared format details from a named authority. */
+    formatMetadata?: { source: string; values: Record<string, unknown> };
   }[];
+  relationships?: { from: string; toRole: string; kind: string }[];
   provenance: {
     source: string;
     rights: string;
@@ -195,11 +206,14 @@ export interface ProducedAssetSet {
 
 export interface CapturedAssetSet {
   id: string;
+  inputs?: { binding: SourceAssetBinding; ref: ContentRef }[];
   members: {
     role: string;
     ref: ContentRef;
     destination: string;
+    formatMetadata?: { source: string; values: Record<string, unknown> };
   }[];
+  relationships?: ProducedAssetSet["relationships"];
   provenance: ProducedAssetSet["provenance"];
   evidence: { harnessIdentity: string; resultDigest: string };
 }

@@ -15,6 +15,7 @@ import type {
   CapturedAssetSet,
   ContentRef,
   ProducedAssetSet,
+  SourceAssetBinding,
   WorkItem,
 } from "./contracts.js";
 import { LocalContentStore } from "./content/local.js";
@@ -66,6 +67,7 @@ export function parseProducedAssetSets(value: unknown): ProducedAssetSet[] {
       !provenance.lineage.every((part) => typeof part === "string")
     )
       throw new Error(`AssetSet ${set.id} provenance is invalid`);
+    const declaredRoles = new Set<string>();
     for (const rawMember of set.members) {
       if (
         !rawMember ||
@@ -80,6 +82,42 @@ export function parseProducedAssetSets(value: unknown): ProducedAssetSet[] {
         )
       )
         throw new Error(`AssetSet ${set.id} member binding is incomplete`);
+      declaredRoles.add(member.role as string);
+      if (member.formatMetadata !== undefined) {
+        const metadata = member.formatMetadata;
+        if (
+          !metadata ||
+          typeof metadata !== "object" ||
+          Array.isArray(metadata)
+        )
+          throw new Error(`AssetSet ${set.id} format metadata is invalid`);
+        const detail = metadata as Record<string, unknown>;
+        if (
+          typeof detail.source !== "string" ||
+          !detail.source ||
+          !detail.values ||
+          typeof detail.values !== "object" ||
+          Array.isArray(detail.values)
+        )
+          throw new Error(`AssetSet ${set.id} format metadata is invalid`);
+      }
+    }
+    if (set.relationships !== undefined) {
+      if (
+        !Array.isArray(set.relationships) ||
+        !set.relationships.every(
+          (edge) =>
+            edge &&
+            typeof edge === "object" &&
+            typeof edge.from === "string" &&
+            !!edge.from &&
+            typeof edge.toRole === "string" &&
+            declaredRoles.has(edge.toRole) &&
+            typeof edge.kind === "string" &&
+            !!edge.kind,
+        )
+      )
+        throw new Error(`AssetSet ${set.id} relationships are invalid`);
     }
   }
   return value as ProducedAssetSet[];
@@ -89,18 +127,28 @@ export async function importSourceAssets(
   store: LocalContentStore,
   worktree: string,
   item: WorkItem,
-): Promise<{ path: string; ref: ContentRef }[]> {
-  const result: { path: string; ref: ContentRef }[] = [];
-  for (const path of item.sourceAssets ?? []) {
+): Promise<{ binding: SourceAssetBinding; ref: ContentRef }[]> {
+  const result: { binding: SourceAssetBinding; ref: ContentRef }[] = [];
+  for (const source of item.sourceAssets ?? []) {
+    const binding: SourceAssetBinding =
+      typeof source === "string"
+        ? {
+            path: source,
+            role: "source",
+            mediaType: "application/octet-stream",
+            visibility: "repository",
+          }
+        : source;
+    const { path } = binding;
     if (!safeRelative(path))
       throw new Error(`Invalid source asset path: ${path}`);
     const absolute = join(worktree, path);
     if (!existsSync(absolute))
       throw new Error(`Source asset does not exist: ${path}`);
     const ref = await store.importFile(absolute, {
-      mediaType: "application/octet-stream",
+      mediaType: binding.mediaType,
     });
-    result.push({ path, ref });
+    result.push({ binding, ref });
   }
   return result;
 }
@@ -111,6 +159,7 @@ export async function captureAssetSets(
   item: WorkItem,
   sets: ProducedAssetSet[],
   evidence: unknown,
+  inputs: { binding: SourceAssetBinding; ref: ContentRef }[] = [],
 ): Promise<CapturedAssetSet[]> {
   parseProducedAssetSets(sets);
   if (new Set(sets.map((set) => set.id)).size !== sets.length)
@@ -195,12 +244,24 @@ export async function captureAssetSets(
       const ref = await store.importFile(path, {
         mediaType: member.mediaType,
       });
-      members.push({ role: member.role, ref, destination: member.destination });
+      members.push({
+        role: member.role,
+        ref,
+        destination: member.destination,
+        ...(member.formatMetadata && { formatMetadata: member.formatMetadata }),
+      });
     }
     for (const role of item.expectedOutputRoles ?? [])
       if (!roles.has(role))
         throw new Error(`AssetSet ${set.id} lacks expected role ${role}`);
-    captured.push({ id: set.id, members, provenance, evidence: evidenceRef });
+    captured.push({
+      id: set.id,
+      ...(inputs.length && { inputs }),
+      members,
+      ...(set.relationships && { relationships: set.relationships }),
+      provenance,
+      evidence: evidenceRef,
+    });
   }
   rmSync(mediaRoot, { recursive: true, force: true });
   if (

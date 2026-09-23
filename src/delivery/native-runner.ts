@@ -12,6 +12,8 @@ import { linearDeliveryUnits } from "./plan.js";
 import { NativeStackDelivery, type StackLayer } from "./native-stack.js";
 import { LocalContentStore } from "../content/local.js";
 import { materializeAssetSet } from "../media.js";
+import { itemsConflict } from "../scheduler.js";
+import { transplantIndependentChange } from "./transplant.js";
 
 export async function runNativeGraph(args: {
   config: FactoryConfig;
@@ -31,7 +33,69 @@ export async function runNativeGraph(args: {
   const contentStore = new LocalContentStore(join(root, "content"));
   const branchFor = (id: string) => `factory/objective-${objective}/${id}`;
   const defaultBranch = github.defaultBranch();
-  for (const unit of linearDeliveryUnits(state.graph)) {
+  const units = linearDeliveryUnits(state.graph);
+  // Prepare independent single-item units at the same exact base. Publication
+  // still serializes, and each prepared tree is replayed and revalidated on
+  // the observed default-branch head before it is published.
+  if (Object.values(state.work).every((work) => work.status === "pending")) {
+    const limit = Math.min(
+      config.execution.concurrency,
+      await driver.availableSlots(),
+    );
+    const prepared: typeof units = [];
+    for (const unit of units) {
+      if (prepared.length >= limit) break;
+      if (
+        unit.items.length !== 1 ||
+        unit.externalDependencies.length ||
+        unit.items[0]!.expectedOutputRoles?.length ||
+        prepared.some((other) => itemsConflict(unit.items[0]!, other.items[0]!))
+      )
+        continue;
+      prepared.push(unit);
+    }
+    if (prepared.length > 1) {
+      const tasks = prepared.map(async (unit) => {
+        const item = unit.items[0]!;
+        const work = state.work[item.id]!;
+        work.status = "running";
+        work.step = "execute";
+        work.baseSha = state.baseSha;
+        work.attempt = randomUUID();
+        work.startedAt = new Date().toISOString();
+        save();
+        const handle = await driver.start({
+          item,
+          baseSha: state.baseSha,
+          attemptId: work.attempt,
+        });
+        work.execution = handle;
+        save();
+        if (args.cancelled()) {
+          await driver.cancel(handle);
+          throw new Error("Objective cancelled");
+        }
+        const result = await driver.collect(handle);
+        if (result.assets?.length)
+          throw new Error(
+            `Independent preparation ${item.id} unexpectedly returned AssetSets`,
+          );
+        work.changeRef = result.changeRef;
+        work.treeSha = result.treeSha;
+        delete work.execution;
+        work.step = "validate";
+        save();
+      });
+      for (const [index, task] of tasks.entries())
+        active.set(prepared[index]!.id, task);
+      try {
+        await Promise.all(tasks);
+      } finally {
+        for (const unit of prepared) active.delete(unit.id);
+      }
+    }
+  }
+  for (const unit of units) {
     if (unit.items.every((item) => state.work[item.id]?.status === "done"))
       continue;
     if (
@@ -55,7 +119,13 @@ export async function runNativeGraph(args: {
         ? previous.changeRef
         : (state.integratedSha ?? state.baseSha);
       if (!itemBase) throw new Error("Native stack predecessor has no commit");
-      if (work.status === "running" && work.baseSha !== itemBase)
+      if (
+        work.status === "running" &&
+        work.baseSha !== itemBase &&
+        (index !== 0 ||
+          unit.items.length !== 1 ||
+          unit.externalDependencies.length)
+      )
         throw new Error(`Work Item ${item.id} resumed on a changed base`);
       if (work.status === "pending") {
         work.status = "running";
@@ -66,7 +136,9 @@ export async function runNativeGraph(args: {
         save();
       }
       if (
-        (work.step !== "execute" && work.step !== "approve-asset") ||
+        (work.step !== "execute" &&
+          work.step !== "approve-asset" &&
+          work.step !== "validate") ||
         (work.execution && !work.attempt)
       )
         throw new Error(
@@ -89,7 +161,7 @@ export async function runNativeGraph(args: {
           });
           work.changeRef = applied.changeRef;
           work.treeSha = applied.treeSha;
-        } else {
+        } else if (work.step === "execute") {
           const handle: ExecutionHandle =
             work.execution ??
             (await driver.start({
@@ -109,6 +181,7 @@ export async function runNativeGraph(args: {
           if (args.cancelled()) throw new Error("Objective cancelled");
           work.changeRef = result.changeRef;
           work.treeSha = result.treeSha;
+          delete work.execution;
           if (result.assets?.length) {
             work.assets = result.assets;
             work.status = "waiting";
@@ -116,6 +189,24 @@ export async function runNativeGraph(args: {
             save();
             return;
           }
+          work.step = "validate";
+          save();
+        }
+        if (work.baseSha !== itemBase) {
+          if (!work.changeRef || !work.baseSha || work.assets?.length)
+            throw new Error(
+              `Work Item ${item.id} cannot replay its prepared change`,
+            );
+          const replayed = transplantIndependentChange(
+            config.checkout,
+            work.baseSha,
+            work.changeRef,
+            itemBase,
+          );
+          work.changeRef = replayed.changeRef;
+          work.treeSha = replayed.treeSha;
+          work.baseSha = itemBase;
+          save();
         }
         work.step = "validate";
         save();

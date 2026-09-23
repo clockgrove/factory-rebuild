@@ -2,7 +2,7 @@
 
 Factory turns a repository development Objective into source-grounded Work Items, runs bounded coding attempts, validates their exact result trees, and delivers the changes through GitHub. It is an open-source Clockgrove plugin installed for one target repository at a time.
 
-**Status:** active public rebuild. The local Codex SDK path, dependency DAG, ordinary lifecycle, regular pull-request delivery, and native linear stacks have passed installed-package disposable gates. Media, LFS delivery, and the combined disposable release gate are tracked in [the public project](https://github.com/orgs/clockgrove/projects/2). Private adopter pilots follow the public release gate and use the same packaged plugin interface. The current package is a development candidate, not a published release.
+**Status:** public release candidate in progress. The installed local Codex SDK path, dependency DAG, lifecycle, regular pull requests, native linear stacks, human-selected AssetSets, and Git LFS have passed public disposable gates. One pinned installed package has now passed the combined public disposable Objective; see [current build status](docs/BUILD-STATUS.md) for the exact artifact and final head. The current package remains a development candidate while the separate trunk-gap review and required public-artifact adopter pilot are pending.
 
 ## How it works
 
@@ -41,6 +41,8 @@ Bind one target checkout and run a GitHub Objective with the installed CLI:
 
 Use `--delivery native-stack` at install time to deliver maximal linear chains through GitHub's native stacked pull requests. The default is regular PR delivery.
 
+To reproduce the combined release gate without any Clockgrove private material, start with [the public target fixture](test/fixtures/disposable-target/) in a new GitHub repository you control. Copy its files into an empty directory, initialize and push `main`, then create a GitHub issue from [the release-candidate Objective template](test/fixtures/objectives/release-candidate.md). Install this package with `--delivery native-stack --concurrency 2` and that target checkout, then run the new issue number. Use a fresh `XDG_CONFIG_HOME` and `XDG_STATE_HOME` for an isolated installation. The Objective owns its requirements; Factory derives the Work Item graph and validation commands from the issue and target checkout.
+
 For a media Work Item, the harness returns complete candidate AssetSets and Factory stops for human review. `factory status --objective ISSUE_NUMBER` lists their IDs and digests. Export a candidate outside the target checkout, inspect its image and sidecar, then select the whole set and resume:
 
 ```sh
@@ -50,7 +52,7 @@ factory select --objective ISSUE_NUMBER --item WORK_ITEM_ID --set CANDIDATE_ID
 factory run --objective ISSUE_NUMBER
 ```
 
-The target owns its `.gitattributes` policy. Factory checks selected bytes against the committed LFS pointer and a fresh clone after merge. The [public media fixture](test/fixtures/objectives/media-lfs.md) shows the required source, roles, and validation commands. If you use a temporary `XDG_CONFIG_HOME` for Factory, keep the controller's GitHub CLI authentication visible through `GH_CONFIG_DIR` or its normal configuration path.
+The target owns its `.gitattributes` policy. Factory checks selected bytes against the committed LFS pointer and a fresh clone after merge. Media contracts use declared source roles, types, and visibility, plus output roles, lineage, and optional tool-supplied format metadata; Factory does not interpret the file format. The [public PNG fixture](test/fixtures/objectives/media-lfs.md) shows one source, role, and validation example, while a local test covers an opaque 3D file and sidecar under target-owned LFS. If you use a temporary `XDG_CONFIG_HOME` for Factory, keep the controller's GitHub CLI authentication visible through `GH_CONFIG_DIR` or its normal configuration path.
 
 `factory cancel --objective ISSUE_NUMBER` stops owned local processes. `factory retry --objective ISSUE_NUMBER --item WORK_ITEM_ID` starts a new explicit attempt for a failed or cancelled unpublished item. Managed-agent and sandbox modes are reserved contract shapes and fail preflight until their branches ship.
 
