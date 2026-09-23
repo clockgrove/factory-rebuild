@@ -603,7 +603,8 @@ test("large binary results reach independent review as descriptors, and reviewer
             assert.equal(packet.changes[0].path, "image.bin");
             assert.equal(packet.changes[0].newBytes, 150_000);
             assert.match(packet.changes[0].newObject, /^[0-9a-f]{40}$/);
-            assert.match(packet.textPatch, /Binary files/);
+            assert.match(packet.patches[0].excerpt, /Binary files/);
+            assert.equal(packet.patches[0].truncated, false);
             assert.ok(review.change.length < 10_000);
             throw new Error("review context unavailable");
           },
@@ -617,6 +618,89 @@ test("large binary results reach independent review as descriptors, and reviewer
       },
     );
     assert.equal(calls, 1);
+  });
+});
+
+test("large text changes keep exact descriptors and explicit truncated hunks for review", async () => {
+  await withTarget("large-text-review", {}, async (root, target) => {
+    writeFileSync(
+      join(target.checkout, "result.txt"),
+      "line of content\n".repeat(20_000),
+    );
+    git(target.checkout, "add", "result.txt");
+    git(
+      target.checkout,
+      "-c",
+      "user.name=Factory Test",
+      "-c",
+      "user.email=factory-test@example.com",
+      "commit",
+      "-m",
+      "Add large text result",
+    );
+    const commit = git(target.checkout, "rev-parse", "HEAD");
+    const treeSha = git(target.checkout, "rev-parse", "HEAD^{tree}");
+    const previous = process.env.FACTORY_RESULT_REVIEW_TEXT_BUDGET_BYTES;
+    process.env.FACTORY_RESULT_REVIEW_TEXT_BUDGET_BYTES = "2048";
+    let calls = 0;
+    try {
+      await assert.rejects(
+        reviewAcceptance({
+          checkout: target.checkout,
+          baseSha: target.baseSha,
+          commit,
+          evidence: validateTree(
+            target.checkout,
+            join(root, "validation"),
+            commit,
+            treeSha,
+            [],
+          ),
+          criteria: ["result meets requirements"],
+          sources: [
+            { path: "OBJECTIVE", content: "result meets requirements" },
+          ],
+          model: {
+            async reviewResult(review) {
+              calls++;
+              const packet = JSON.parse(review.change);
+              assert.equal(packet.textBudget, 2048);
+              assert.equal(packet.changes[0].path, "result.txt");
+              assert.match(packet.changes[0].newObject, /^[0-9a-f]{40}$/);
+              assert.match(packet.patches[0].lineStats, /^20000\s+0\s+/);
+              assert.equal(packet.patches[0].truncated, true);
+              assert.ok(
+                Buffer.byteLength(packet.patches[0].excerpt, "utf8") <= 2048,
+              );
+              assert.ok(review.change.length < 4000);
+              return {
+                findings: [
+                  {
+                    criterion: "result meets requirements",
+                    verdict: "needs-human",
+                    source: "OBJECTIVE",
+                    quote: "result meets requirements",
+                    detail: "Relevant text is truncated",
+                    question: "Does this exact result satisfy the requirement?",
+                  },
+                ],
+              };
+            },
+          },
+        }),
+        (error) => {
+          assert.ok(error instanceof AcceptanceDecisionRequired);
+          assert.equal(error.pending.treeSha, treeSha);
+          assert.match(error.pending.detail, /truncated/);
+          return true;
+        },
+      );
+      assert.equal(calls, 1);
+    } finally {
+      if (previous === undefined)
+        delete process.env.FACTORY_RESULT_REVIEW_TEXT_BUDGET_BYTES;
+      else process.env.FACTORY_RESULT_REVIEW_TEXT_BUDGET_BYTES = previous;
+    }
   });
 });
 

@@ -2,11 +2,13 @@ import { mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
+import { spawnSync } from "node:child_process";
 import type { PlanningModel, WorkItem } from "./contracts.js";
 import {
   command,
   pinnedGit,
   pinnedGitRaw,
+  pinnedGitEnvironment,
   sanitizedWorkerEnvironment,
 } from "./process.js";
 
@@ -103,19 +105,60 @@ function resultChangePacket(
       ...(newBytes === undefined ? {} : { newBytes }),
     });
   }
-  // Plain diff describes binary changes without embedding encoded file bytes.
-  const textPatch = pinnedGit(
-    checkout,
-    "diff",
-    "--no-ext-diff",
-    "--no-textconv",
-    "--no-renames",
-    "--no-color",
-    baseSha,
-    commit,
-    "--",
+  // Leave room in the reviewer context for sources, criteria, and observations.
+  // The operator can raise this limit for a model with a larger context window.
+  const configured = Number(
+    process.env.FACTORY_RESULT_REVIEW_TEXT_BUDGET_BYTES ?? 48_000,
   );
-  return JSON.stringify({ changes, textPatch });
+  const textBudget =
+    Number.isSafeInteger(configured) && configured > 0 ? configured : 48_000;
+  let remaining = textBudget;
+  const patches = changes.map(({ path }, index) => {
+    const lineStats = pinnedGit(
+      checkout,
+      "diff",
+      "--numstat",
+      "--no-renames",
+      baseSha,
+      commit,
+      "--",
+      path,
+    );
+    if (remaining === 0)
+      return { path, lineStats, excerpt: "", truncated: true };
+    const limit = Math.ceil(remaining / (changes.length - index));
+    const result = spawnSync(
+      "git",
+      [
+        "-C",
+        checkout,
+        "diff",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--no-renames",
+        "--no-color",
+        "--unified=2",
+        baseSha,
+        commit,
+        "--",
+        path,
+      ],
+      { env: pinnedGitEnvironment(), maxBuffer: limit },
+    );
+    if (
+      result.error &&
+      (result.error as NodeJS.ErrnoException).code !== "ENOBUFS"
+    )
+      throw result.error;
+    if (!result.error && result.status !== 0)
+      throw new Error(`Cannot describe text change for ${path}`);
+    const output = result.stdout ?? Buffer.alloc(0);
+    const excerpt = output.subarray(0, limit).toString("utf8");
+    const truncated = Boolean(result.error) || output.length > limit;
+    remaining -= Buffer.byteLength(excerpt, "utf8");
+    return { path, lineStats, excerpt, truncated };
+  });
+  return JSON.stringify({ changes, textBudget, patches });
 }
 
 /** A separate read-only review evaluates each criterion on an exact-tree packet. */
