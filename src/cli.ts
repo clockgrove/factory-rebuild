@@ -7,6 +7,7 @@ import { compose, composePlanning } from "./index.js";
 import { readState } from "./state-store.js";
 import { itemsConflict } from "./scheduler.js";
 import { linearDeliveryUnits } from "./delivery/plan.js";
+import { readAgentTimeline, statusDocument } from "./diagnostics.js";
 
 function option(args: string[], name: string): string | undefined {
   const index = args.indexOf(`--${name}`);
@@ -21,7 +22,7 @@ function options(args: string[], name: string): string[] {
 
 function help(): void {
   console.log(
-    `Factory CLI\n\nCommands:\n  install --repository OWNER/REPO --checkout ABSOLUTE_PATH --concurrency N [--delivery regular|native-stack] [--network host|off] [--config PATH]\n  plan --objective N [--output ABSOLUTE_NEW_FILE] [--config PATH]\n  decide --objective N --plan PLAN_FILE --outcome accept|refuse --actor NAME --reason TEXT [--answer TEXT] --output ABSOLUTE_NEW_FILE [--config PATH]\n  run --objective N [--plan PLAN_FILE] [--config PATH]\n  status --objective N [--config PATH]\n  review --objective N --item ID --set SET_ID --output ABSOLUTE_NEW_DIRECTORY [--config PATH]\n  select --objective N --item ID --set SET_ID [--actor NAME] [--reason TEXT] [--bind DEPENDENT_ITEM ...] [--config PATH]\n  cancel --objective N [--config PATH]\n  retry --objective N --item ID [--config PATH]`,
+    `Factory CLI\n\nCommands:\n  install --repository OWNER/REPO --checkout ABSOLUTE_PATH --concurrency N [--delivery regular|native-stack] [--network host|off] [--config PATH]\n  plan --objective N [--output ABSOLUTE_NEW_FILE] [--config PATH]\n  decide --objective N --plan PLAN_FILE --outcome accept|refuse --actor NAME --reason TEXT [--answer TEXT] --output ABSOLUTE_NEW_FILE [--config PATH]\n  run --objective N [--plan PLAN_FILE] [--config PATH]\n  status --objective N [--json] [--config PATH]\n  diagnostics --objective N [--follow] [--config PATH]\n  review --objective N --item ID --set SET_ID --output ABSOLUTE_NEW_DIRECTORY [--config PATH]\n  select --objective N --item ID --set SET_ID [--actor NAME] [--reason TEXT] [--bind DEPENDENT_ITEM ...] [--config PATH]\n  cancel --objective N [--config PATH]\n  retry --objective N --item ID [--config PATH]`,
   );
 }
 
@@ -71,6 +72,7 @@ async function main(): Promise<void> {
       "decide",
       "run",
       "status",
+      "diagnostics",
       "review",
       "select",
       "cancel",
@@ -146,7 +148,21 @@ async function main(): Promise<void> {
   const application = compose(config);
   if (command === "status") {
     const state = readState(config.repository, objective);
-    if (!state)
+    if (args.includes("--json")) {
+      console.log(
+        JSON.stringify(
+          statusDocument(
+            state,
+            config.repository,
+            objective,
+            config.delivery.kind,
+            config.policy.allowedSecretNames
+              .map((name) => process.env[name])
+              .filter((value): value is string => Boolean(value)),
+          ),
+        ),
+      );
+    } else if (!state)
       console.log(`Factory for ${config.repository}: no active Objective`);
     else {
       const unitByItem = new Map(
@@ -192,6 +208,31 @@ async function main(): Promise<void> {
             `  ${set.id}: ${set.members.map((member) => `${member.role} → ${member.destination} (${member.ref.digest})`).join(", ")}`,
           );
       }
+    }
+  } else if (command === "diagnostics") {
+    let printed = 0;
+    const printNew = () => {
+      const timeline = readAgentTimeline(
+        config.repository,
+        objective,
+        readState(config.repository, objective),
+      );
+      if (timeline.length < printed) printed = 0;
+      for (const event of timeline.slice(printed))
+        console.log(JSON.stringify(event));
+      printed = timeline.length;
+    };
+    printNew();
+    if (args.includes("--follow")) {
+      await new Promise<void>((resolve) => {
+        const interval = setInterval(printNew, 250);
+        const stop = () => {
+          clearInterval(interval);
+          resolve();
+        };
+        process.once("SIGINT", stop);
+        process.once("SIGTERM", stop);
+      });
     }
   } else if (command === "cancel") {
     const result = await application.cancelObjective(objective);

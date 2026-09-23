@@ -14,6 +14,7 @@ import { closeWorkItem } from "../completion.js";
 import { git } from "../process.js";
 import { readyItems } from "../scheduler.js";
 import { validateWorkItem } from "../validation.js";
+import type { DiagnosticEmitter } from "../diagnostics.js";
 
 export async function runRegularGraph(args: {
   config: FactoryConfig;
@@ -28,6 +29,7 @@ export async function runRegularGraph(args: {
   save: () => void;
   active: Map<string, Promise<void>>;
   cancelled: () => boolean;
+  diagnostics?: DiagnosticEmitter;
 }): Promise<boolean> {
   const {
     config,
@@ -105,6 +107,21 @@ export async function runRegularGraph(args: {
         item,
         work.changeRef!,
         work.treeSha!,
+        (entry) =>
+          args.diagnostics?.emit({
+            runId: state.runId,
+            itemId: item.id,
+            attemptId: work.attempt,
+            operation: "validation-command",
+            outcome: entry.passed ? "completed" : "failed",
+            durationMs: entry.durationMs,
+            metadata: {
+              commandIndex: entry.index,
+              exitCode: entry.exitCode,
+              treeSha: work.treeSha!,
+            },
+            detail: entry.output,
+          }),
       );
       work.step = "deliver";
       save();

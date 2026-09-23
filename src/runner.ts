@@ -29,6 +29,7 @@ import { linearDeliveryUnits } from "./delivery/plan.js";
 import { runRegularGraph } from "./delivery/regular-runner.js";
 import { git, linuxProcessIdentity } from "./process.js";
 import { validateTree } from "./validation.js";
+import { DiagnosticEmitter, StateDiagnostics } from "./diagnostics.js";
 import {
   acquireControllerLock,
   readControllerOwner,
@@ -127,6 +128,18 @@ export async function runObjective(
   const lock = join(root, "controller.lock");
   const lockHandle = acquireControllerLock(lock, objective);
   const path = statePath(config.repository, objective);
+  const diagnostics = new DiagnosticEmitter(
+    config.repository,
+    objective,
+    config.policy.allowedSecretNames
+      .map((name) => process.env[name])
+      .filter((value): value is string => Boolean(value)),
+  );
+  let stateDiagnostics: StateDiagnostics | undefined;
+  const save = (state: FactoryState) => {
+    saveState(path, state);
+    stateDiagnostics?.observe();
+  };
   const active = new Map<string, Promise<void>>();
   const { driver, github, delivery, contentStore, planningModel } = services;
   let stateForSignal: FactoryState | undefined;
@@ -135,7 +148,7 @@ export async function runObjective(
     cancellationRequested = true;
     if (stateForSignal) {
       stateForSignal.cancelRequested = true;
-      saveState(path, stateForSignal);
+      save(stateForSignal);
     }
     if (stateForSignal) {
       for (const id of active.keys()) {
@@ -146,6 +159,7 @@ export async function runObjective(
   };
   process.on("SIGUSR1", onCancel);
   try {
+    diagnostics.emit({ operation: "objective-run", outcome: "started" });
     const issue = await github.objective(objective);
     const configDigest = createHash("sha256")
       .update(JSON.stringify(config))
@@ -186,18 +200,19 @@ export async function runObjective(
         throw new Error(
           "Objective issue body changed; operator direction required",
         );
-      const save = () => saveState(path, state!);
+      stateDiagnostics = new StateDiagnostics(diagnostics, state);
+      const saveCurrent = () => save(state!);
       for (const item of state.graph.items)
         if (state.work[item.id]?.status === "done")
           await closeWorkItem(
             state,
             item.id,
             github,
-            save,
+            saveCurrent,
             config.delivery.kind === "native-stack",
           );
       if (state.finalValidation?.passed) {
-        await closeObjectiveIssue(state, issue.body, github, save);
+        await closeObjectiveIssue(state, issue.body, github, saveCurrent);
         return state;
       }
       if (state.cancelRequested || state.cancelledAt)
@@ -217,6 +232,8 @@ export async function runObjective(
         }
       }
       const baseSha = git(config.checkout, "rev-parse", "HEAD");
+      const planningStarted = Date.now();
+      diagnostics.emit({ operation: "planning", outcome: "started", metadata: { baseSha } });
       const plan =
         acceptedPlan ??
         (await compilePlan(
@@ -246,9 +263,23 @@ export async function runObjective(
           );
       }
       const graph = plan.graph;
+      diagnostics.emit({
+        operation: "planning",
+        outcome: "completed",
+        durationMs: Date.now() - planningStarted,
+        metadata: { itemCount: graph.items.length, baseSha },
+      });
+      const projectionStarted = Date.now();
+      diagnostics.emit({ operation: "github-projection", outcome: "started" });
       const projected = await github.projectGraph({
         graph,
         objectiveIssue: objective,
+      });
+      diagnostics.emit({
+        operation: "github-projection",
+        outcome: "completed",
+        durationMs: Date.now() - projectionStarted,
+        metadata: { itemCount: graph.items.length },
       });
       state = {
         schemaVersion: 1,
@@ -267,10 +298,11 @@ export async function runObjective(
           graph.items.map((item) => [item.id, { status: "pending" }]),
         ),
       };
+      stateDiagnostics = new StateDiagnostics(diagnostics, state);
     }
     const graph = state.graph;
     stateForSignal = state;
-    saveState(path, state);
+    save(state);
     if (config.delivery.kind === "native-stack") {
       await runNativeGraph({
         config,
@@ -282,9 +314,10 @@ export async function runObjective(
         delivery,
         contentStore,
         github,
-        save: () => saveState(path, state),
+        save: () => save(state),
         active,
         cancelled: () => cancellationRequested,
+        diagnostics,
       });
       if (graph.items.some((item) => state.work[item.id]?.status === "waiting"))
         return state;
@@ -299,9 +332,10 @@ export async function runObjective(
         delivery,
         contentStore,
         github,
-        save: () => saveState(path, state),
+        save: () => save(state),
         active,
         cancelled: () => cancellationRequested,
+        diagnostics,
       });
       if (awaitingSelection) return state;
     }
@@ -317,12 +351,27 @@ export async function runObjective(
       "rev-parse",
       `${integratedSha}^{tree}`,
     );
+    diagnostics.emit({
+      runId: state.runId,
+      operation: "objective-validation",
+      outcome: "started",
+      metadata: { integratedSha, treeSha: finalTree },
+    });
     const finalEvidence = validateTree(
       config.checkout,
       join(root, "final-validation"),
       integratedSha,
       finalTree,
       objectiveCommands(issue.body, graph),
+      (entry) =>
+        diagnostics.emit({
+          runId: state.runId,
+          operation: "objective-validation-command",
+          outcome: entry.passed ? "completed" : "failed",
+          durationMs: entry.durationMs,
+          metadata: { commandIndex: entry.index, exitCode: entry.exitCode },
+          detail: entry.output,
+        }),
     );
     verifyHydratedAssets({
       checkout: config.checkout,
@@ -336,12 +385,16 @@ export async function runObjective(
       }),
     });
     state.finalValidation = { ...finalEvidence, passed: true };
-    saveState(path, state);
-    await closeObjectiveIssue(state, issue.body, github, () =>
-      saveState(path, state),
-    );
+    save(state);
+    await closeObjectiveIssue(state, issue.body, github, () => save(state));
     return state;
   } catch (error) {
+    diagnostics.emit({
+      runId: stateForSignal?.runId,
+      operation: "objective-run",
+      outcome: "failed",
+      detail: error instanceof Error ? error.message : String(error),
+    });
     for (const item of active.keys()) {
       const handle = readState(config.repository, objective)?.work[item]
         ?.execution;
@@ -361,7 +414,7 @@ export async function runObjective(
       } else {
         state.error = error instanceof Error ? error.message : String(error);
       }
-      saveState(path, state);
+      save(state);
     }
     throw error;
   } finally {

@@ -17,6 +17,7 @@ import { materializeAssetSet, selectedInputsForItem } from "../media.js";
 import { itemsConflict } from "../scheduler.js";
 import { transplantIndependentChange } from "./transplant.js";
 import { closeWorkItem } from "../completion.js";
+import type { DiagnosticEmitter } from "../diagnostics.js";
 
 export async function runNativeGraph(args: {
   config: FactoryConfig;
@@ -31,6 +32,7 @@ export async function runNativeGraph(args: {
   save: () => void;
   active: Map<string, Promise<void>>;
   cancelled: () => boolean;
+  diagnostics?: DiagnosticEmitter;
 }): Promise<void> {
   const {
     config,
@@ -255,6 +257,21 @@ export async function runNativeGraph(args: {
           item,
           work.changeRef!,
           work.treeSha!,
+          (entry) =>
+            args.diagnostics?.emit({
+              runId: state.runId,
+              itemId: item.id,
+              attemptId: work.attempt,
+              operation: "validation-command",
+              outcome: entry.passed ? "completed" : "failed",
+              durationMs: entry.durationMs,
+              metadata: {
+                commandIndex: entry.index,
+                exitCode: entry.exitCode,
+                treeSha: work.treeSha!,
+              },
+              detail: entry.output,
+            }),
         );
         work.step = "deliver";
         save();

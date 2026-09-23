@@ -13,6 +13,7 @@ import { dirname, join } from "node:path";
 import { once } from "node:events";
 import test from "node:test";
 import { readState, statePath } from "../dist/state-store.js";
+import { readDiagnostics, statusDocument } from "../dist/diagnostics.js";
 import {
   createTarget,
   factoryConfig,
@@ -150,6 +151,21 @@ test("regular application path runs a source-grounded concurrent DAG with stable
       new Set(initialStarts.map((event) => event.item)),
       new Set(["alpha", "beta"]),
     );
+    const inProgress = readState(descriptor.config.repository, objective);
+    const snapshot = statusDocument(
+      inProgress,
+      descriptor.config.repository,
+      objective,
+      "regular",
+    );
+    assert.equal(
+      snapshot.work.find((work) => work.id === "conflict").blockedReason,
+      "resource:alpha",
+    );
+    assert.equal(
+      snapshot.work.find((work) => work.id === "join").blockedReason,
+      "dependency:alpha",
+    );
     mkdirSync(join(root, "barriers"), { recursive: true });
     writeFileSync(barrier, "go\n");
     const state = await running;
@@ -207,6 +223,51 @@ test("regular application path runs a source-grounded concurrent DAG with stable
       "README.md",
     ]);
     assert.equal(planning[0].baseSha, target.baseSha);
+    const timeline = readDiagnostics(descriptor.config.repository, objective);
+    assert.ok(
+      timeline.some(
+        (event) =>
+          event.operation === "planning" && event.outcome === "completed",
+      ),
+    );
+    assert.ok(
+      timeline.some(
+        (event) =>
+          event.operation === "github-projection" &&
+          event.outcome === "completed",
+      ),
+    );
+    for (const id of ["alpha", "beta", "conflict", "join"]) {
+      const attempt = state.work[id].attempt;
+      assert.ok(
+        timeline.some(
+          (event) =>
+            event.itemId === id &&
+            event.attemptId === attempt &&
+            event.operation === "execute",
+        ),
+      );
+      assert.ok(
+        timeline.some(
+          (event) =>
+            event.itemId === id &&
+            event.operation === "validation-command" &&
+            event.outcome === "completed",
+        ),
+      );
+      assert.ok(
+        timeline.some(
+          (event) => event.itemId === id && event.metadata?.pullRequest,
+        ),
+      );
+    }
+    assert.ok(
+      timeline.some(
+        (event) =>
+          event.operation === "objective-finalization" &&
+          event.outcome === "completed",
+      ),
+    );
   });
 });
 
