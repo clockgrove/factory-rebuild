@@ -59,6 +59,24 @@ export interface PlanningModel {
       question: string;
     }[];
   }>;
+  reviewResult?(request: {
+    criteria: string[];
+    baseSha: string;
+    treeSha: string;
+    sources: { path: string; content: string }[];
+    change: string;
+    commands: { command: string; passed: true }[];
+    observations?: string;
+  }): Promise<{
+    findings: {
+      criterion: string;
+      verdict: "pass" | "needs-human" | "refuse";
+      source: string;
+      quote: string;
+      detail: string;
+      question: string;
+    }[];
+  }>;
 }
 
 export interface ExecutionRequest {

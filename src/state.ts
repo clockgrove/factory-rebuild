@@ -4,7 +4,7 @@ import type {
   ExecutionHandle,
   WorkGraph,
 } from "./contracts.js";
-import type { ValidationEvidence } from "./validation.js";
+import type { AcceptanceDecision, ValidationEvidence } from "./validation.js";
 import { assetSelectionDigest } from "./media.js";
 
 export type WorkStatus =
@@ -15,7 +15,8 @@ export type WorkStatus =
   | "done"
   | "failed"
   | "cancelled";
-export type WorkStep = "execute" | "validate" | "approve-asset" | "deliver";
+export type WorkStep =
+  "execute" | "validate" | "approve-asset" | "approve-result" | "deliver";
 
 export interface WorkState {
   status: WorkStatus;
@@ -27,6 +28,15 @@ export interface WorkState {
   changeRef?: string;
   treeSha?: string;
   validation?: ValidationEvidence;
+  acceptancePending?: {
+    criterion: string;
+    treeSha: string;
+    source: string;
+    quote: string;
+    question: string;
+    detail: string;
+  };
+  acceptanceDecisions?: AcceptanceDecision[];
   assets?: CapturedAssetSet[];
   selectedAssetSet?: string;
   selectionDigest?: string;
@@ -57,6 +67,15 @@ export interface FactoryState {
   >;
   integratedSha?: string;
   finalValidation?: ValidationEvidence & { passed: boolean; detail?: string };
+  finalAcceptancePending?: {
+    criterion: string;
+    treeSha: string;
+    source: string;
+    quote: string;
+    question: string;
+    detail: string;
+  };
+  finalAcceptanceDecisions?: AcceptanceDecision[];
   objectiveBodyDigest?: string;
   objectiveClosure?: "pending" | "complete";
   githubClosureError?: string;
@@ -92,6 +111,29 @@ function strings(value: unknown, label: string): string[] {
   return value;
 }
 
+function acceptanceDecisions(value: unknown, label: string): void {
+  if (!Array.isArray(value)) throw new Error(`${label} is invalid`);
+  for (const raw of value) {
+    const decision = record(raw, label);
+    string(decision.criterion, `${label}.criterion`);
+    sha(decision.treeSha, `${label}.treeSha`);
+    string(decision.actor, `${label}.actor`);
+    string(decision.reason, `${label}.reason`);
+    if (
+      Number.isNaN(Date.parse(string(decision.at, `${label}.at`))) ||
+      !["accept", "refuse"].includes(String(decision.outcome))
+    )
+      throw new Error(`${label} has invalid outcome or time`);
+  }
+}
+
+function acceptancePending(value: unknown, label: string): void {
+  const pending = record(value, label);
+  for (const key of ["criterion", "source", "quote", "question", "detail"])
+    string(pending[key], `${label}.${key}`);
+  sha(pending.treeSha, `${label}.treeSha`);
+}
+
 const statuses = new Set<WorkStatus>([
   "pending",
   "running",
@@ -105,6 +147,7 @@ const steps = new Set<WorkStep>([
   "execute",
   "validate",
   "approve-asset",
+  "approve-result",
   "deliver",
 ]);
 
@@ -233,9 +276,17 @@ export function parseFactoryState(
       (item.step !== "approve-asset" ||
         !Array.isArray(item.assets) ||
         !item.assets.length ||
-        item.selectedAssetSet)
+        item.selectedAssetSet) &&
+      (item.step !== "approve-result" || !item.acceptancePending)
     )
       throw new Error(`Waiting Work Item ${id} lacks candidate assets`);
+    if (item.acceptancePending !== undefined)
+      acceptancePending(item.acceptancePending, `${id}.acceptancePending`);
+    if (item.acceptanceDecisions !== undefined)
+      acceptanceDecisions(
+        item.acceptanceDecisions,
+        `${id}.acceptanceDecisions`,
+      );
     if (
       item.status === "published" &&
       (!Number.isSafeInteger(item.pullRequest) || !item.changeRef)
@@ -498,6 +549,13 @@ export function parseFactoryState(
     )
       throw new Error("Final validation evidence is invalid");
   }
+  if (state.finalAcceptancePending !== undefined)
+    acceptancePending(state.finalAcceptancePending, "finalAcceptancePending");
+  if (state.finalAcceptanceDecisions !== undefined)
+    acceptanceDecisions(
+      state.finalAcceptanceDecisions,
+      "finalAcceptanceDecisions",
+    );
   if (state.objectiveCommands !== undefined)
     strings(state.objectiveCommands, "objectiveCommands");
   if (state.objectiveBodyDigest !== undefined)

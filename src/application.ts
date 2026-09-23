@@ -11,6 +11,7 @@ import { RealGitHubGateway } from "./github.js";
 import type { FactoryState } from "./state.js";
 import {
   cancelObjective,
+  decideResult,
   decidePlan,
   exportAssetSetForReview,
   planObjective,
@@ -38,6 +39,16 @@ export interface FactoryApplication {
   ): Promise<FactoryState>;
   cancelObjective(objective: number): Promise<"requested" | "cancelled">;
   retryWorkItem(objective: number, itemId: string): void;
+  decideResult(
+    objective: number,
+    input: {
+      item?: string;
+      treeSha: string;
+      actor: string;
+      outcome: "accept" | "refuse";
+      reason: string;
+    },
+  ): void;
   selectAssetSet(
     objective: number,
     itemId: string,
@@ -66,6 +77,7 @@ export function createApplication(
       cancelObjective(config, objective, services.driver),
     retryWorkItem: (objective, itemId) =>
       retryWorkItem(config, objective, itemId),
+    decideResult: (objective, input) => decideResult(config, objective, input),
     selectAssetSet: (objective, itemId, setId, decision) =>
       selectAssetSet(
         config,
