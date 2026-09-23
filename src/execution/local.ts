@@ -1,11 +1,15 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import {
   closeSync,
+  createReadStream,
   existsSync,
+  lstatSync,
   mkdirSync,
   openSync,
   readFileSync,
+  realpathSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -13,6 +17,7 @@ import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import type {
   AgentHarness,
+  ContentRef,
   ContentStore,
   ExecutionDriver,
   ExecutionHandle,
@@ -174,6 +179,22 @@ export class CodexHarness implements AgentHarness {
   }
 }
 
+async function verifyBoundInput(path: string, ref: ContentRef): Promise<void> {
+  if (
+    !existsSync(path) ||
+    !lstatSync(path).isFile() ||
+    realpathSync(path) !== resolve(path)
+  )
+    throw new Error("Bound asset input is missing or redirected");
+  const hash = createHash("sha256");
+  let bytes = 0;
+  for await (const chunk of createReadStream(path)) {
+    hash.update(chunk);
+    bytes += chunk.length;
+  }
+  if (bytes !== ref.bytes || hash.digest("hex") !== ref.digest)
+    throw new Error("Bound asset input differs from its captured digest");
+}
 export class LocalExecutionDriver implements ExecutionDriver {
   private active = new Map<string, Active>();
 
@@ -227,12 +248,42 @@ export class LocalExecutionDriver implements ExecutionDriver {
         this.contentStore,
         worktree,
         request.item,
+        request.objectiveBody,
+      );
+      const inputRoot = join(worktree, ".factory-inputs");
+      const privateSources = sourceAssets.filter(
+        (source) =>
+          source.binding.kind === "local" ||
+          source.binding.kind === "github-attachment",
+      );
+      const selected = request.selectedAssets ?? [];
+      if (privateSources.length || selected.length)
+        mkdirSync(inputRoot, { recursive: true, mode: 0o700 });
+      const boundSources = await Promise.all(
+        privateSources.map(async (source, index) => {
+          const path = join(inputRoot, `source-${index}`);
+          await this.contentStore.materialize(source.ref, path);
+          return { ...source, path };
+        }),
+      );
+      const boundSelected = await Promise.all(
+        selected.map(async (asset, index) => {
+          await this.contentStore.verify(asset.ref);
+          const path = join(inputRoot, `selected-${index}`);
+          await this.contentStore.materialize(asset.ref, path);
+          return { ...asset, path };
+        }),
       );
       const handle = await this.harness.start({
         item: request.item,
         worktree,
         attemptId: identity,
-        sourceAssets,
+        sourceAssets: sourceAssets.map(
+          (source) =>
+            boundSources.find((bound) => bound.binding === source.binding) ??
+            source,
+        ),
+        selectedAssets: boundSelected,
       });
       const active = {
         request: { ...request, sourceAssets },
@@ -277,6 +328,29 @@ export class LocalExecutionDriver implements ExecutionDriver {
         result.evidence,
         active.request.sourceAssets,
       );
+      for (const [index, source] of (
+        active.request.selectedAssets ?? []
+      ).entries()) {
+        await verifyBoundInput(
+          join(active.worktree, ".factory-inputs", `selected-${index}`),
+          source.ref,
+        );
+      }
+      const privateSources = (active.request.sourceAssets ?? []).filter(
+        (source) =>
+          source.binding.kind === "local" ||
+          source.binding.kind === "github-attachment",
+      );
+      for (const [index, source] of privateSources.entries()) {
+        await verifyBoundInput(
+          join(active.worktree, ".factory-inputs", `source-${index}`),
+          source.ref,
+        );
+      }
+      rmSync(join(active.worktree, ".factory-inputs"), {
+        recursive: true,
+        force: true,
+      });
       rmSync(join(active.worktree, ".factory-assets.json"), { force: true });
       if (
         active.request.item.expectedOutputRoles?.length &&

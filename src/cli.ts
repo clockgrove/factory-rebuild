@@ -13,9 +13,15 @@ function option(args: string[], name: string): string | undefined {
   return index < 0 ? undefined : args[index + 1];
 }
 
+function options(args: string[], name: string): string[] {
+  return args.flatMap((arg, index) =>
+    arg === `--${name}` && args[index + 1] ? [args[index + 1]!] : [],
+  );
+}
+
 function help(): void {
   console.log(
-    `Factory CLI\n\nCommands:\n  install --repository OWNER/REPO --checkout ABSOLUTE_PATH --concurrency N [--delivery regular|native-stack] [--network host|off] [--config PATH]\n  plan --objective N [--output ABSOLUTE_NEW_FILE] [--config PATH]\n  decide --objective N --plan PLAN_FILE --outcome accept|refuse --actor NAME --reason TEXT [--answer TEXT] --output ABSOLUTE_NEW_FILE [--config PATH]\n  run --objective N [--plan PLAN_FILE] [--config PATH]\n  status --objective N [--config PATH]\n  review --objective N --item ID --set SET_ID --output ABSOLUTE_NEW_DIRECTORY [--config PATH]\n  select --objective N --item ID --set SET_ID [--config PATH]\n  cancel --objective N [--config PATH]\n  retry --objective N --item ID [--config PATH]`,
+    `Factory CLI\n\nCommands:\n  install --repository OWNER/REPO --checkout ABSOLUTE_PATH --concurrency N [--delivery regular|native-stack] [--network host|off] [--config PATH]\n  plan --objective N [--output ABSOLUTE_NEW_FILE] [--config PATH]\n  decide --objective N --plan PLAN_FILE --outcome accept|refuse --actor NAME --reason TEXT [--answer TEXT] --output ABSOLUTE_NEW_FILE [--config PATH]\n  run --objective N [--plan PLAN_FILE] [--config PATH]\n  status --objective N [--config PATH]\n  review --objective N --item ID --set SET_ID --output ABSOLUTE_NEW_DIRECTORY [--config PATH]\n  select --objective N --item ID --set SET_ID [--actor NAME] [--reason TEXT] [--bind DEPENDENT_ITEM ...] [--config PATH]\n  cancel --objective N [--config PATH]\n  retry --objective N --item ID [--config PATH]`,
   );
 }
 
@@ -199,7 +205,11 @@ async function main(): Promise<void> {
     const item = option(args, "item");
     const set = option(args, "set");
     if (!item || !set) throw new Error("select requires --item and --set");
-    await application.selectAssetSet(objective, item, set);
+    await application.selectAssetSet(objective, item, set, {
+      actor: option(args, "actor"),
+      reason: option(args, "reason"),
+      downstreamItems: options(args, "bind"),
+    });
     console.log(
       `Selected AssetSet ${set} for Work Item ${item}; run the Objective to continue`,
     );

@@ -71,13 +71,12 @@ test("persisted state validates identities and graph/work keys before use", () =
   );
 });
 
-test("schemaVersion 1 state accepts legacy source paths and explicit source bindings", () => {
+test("schemaVersion 1 state rejects legacy source paths and accepts explicit bindings", () => {
   const legacy = state();
   legacy.graph.items[0].sourceAssets = ["assets/source.png"];
-  assert.equal(
-    parseFactoryState(legacy, repository, objective).graph.items[0]
-      .sourceAssets[0],
-    "assets/source.png",
+  assert.throws(
+    () => parseFactoryState(legacy, repository, objective),
+    /sourceAssets are invalid/,
   );
   const bound = state();
   bound.graph.items[0].sourceAssets = [

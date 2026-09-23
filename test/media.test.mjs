@@ -18,7 +18,112 @@ import {
   importSourceAssets,
   materializeAssetSet,
   parseProducedAssetSets,
+  recognizedObjectiveAttachment,
 } from "../dist/media.js";
+
+test("private local source import retains its declared identity and exact bytes", async () => {
+  const root = mkdtempSync(join(tmpdir(), "factory-private-media-"));
+  try {
+    const path = join(root, "private.blend");
+    const bytes = Buffer.from([0, 39, 245, 71]);
+    writeFileSync(path, bytes);
+    const binding = {
+      kind: "local",
+      path,
+      role: "reference",
+      mediaType: "application/x-blender",
+      visibility: "private",
+    };
+    const store = new LocalContentStore(join(root, "store"));
+    const [source] = await importSourceAssets(
+      store,
+      root,
+      { sourceAssets: [binding] },
+      `Use ${path} as the reference.`,
+    );
+    assert.deepEqual(source.binding, binding);
+    assert.equal(
+      source.ref.digest,
+      createHash("sha256").update(bytes).digest("hex"),
+    );
+    await assert.rejects(
+      importSourceAssets(
+        store,
+        root,
+        { sourceAssets: [binding] },
+        "unrelated Objective",
+      ),
+      /absolute private file/,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("recognized Objective attachment import follows only GitHub content redirects", async () => {
+  const root = mkdtempSync(join(tmpdir(), "factory-attachment-"));
+  const url =
+    "https://github.com/user-attachments/assets/12345678-1234-1234-1234-123456789abc";
+  const originalFetch = globalThis.fetch;
+  const requests = [];
+  try {
+    assert.equal(recognizedObjectiveAttachment(url), true);
+    assert.equal(
+      recognizedObjectiveAttachment("https://evil.example/file"),
+      false,
+    );
+    globalThis.fetch = async (target, init) => {
+      requests.push({ target, init });
+      return requests.length === 1
+        ? new Response(null, {
+            status: 302,
+            headers: {
+              location: "https://objects.githubusercontent.com/object",
+            },
+          })
+        : new Response(Buffer.from([0, 255, 1]), {
+            status: 200,
+            headers: { "content-type": "application/octet-stream" },
+          });
+    };
+    const binding = {
+      kind: "github-attachment",
+      path: url,
+      role: "reference",
+      mediaType: "application/octet-stream",
+      visibility: "private",
+    };
+    const store = new LocalContentStore(join(root, "store"));
+    const [source] = await importSourceAssets(
+      store,
+      root,
+      { sourceAssets: [binding] },
+      `Attached: ${url}`,
+      () => "test-token",
+    );
+    assert.equal(
+      source.ref.digest,
+      createHash("sha256")
+        .update(Buffer.from([0, 255, 1]))
+        .digest("hex"),
+    );
+    assert.equal(requests[0].init.headers.Authorization, "Bearer test-token");
+    assert.deepEqual(requests[1].init.headers, {});
+    await assert.rejects(
+      importSourceAssets(
+        store,
+        root,
+        { sourceAssets: [binding] },
+        "no attachment",
+        () => "test-token",
+      ),
+      /Objective body/,
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test("harness AssetSet manifest rejects missing member bindings", () => {
   assert.throws(() => parseProducedAssetSets({ sets: [] }), /sets array/);
@@ -161,6 +266,71 @@ test("opaque 3D source and multi-file output retain bindings, relationships, met
       git(checkout, "show", `${result.changeRef}:models/output.json`),
       '{"source":"inputs/source.blend"}',
     );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("selected LFS media is scanned before its materialization commit", async () => {
+  const root = mkdtempSync(join(tmpdir(), "factory-selected-secret-"));
+  const secret = "ghp_abcdefghijklmnopqrstuvwxyz0123456789";
+  try {
+    const checkout = join(root, "target");
+    mkdirSync(checkout);
+    git(checkout, "init", "-b", "main");
+    writeFileSync(
+      join(checkout, ".gitattributes"),
+      "media/*.bin filter=lfs diff=lfs merge=lfs -text\n",
+    );
+    git(checkout, "add", ".gitattributes");
+    git(
+      checkout,
+      "-c",
+      "user.name=Test",
+      "-c",
+      "user.email=test@example.com",
+      "commit",
+      "-m",
+      "policy",
+    );
+    const baseCommit = git(checkout, "rev-parse", "HEAD");
+    const store = new LocalContentStore(join(root, "content"));
+    const bytes = Buffer.from(`GITHUB_TOKEN=${secret}\n`);
+    const ref = await store.put(
+      new ReadableStream({
+        start(controller) {
+          controller.enqueue(bytes);
+          controller.close();
+        },
+      }),
+      { mediaType: "application/octet-stream" },
+    );
+    await assert.rejects(
+      materializeAssetSet({
+        checkout,
+        workRoot: join(root, "worktrees"),
+        baseCommit,
+        item: {
+          id: "media",
+          ownedPaths: ["media/selected.bin"],
+          requiredLfsRoles: ["model"],
+        },
+        set: {
+          id: "candidate",
+          members: [{ role: "model", ref, destination: "media/selected.bin" }],
+        },
+        store,
+      }),
+      (error) => {
+        assert.match(
+          error.message,
+          /Secretlint found suspected secret in "media\/selected.bin"/,
+        );
+        assert.equal(error.message.includes(secret), false);
+        return true;
+      },
+    );
+    assert.equal(git(checkout, "rev-parse", "HEAD"), baseCommit);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

@@ -42,6 +42,7 @@ export interface FactoryApplication {
     objective: number,
     itemId: string,
     setId: string,
+    decision?: { actor?: string; reason?: string; downstreamItems?: string[] },
   ): Promise<void>;
   exportAssetSetForReview(
     objective: number,
@@ -65,8 +66,15 @@ export function createApplication(
       cancelObjective(config, objective, services.driver),
     retryWorkItem: (objective, itemId) =>
       retryWorkItem(config, objective, itemId),
-    selectAssetSet: (objective, itemId, setId) =>
-      selectAssetSet(config, objective, itemId, setId, services.contentStore),
+    selectAssetSet: (objective, itemId, setId, decision) =>
+      selectAssetSet(
+        config,
+        objective,
+        itemId,
+        setId,
+        services.contentStore,
+        decision,
+      ),
     exportAssetSetForReview: (objective, itemId, setId, output) =>
       exportAssetSetForReview(
         config,

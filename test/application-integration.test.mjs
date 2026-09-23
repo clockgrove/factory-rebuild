@@ -669,6 +669,7 @@ test("asset selection preserves a complete multi-file set and hydrates target-ow
     const fakeRoot = join(root, "fake");
     const command =
       'test -s approved/model.bin && test "$(cat approved/metadata.json)" = \'{"candidate":"b"}\'';
+    const consumerCommand = "test -s approved/consumed.txt";
     const media = item("media", {
       path: "approved/model.bin",
       command,
@@ -691,10 +692,15 @@ test("asset selection preserves a complete multi-file set and hydrates target-ow
       visibility: "repository",
       lineage: ["inputs/source.bin"],
     };
+    const consumer = item("consumer", {
+      path: "approved/consumed.txt",
+      command: consumerCommand,
+      dependencies: ["media"],
+    });
     const descriptor = {
       config: factoryConfig(target.checkout, "example/asset-integration"),
-      graph: { objective, baseSha: target.baseSha, items: [media] },
-      objectiveBody: body([command]),
+      graph: { objective, baseSha: target.baseSha, items: [media, consumer] },
+      objectiveBody: body([command, consumerCommand]),
       fakeRoot,
       actions: {
         media: {
@@ -748,6 +754,12 @@ test("asset selection preserves a complete multi-file set and hydrates target-ow
             },
           ],
         },
+        consumer: {
+          consumeSelected: {
+            roles: ["model", "metadata"],
+            output: "approved/consumed.txt",
+          },
+        },
       },
     };
     const { application } = makeApplication(descriptor);
@@ -770,10 +782,22 @@ test("asset selection preserves a complete multi-file set and hydrates target-ow
       readFileSync(join(review, "metadata-metadata.json"), "utf8"),
       '{"candidate":"b"}\n',
     );
-    await application.selectAssetSet(objective, "media", "candidate-b");
+    await application.selectAssetSet(objective, "media", "candidate-b", {
+      actor: "test-operator",
+      reason: "reviewed opaque pair",
+      downstreamItems: ["consumer"],
+    });
     const completed = await application.runObjective(objective);
     assert.equal(completed.finalValidation.passed, true);
     assert.equal(completed.work.media.selectedAssetSet, "candidate-b");
+    assert.equal(completed.work.media.selection.actor, "test-operator");
+    assert.deepEqual(completed.work.media.selection.downstreamItems, [
+      "consumer",
+    ]);
+    assert.deepEqual(
+      completed.work.media.selection.destinations.map((entry) => entry.role),
+      ["model", "metadata"],
+    );
     git(target.checkout, "fetch", "origin", "main");
     const pointer = git(
       target.checkout,
@@ -795,6 +819,10 @@ test("asset selection preserves a complete multi-file set and hydrates target-ow
     assert.equal(
       readFileSync(join(clone, "approved/metadata.json"), "utf8"),
       '{"candidate":"b"}\n',
+    );
+    assert.equal(
+      readFileSync(join(clone, "approved/consumed.txt"), "utf8"),
+      `model:${selectedModel.toString("hex")}\nmetadata:${Buffer.from('{"candidate":"b"}\n').toString("hex")}\n`,
     );
   });
 });
