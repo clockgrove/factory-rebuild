@@ -4,7 +4,7 @@
 
 Factory turns a repository development Objective into source-grounded Work Items, runs bounded coding attempts, validates their exact result trees, and delivers the changes through GitHub. It is an open-source Clockgrove plugin installed for one target repository at a time.
 
-**Status:** `v0.1.0` release candidate. Trunk issues #19–#24 and #28 have merged; package and public-artifact issue #25 is in final review. The installed local Codex SDK path, dependency DAG, lifecycle, regular pull requests, native linear stacks, human-selected AssetSets, and Git LFS have passed disposable gates using public fixture inputs. The public tag, release asset, fresh third-party Objective, and later adopter smoke remain pending; see [current build status](https://github.com/clockgrove/factory-rebuild/blob/main/docs/BUILD-STATUS.md) for accepted evidence.
+**Version:** `v0.1.0`. Factory runs the local Codex SDK path with a source-grounded dependency DAG, regular pull requests or native linear stacks, human-selected AssetSets, Git LFS, and private diagnostics. See [current build status](https://github.com/clockgrove/factory-rebuild/blob/main/docs/BUILD-STATUS.md) for the published artifact identity and exact Objective acceptance evidence.
 
 ## How it works
 
@@ -15,12 +15,13 @@ Factory turns a repository development Objective into source-grounded Work Items
 
 The target repository owns its product and runtime truth. Factory state and credentials stay outside the target checkout. Factory refuses to run against any Factory source repository.
 
-## Install the public release
+## Install v0.1.0
 
-The `v0.1.0` release candidate has not yet been published. Once its [release page](https://github.com/clockgrove/factory-rebuild/releases/tag/v0.1.0) and independent digest in [build status](https://github.com/clockgrove/factory-rebuild/blob/main/docs/BUILD-STATUS.md) are available, install its plugin and bundled CLI on Linux x64 with Node.js 22 or later:
+Install the plugin from the pinned Clockgrove marketplace and its bundled CLI from the matching [release page](https://github.com/clockgrove/factory-rebuild/releases/tag/v0.1.0) on Linux x64 with Node.js 22 or later. Compare the tarball digest with the independent value in [build status](https://github.com/clockgrove/factory-rebuild/blob/main/docs/BUILD-STATUS.md):
 
 ```sh
 codex plugin marketplace add clockgrove/factory-rebuild --ref v0.1.0
+codex plugin add factory@clockgrove
 gh release download v0.1.0 --repo clockgrove/factory-rebuild \
   --pattern clockgrove-factory-0.1.0.tgz --pattern SHA256SUMS
 sha256sum --check SHA256SUMS
@@ -31,11 +32,11 @@ export PATH="/absolute/private/factory-prefix/node_modules/.bin:$PATH"
 factory help
 ```
 
-Install and enable `factory@clockgrove` from the added Clockgrove source in Codex. The plugin supplies the packaged `director` and `setup` skills; the verified CLI tarball supplies their commands. Both are pinned to the same tag. You need Git, GitHub CLI authentication for the target, and an authenticated Codex SDK environment; media Objectives also require Git LFS. Keep Factory configuration and state outside the target checkout. The [public release procedure](https://github.com/clockgrove/factory-rebuild/blob/main/docs/PUBLIC-RELEASE.md) covers isolated setup and the fresh third-party Objective gate.
+The plugin supplies the packaged `director` and `setup` skills; the verified CLI tarball supplies their commands. Both are pinned to the same tag. You need Git, GitHub CLI authentication for the target, and an authenticated Codex SDK environment; media Objectives also require Git LFS. Keep Factory configuration and state outside the target checkout. The [public release procedure](https://github.com/clockgrove/factory-rebuild/blob/main/docs/PUBLIC-RELEASE.md) covers isolated setup and the fresh third-party Objective gate.
 
-## Install a development candidate
+## Build from source
 
-The first versioned public artifact is pending the [release checklist](https://github.com/clockgrove/factory-rebuild/blob/main/docs/RELEASE-CHECKLIST.md). The [public release procedure](https://github.com/clockgrove/factory-rebuild/blob/main/docs/PUBLIC-RELEASE.md) describes the pinned Git marketplace, SHA-256-verified CLI tarball, and fresh third-party Objective gate. Until it is published, the following commands exercise a development candidate built from this repository. They do not count as the final third-party installation gate.
+For development, the following commands build and install the current checkout as a local candidate. A local build has its own package identity and does not count as installation of the published `v0.1.0` artifact. The [release checklist](https://github.com/clockgrove/factory-rebuild/blob/main/docs/RELEASE-CHECKLIST.md) and [public release procedure](https://github.com/clockgrove/factory-rebuild/blob/main/docs/PUBLIC-RELEASE.md) describe the exact-artifact gate.
 
 Requires Node.js 22 or later, Git, GitHub CLI authentication for the target repository, and an authenticated Codex SDK environment. Media Objectives also require Git LFS. Clone this repository, then build and install its package in an isolated prefix:
 

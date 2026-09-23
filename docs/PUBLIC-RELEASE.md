@@ -1,6 +1,6 @@
 # Public release and third-party installation
 
-This is the release procedure for issue [#25](https://github.com/clockgrove/factory-rebuild/issues/25). The first public release is **not yet published**. Keep the tag, marketplace entry, tarball, and evidence tied to the same accepted source commit. Do not run Factory against this repository.
+This is the release and installation procedure for issue [#25](https://github.com/clockgrove/factory-rebuild/issues/25). Keep the tag, marketplace entry, tarball, and evidence tied to the same accepted source commit. The [build status](BUILD-STATUS.md) records publication and Objective acceptance evidence. Do not run Factory against this repository.
 
 ## Distribution shape
 
@@ -44,6 +44,7 @@ Then install from the public tag and release assets:
 
 ```sh
 codex plugin marketplace add clockgrove/factory-rebuild --ref v0.1.0
+codex plugin add factory@clockgrove
 gh release download v0.1.0 --repo clockgrove/factory-rebuild \
   --pattern clockgrove-factory-0.1.0.tgz --pattern SHA256SUMS
 sha256sum --check SHA256SUMS
@@ -53,7 +54,7 @@ export PATH="/absolute/private/factory-prefix/node_modules/.bin:$PATH"
 factory help
 ```
 
-Install and enable `factory@clockgrove` from the Clockgrove source in the Codex Plugins Directory. The installed `director` and `setup` skills guide agent use; the `factory` CLI above supplies their documented operations. The CLI prefix, Factory configuration, state, review exports, and planning candidates must stay outside the target checkout. A target still requires GitHub CLI access and an authenticated Codex SDK environment; media Objectives require Git LFS.
+Verify `factory@clockgrove` appears in `codex plugin list --json` before the live Objective. The installed `director` and `setup` skills guide agent use; the `factory` CLI above supplies their documented operations. The CLI prefix, Factory configuration, state, review exports, and planning candidates must stay outside the target checkout. A target still requires GitHub CLI access and an authenticated Codex SDK environment; media Objectives require Git LFS.
 
 ## Fresh disposable Objective
 
