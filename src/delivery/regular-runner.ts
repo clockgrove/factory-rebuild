@@ -9,7 +9,7 @@ import type {
   GitHubGateway,
   WorkItem,
 } from "../contracts.js";
-import { materializeAssetSet } from "../media.js";
+import { materializeAssetSet, selectedInputsForItem } from "../media.js";
 import { closeWorkItem } from "../completion.js";
 import { git } from "../process.js";
 import { readyItems } from "../scheduler.js";
@@ -18,6 +18,7 @@ import { validateWorkItem } from "../validation.js";
 export async function runRegularGraph(args: {
   config: FactoryConfig;
   objective: number;
+  objectiveBody: string;
   root: string;
   state: FactoryState;
   driver: ExecutionDriver;
@@ -73,6 +74,8 @@ export async function runRegularGraph(args: {
             item,
             baseSha: itemBase,
             attemptId: work.attempt,
+            objectiveBody: args.objectiveBody,
+            selectedAssets: selectedInputsForItem(state, item),
           }));
         if (!existingHandle) {
           work.execution = handle;

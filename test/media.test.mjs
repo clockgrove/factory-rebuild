@@ -18,7 +18,112 @@ import {
   importSourceAssets,
   materializeAssetSet,
   parseProducedAssetSets,
+  recognizedObjectiveAttachment,
 } from "../dist/media.js";
+
+test("private local source import retains its declared identity and exact bytes", async () => {
+  const root = mkdtempSync(join(tmpdir(), "factory-private-media-"));
+  try {
+    const path = join(root, "private.blend");
+    const bytes = Buffer.from([0, 39, 245, 71]);
+    writeFileSync(path, bytes);
+    const binding = {
+      kind: "local",
+      path,
+      role: "reference",
+      mediaType: "application/x-blender",
+      visibility: "private",
+    };
+    const store = new LocalContentStore(join(root, "store"));
+    const [source] = await importSourceAssets(
+      store,
+      root,
+      { sourceAssets: [binding] },
+      `Use ${path} as the reference.`,
+    );
+    assert.deepEqual(source.binding, binding);
+    assert.equal(
+      source.ref.digest,
+      createHash("sha256").update(bytes).digest("hex"),
+    );
+    await assert.rejects(
+      importSourceAssets(
+        store,
+        root,
+        { sourceAssets: [binding] },
+        "unrelated Objective",
+      ),
+      /absolute private file/,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("recognized Objective attachment import follows only GitHub content redirects", async () => {
+  const root = mkdtempSync(join(tmpdir(), "factory-attachment-"));
+  const url =
+    "https://github.com/user-attachments/assets/12345678-1234-1234-1234-123456789abc";
+  const originalFetch = globalThis.fetch;
+  const requests = [];
+  try {
+    assert.equal(recognizedObjectiveAttachment(url), true);
+    assert.equal(
+      recognizedObjectiveAttachment("https://evil.example/file"),
+      false,
+    );
+    globalThis.fetch = async (target, init) => {
+      requests.push({ target, init });
+      return requests.length === 1
+        ? new Response(null, {
+            status: 302,
+            headers: {
+              location: "https://objects.githubusercontent.com/object",
+            },
+          })
+        : new Response(Buffer.from([0, 255, 1]), {
+            status: 200,
+            headers: { "content-type": "application/octet-stream" },
+          });
+    };
+    const binding = {
+      kind: "github-attachment",
+      path: url,
+      role: "reference",
+      mediaType: "application/octet-stream",
+      visibility: "private",
+    };
+    const store = new LocalContentStore(join(root, "store"));
+    const [source] = await importSourceAssets(
+      store,
+      root,
+      { sourceAssets: [binding] },
+      `Attached: ${url}`,
+      () => "test-token",
+    );
+    assert.equal(
+      source.ref.digest,
+      createHash("sha256")
+        .update(Buffer.from([0, 255, 1]))
+        .digest("hex"),
+    );
+    assert.equal(requests[0].init.headers.Authorization, "Bearer test-token");
+    assert.deepEqual(requests[1].init.headers, {});
+    await assert.rejects(
+      importSourceAssets(
+        store,
+        root,
+        { sourceAssets: [binding] },
+        "no attachment",
+        () => "test-token",
+      ),
+      /Objective body/,
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test("harness AssetSet manifest rejects missing member bindings", () => {
   assert.throws(() => parseProducedAssetSets({ sets: [] }), /sets array/);

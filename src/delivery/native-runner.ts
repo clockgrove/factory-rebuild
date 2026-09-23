@@ -13,7 +13,7 @@ import type {
 import { git } from "../process.js";
 import { validateWorkItem } from "../validation.js";
 import { linearDeliveryUnits } from "./plan.js";
-import { materializeAssetSet } from "../media.js";
+import { materializeAssetSet, selectedInputsForItem } from "../media.js";
 import { itemsConflict } from "../scheduler.js";
 import { transplantIndependentChange } from "./transplant.js";
 import { closeWorkItem } from "../completion.js";
@@ -21,6 +21,7 @@ import { closeWorkItem } from "../completion.js";
 export async function runNativeGraph(args: {
   config: FactoryConfig;
   objective: number;
+  objectiveBody: string;
   root: string;
   state: FactoryState;
   driver: ExecutionDriver;
@@ -91,6 +92,8 @@ export async function runNativeGraph(args: {
             item,
             baseSha: work.baseSha!,
             attemptId: work.attempt,
+            objectiveBody: args.objectiveBody,
+            selectedAssets: selectedInputsForItem(state, item),
           });
           work.execution = handle;
           save();
@@ -202,6 +205,8 @@ export async function runNativeGraph(args: {
               item,
               baseSha: itemBase,
               attemptId: work.attempt,
+              objectiveBody: args.objectiveBody,
+              selectedAssets: selectedInputsForItem(state, item),
             }));
           if (!work.execution) {
             work.execution = handle;

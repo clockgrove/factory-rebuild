@@ -1,9 +1,11 @@
 import type {
   CapturedAssetSet,
+  AssetSelectionDecision,
   ExecutionHandle,
   WorkGraph,
 } from "./contracts.js";
 import type { ValidationEvidence } from "./validation.js";
+import { assetSelectionDigest } from "./media.js";
 
 export type WorkStatus =
   | "pending"
@@ -28,6 +30,7 @@ export interface WorkState {
   assets?: CapturedAssetSet[];
   selectedAssetSet?: string;
   selectionDigest?: string;
+  selection?: AssetSelectionDecision;
   pullRequest?: number;
   error?: string;
   startedAt?: string;
@@ -153,7 +156,6 @@ export function parseFactoryState(
     if (
       !Array.isArray(item.sourceAssets) ||
       !item.sourceAssets.every((raw: unknown) => {
-        if (typeof raw === "string") return !!raw;
         if (!raw || typeof raw !== "object" || Array.isArray(raw)) return false;
         const binding = raw as Record<string, unknown>;
         return (
@@ -163,6 +165,10 @@ export function parseFactoryState(
           !!binding.role &&
           typeof binding.mediaType === "string" &&
           !!binding.mediaType &&
+          (binding.kind === undefined ||
+            ["repository", "local", "github-attachment"].includes(
+              String(binding.kind),
+            )) &&
           ["private", "repository"].includes(String(binding.visibility))
         );
       })
@@ -257,6 +263,43 @@ export function parseFactoryState(
       throw new Error(`Work Item ${id} has an invalid asset selection`);
     if (item.selectionDigest !== undefined)
       sha(item.selectionDigest, `${id}.selectionDigest`, 64);
+    if (
+      item.selectedAssetSet !== undefined &&
+      (item.selection === undefined || item.selectionDigest === undefined)
+    )
+      throw new Error(`Work Item ${id} lacks a selection decision`);
+    if (item.selection !== undefined) {
+      const decision = record(item.selection, `${id}.selection`);
+      string(decision.actor, "Selection actor");
+      if (Number.isNaN(Date.parse(string(decision.at, "Selection time"))))
+        throw new Error("Selection time is invalid");
+      if (decision.reason !== undefined && typeof decision.reason !== "string")
+        throw new Error("Selection reason is invalid");
+      if (
+        !Array.isArray(decision.downstreamItems) ||
+        !decision.downstreamItems.every(
+          (name: unknown) => typeof name === "string" && !!name,
+        )
+      )
+        throw new Error("Selection downstream items are invalid");
+      if (
+        !Array.isArray(decision.destinations) ||
+        !decision.destinations.every((raw: unknown) => {
+          if (!raw || typeof raw !== "object" || Array.isArray(raw))
+            return false;
+          const destination = raw as Record<string, unknown>;
+          return (
+            typeof destination.role === "string" &&
+            !!destination.role &&
+            typeof destination.path === "string" &&
+            !!destination.path &&
+            typeof destination.digest === "string" &&
+            /^[0-9a-f]{64}$/.test(destination.digest)
+          );
+        })
+      )
+        throw new Error("Selection destinations are invalid");
+    }
     if (item.assets !== undefined) {
       if (!Array.isArray(item.assets))
         throw new Error(`Work Item ${id} assets are invalid`);
@@ -278,6 +321,13 @@ export function parseFactoryState(
             string(binding.path, "AssetSet source path");
             string(binding.role, "AssetSet source role");
             string(binding.mediaType, "AssetSet source media type");
+            if (
+              binding.kind !== undefined &&
+              !["repository", "local", "github-attachment"].includes(
+                String(binding.kind),
+              )
+            )
+              throw new Error("AssetSet source kind is invalid");
             if (!["private", "repository"].includes(String(binding.visibility)))
               throw new Error("AssetSet source visibility is invalid");
             const ref = record(input.ref, "AssetSet source ref");
@@ -296,6 +346,15 @@ export function parseFactoryState(
         const evidence = record(set.evidence, "AssetSet harness evidence");
         string(evidence.harnessIdentity, "AssetSet harness identity");
         sha(evidence.resultDigest, "AssetSet harness result digest", 64);
+        if (set.production !== undefined) {
+          const production = record(
+            set.production,
+            "AssetSet production evidence",
+          );
+          for (const key of ["model", "tool"])
+            if (production[key] !== undefined)
+              string(production[key], `AssetSet ${key}`);
+        }
         for (const rawMember of set.members) {
           const member = record(rawMember, "AssetSet member");
           string(member.role, "AssetSet role");
@@ -338,6 +397,39 @@ export function parseFactoryState(
             throw new Error("AssetSet relationships are invalid");
         }
       }
+    }
+    if (item.selectedAssetSet !== undefined) {
+      const selected = (item.assets as CapturedAssetSet[]).find(
+        (candidate) => candidate.id === item.selectedAssetSet,
+      )!;
+      if (item.selectionDigest !== assetSelectionDigest(selected))
+        throw new Error(
+          `Work Item ${id} selection digest differs from its AssetSet`,
+        );
+      const decision = item.selection as unknown as AssetSelectionDecision;
+      if (
+        JSON.stringify(decision.destinations) !==
+        JSON.stringify(
+          selected.members.map((member) => ({
+            role: member.role,
+            path: member.destination,
+            digest: member.ref.digest,
+          })),
+        )
+      )
+        throw new Error(
+          `Work Item ${id} selection destinations differ from its AssetSet`,
+        );
+      if (
+        decision.downstreamItems.some(
+          (name) =>
+            !(graph.items as { id: string; dependencies: string[] }[]).some(
+              (candidate) =>
+                candidate.id === name && candidate.dependencies.includes(id),
+            ),
+        )
+      )
+        throw new Error(`Work Item ${id} has an invalid downstream binding`);
     }
     if (item.execution !== undefined) {
       const execution = record(item.execution, `work.${id}.execution`);

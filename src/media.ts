@@ -20,9 +20,74 @@ import type {
   ContentStore,
   ProducedAssetSet,
   SourceAssetBinding,
+  SelectedAssetInput,
   WorkItem,
 } from "./contracts.js";
+import type { FactoryState } from "./state.js";
 import { command, pinnedGit } from "./process.js";
+
+export function recognizedObjectiveAttachment(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return (
+      url.protocol === "https:" &&
+      url.hostname === "github.com" &&
+      !url.username &&
+      !url.password &&
+      !url.search &&
+      !url.hash &&
+      (/^\/user-attachments\/assets\/[0-9a-fA-F-]{36}$/.test(url.pathname) ||
+        /^\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/assets\/\d+\/[^/]+$/.test(
+          url.pathname,
+        ))
+    );
+  } catch {
+    return false;
+  }
+}
+
+function attachmentHost(host: string): boolean {
+  return host === "github.com" || host.endsWith(".githubusercontent.com");
+}
+
+async function importAttachment(
+  store: ContentStore,
+  binding: SourceAssetBinding,
+  objectiveBody: string,
+  tokenProvider: () => string,
+): Promise<ContentRef> {
+  if (
+    !recognizedObjectiveAttachment(binding.path) ||
+    !objectiveBody.includes(binding.path)
+  )
+    throw new Error(
+      "Attachment must be a recognized URL in the Objective body",
+    );
+  const token = tokenProvider();
+  let url = binding.path;
+  for (let redirect = 0; redirect < 5; redirect++) {
+    const response = await fetch(url, {
+      redirect: "manual",
+      headers: url === binding.path ? { Authorization: `Bearer ${token}` } : {},
+    });
+    if ([301, 302, 303, 307, 308].includes(response.status)) {
+      const location = response.headers.get("location");
+      if (!location) throw new Error("Attachment redirect has no location");
+      const next = new URL(location, url);
+      if (next.protocol !== "https:" || !attachmentHost(next.hostname))
+        throw new Error("Attachment redirected outside GitHub content hosts");
+      url = next.href;
+      continue;
+    }
+    if (!response.ok || !response.body)
+      throw new Error(`GitHub attachment download failed (${response.status})`);
+    const kind = response.headers.get("content-type") ?? "";
+    if (kind.startsWith("text/html"))
+      throw new Error("GitHub attachment returned HTML instead of content");
+    return store.put(response.body, { mediaType: binding.mediaType });
+  }
+  throw new Error("GitHub attachment redirect limit exceeded");
+}
 
 function safeRelative(path: string, staging = false): boolean {
   return (
@@ -147,6 +212,21 @@ export function parseProducedAssetSets(value: unknown): ProducedAssetSet[] {
       )
         throw new Error(`AssetSet ${set.id} relationships are invalid`);
     }
+    if (set.production !== undefined) {
+      if (
+        !set.production ||
+        typeof set.production !== "object" ||
+        Array.isArray(set.production)
+      )
+        throw new Error(`AssetSet ${set.id} production evidence is invalid`);
+      const production = set.production as Record<string, unknown>;
+      for (const key of ["model", "tool"])
+        if (
+          production[key] !== undefined &&
+          (typeof production[key] !== "string" || !production[key])
+        )
+          throw new Error(`AssetSet ${set.id} production ${key} is invalid`);
+    }
   }
   return value as ProducedAssetSet[];
 }
@@ -155,25 +235,36 @@ export async function importSourceAssets(
   store: ContentStore,
   worktree: string,
   item: WorkItem,
+  objectiveBody = "",
+  tokenProvider: () => string = () => command("gh", ["auth", "token"]),
 ): Promise<{ binding: SourceAssetBinding; ref: ContentRef }[]> {
   const result: { binding: SourceAssetBinding; ref: ContentRef }[] = [];
-  for (const source of item.sourceAssets ?? []) {
-    const binding: SourceAssetBinding =
-      typeof source === "string"
-        ? {
-            path: source,
-            role: "source",
-            mediaType: "application/octet-stream",
-            visibility: "repository",
-          }
-        : source;
+  for (const binding of item.sourceAssets ?? []) {
     const { path } = binding;
-    if (!safeRelative(path))
-      throw new Error(`Invalid source asset path: ${path}`);
-    const absolute = join(worktree, path);
-    if (!existsSync(absolute))
-      throw new Error(`Source asset does not exist: ${path}`);
-    const ref = await putFile(store, absolute, binding.mediaType);
+    let ref: ContentRef;
+    if (binding.kind === "github-attachment") {
+      ref = await importAttachment(
+        store,
+        binding,
+        objectiveBody,
+        tokenProvider,
+      );
+    } else {
+      if (binding.kind === "local") {
+        if (
+          binding.visibility !== "private" ||
+          !isAbsolute(path) ||
+          !objectiveBody.includes(path)
+        )
+          throw new Error("Local source must be an absolute private file");
+      } else if (!safeRelative(path)) {
+        throw new Error(`Invalid source asset path: ${path}`);
+      }
+      const absolute = binding.kind === "local" ? path : join(worktree, path);
+      if (!existsSync(absolute))
+        throw new Error(`Source asset does not exist: ${path}`);
+      ref = await putFile(store, absolute, binding.mediaType);
+    }
     result.push({ binding, ref });
   }
   return result;
@@ -202,13 +293,11 @@ export async function captureAssetSets(
       ? evidence
       : {}
   ) as Record<string, unknown>;
-  const harnessIdentity = String(
-    evidenceObject.threadId ?? evidenceObject.harness ?? "",
-  );
-  if (sets.length && !harnessIdentity)
+  const harnessIdentity = evidenceObject.threadId ?? evidenceObject.harness;
+  if (sets.length && (typeof harnessIdentity !== "string" || !harnessIdentity))
     throw new Error("Produced AssetSets require a harness identity");
   const evidenceRef = {
-    harnessIdentity,
+    harnessIdentity: harnessIdentity as string,
     resultDigest: createHash("sha256")
       .update(JSON.stringify(evidence ?? {}))
       .digest("hex"),
@@ -284,6 +373,7 @@ export async function captureAssetSets(
       members,
       ...(set.relationships && { relationships: set.relationships }),
       provenance,
+      ...(set.production && { production: set.production }),
       evidence: evidenceRef,
     });
   }
@@ -399,6 +489,35 @@ export async function materializeAssetSet(args: {
 
 export function assetSelectionDigest(set: CapturedAssetSet): string {
   return createHash("sha256").update(JSON.stringify(set)).digest("hex");
+}
+
+export function selectedInputsForItem(
+  state: FactoryState,
+  item: WorkItem,
+): SelectedAssetInput[] {
+  const inputs: SelectedAssetInput[] = [];
+  for (const dependency of item.dependencies) {
+    const work = state.work[dependency];
+    if (!work?.selection?.downstreamItems.includes(item.id)) continue;
+    const set = work.assets?.find(
+      (asset) => asset.id === work.selectedAssetSet,
+    );
+    if (!set || work.selectionDigest !== assetSelectionDigest(set))
+      throw new Error(`Selected asset binding from ${dependency} is invalid`);
+    for (const member of set.members) {
+      inputs.push({
+        fromItem: dependency,
+        setId: set.id,
+        role: member.role,
+        ref: member.ref,
+        visibility: set.provenance.visibility,
+        destination: member.destination,
+        provenance: set.provenance,
+        ...(member.formatMetadata && { formatMetadata: member.formatMetadata }),
+      });
+    }
+  }
+  return inputs;
 }
 
 export function verifyHydratedAssets(args: {

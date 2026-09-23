@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { readdirSync, existsSync, mkdirSync } from "node:fs";
 import { basename, isAbsolute, join, resolve, sep } from "node:path";
+import { userInfo } from "node:os";
 import type { FactoryConfig } from "./config.js";
 import { stateRoot, validateTarget } from "./config.js";
 import type { FactoryState } from "./state.js";
@@ -274,6 +275,7 @@ export async function runObjective(
       await runNativeGraph({
         config,
         objective,
+        objectiveBody: issue.body,
         root,
         state,
         driver,
@@ -290,6 +292,7 @@ export async function runObjective(
       const awaitingSelection = await runRegularGraph({
         config,
         objective,
+        objectiveBody: issue.body,
         root,
         state,
         driver,
@@ -460,6 +463,7 @@ export async function selectAssetSet(
   itemId: string,
   setId: string,
   store: ContentStore,
+  decision?: { actor?: string; reason?: string; downstreamItems?: string[] },
 ): Promise<void> {
   const root = stateRoot(config.repository);
   const lock = join(root, "controller.lock");
@@ -473,9 +477,32 @@ export async function selectAssetSet(
       throw new Error(`Work Item ${itemId} is not awaiting asset selection`);
     const set = work.assets?.find((candidate) => candidate.id === setId);
     if (!set) throw new Error(`AssetSet ${setId} is not a captured candidate`);
+    const downstreamItems = [...new Set(decision?.downstreamItems ?? [])];
+    for (const name of downstreamItems) {
+      const dependent = state.graph.items.find((item) => item.id === name);
+      if (
+        !dependent ||
+        !dependent.dependencies.includes(itemId) ||
+        state.work[name]?.status !== "pending"
+      )
+        throw new Error(
+          `Work Item ${name} is not a pending direct dependent of ${itemId}`,
+        );
+    }
     for (const member of set.members) await store.verify(member.ref);
     work.selectedAssetSet = setId;
     work.selectionDigest = assetSelectionDigest(set);
+    work.selection = {
+      actor: decision?.actor ?? userInfo().username,
+      at: new Date().toISOString(),
+      ...(decision?.reason && { reason: decision.reason }),
+      destinations: set.members.map((member) => ({
+        role: member.role,
+        path: member.destination,
+        digest: member.ref.digest,
+      })),
+      downstreamItems,
+    };
     work.status = "running";
     saveState(statePath(config.repository, objective), state);
   } finally {

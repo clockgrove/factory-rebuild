@@ -1,6 +1,7 @@
 export type Repository = `${string}/${string}`;
 
 export interface SourceAssetBinding {
+  /** Omitted kind means a path in the pinned repository checkout. */
   kind?: "repository" | "local" | "github-attachment";
   path: string;
   role: string;
@@ -24,8 +25,7 @@ export interface WorkItem {
     source?: string;
   }[];
   brief: string;
-  /** Legacy path entries remain readable in schemaVersion 1 snapshots. */
-  sourceAssets?: (string | SourceAssetBinding)[];
+  sourceAssets?: SourceAssetBinding[];
   expectedOutputRoles?: string[];
   minimumAssetSets?: number;
   requiredLfsRoles?: string[];
@@ -66,6 +66,8 @@ export interface ExecutionRequest {
   baseSha: string;
   attemptId?: string;
   sourceAssets?: { binding: SourceAssetBinding; ref: ContentRef }[];
+  objectiveBody?: string;
+  selectedAssets?: SelectedAssetInput[];
 }
 export interface ExecutionHandle {
   provider: string;
@@ -94,7 +96,12 @@ export interface HarnessRequest {
   item: WorkItem;
   worktree: string;
   attemptId?: string;
-  sourceAssets?: { binding: SourceAssetBinding; ref: ContentRef }[];
+  sourceAssets?: {
+    binding: SourceAssetBinding;
+    ref: ContentRef;
+    path?: string;
+  }[];
+  selectedAssets?: (SelectedAssetInput & { path: string })[];
 }
 export interface HarnessHandle {
   identity: string;
@@ -217,6 +224,13 @@ export interface ProducedAssetSet {
     visibility: "private" | "repository";
     lineage: string[];
   };
+  /** Supplied by the harness or an authoritative tool, when available. */
+  production?: {
+    model?: string;
+    tool?: string;
+    request?: unknown;
+    parameters?: unknown;
+  };
 }
 
 export interface CapturedAssetSet {
@@ -230,7 +244,27 @@ export interface CapturedAssetSet {
   }[];
   relationships?: ProducedAssetSet["relationships"];
   provenance: ProducedAssetSet["provenance"];
+  production?: ProducedAssetSet["production"];
   evidence: { harnessIdentity: string; resultDigest: string };
+}
+
+export interface SelectedAssetInput {
+  fromItem: string;
+  setId: string;
+  role: string;
+  ref: ContentRef;
+  visibility: "private" | "repository";
+  destination: string;
+  provenance: ProducedAssetSet["provenance"];
+  formatMetadata?: ProducedAssetSet["members"][number]["formatMetadata"];
+}
+
+export interface AssetSelectionDecision {
+  actor: string;
+  at: string;
+  reason?: string;
+  destinations: { role: string; path: string; digest: string }[];
+  downstreamItems: string[];
 }
 
 export interface GraphProjection {

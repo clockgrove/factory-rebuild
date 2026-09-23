@@ -1,5 +1,7 @@
 import { Codex } from "@openai/codex-sdk";
 import { createHash } from "node:crypto";
+import { isAbsolute } from "node:path";
+import { recognizedObjectiveAttachment } from "./media.js";
 import { validateAndOrderGraph } from "./scheduler.js";
 import { pinnedGit, pinnedGitRaw } from "./process.js";
 import type { PlanningModel, PlanningRequest, WorkGraph } from "./contracts.js";
@@ -65,7 +67,7 @@ export const graphSchema = {
                 mediaType: { type: "string" },
                 visibility: { type: "string", enum: ["private", "repository"] },
               },
-              required: ["path", "role", "mediaType", "visibility"],
+              required: ["kind", "path", "role", "mediaType", "visibility"],
               additionalProperties: false,
             },
           },
@@ -108,7 +110,7 @@ export class CodexPlanningModel implements PlanningModel {
       sandboxMode: "read-only",
       approvalPolicy: "never",
     });
-    const prompt = `Compile this human Objective into the smallest complete dependency-aware Work Item graph. Use parallel lanes only when ownership and resources allow them. Return the requested JSON only. Use exact supplied base SHA and Objective number. Cite only supplied source paths. Give each item explicit non-goals. Choose observable acceptance and owned paths. For every validation command, set provenance to base-observed or source-declared. If source-declared, set source to the exact supplied path that declares it, such as OBJECTIVE or AGENTS.md; if base-observed, set source to an empty string. For each repository source asset, bind its path, role, media type, and private or repository visibility. Use an explicitly declared media type when available, otherwise application/octet-stream; never infer format from an extension. List expected output roles for media work; use empty arrays for ordinary work. Set minimumAssetSets from the Objective candidate count, or 1 for unspecified media and 0 for ordinary work. List requiredLfsRoles only when a supplied source requires them; the target repository .gitattributes is authoritative. Do not add deployment, paid services, providers, recovery, or later scope.\n\nObjective:\n${request.objective}\n\nBase: ${request.baseSha}\n\nSources:\n${request.sources.map((s) => `--- ${s.path} ---\n${s.content}`).join("\n")}`;
+    const prompt = `Compile this human Objective into the smallest complete dependency-aware Work Item graph. Use parallel lanes only when ownership and resources allow them. Return the requested JSON only. Use exact supplied base SHA and Objective number. Cite only supplied source paths. Give each item explicit non-goals. Choose observable acceptance and owned paths. For every validation command, set provenance to base-observed or source-declared. If source-declared, set source to the exact supplied path that declares it, such as OBJECTIVE or AGENTS.md; if base-observed, set source to an empty string. For each source asset, bind its path, role, media type, visibility, and kind: repository for a pinned checkout path, local for an explicitly approved absolute private file, or github-attachment for a recognized URL literally present in the Objective. Use an explicitly declared media type when available, otherwise application/octet-stream; never infer format from an extension. List expected output roles for media work; use empty arrays for ordinary work. Set minimumAssetSets from the Objective candidate count, or 1 for unspecified media and 0 for ordinary work. List requiredLfsRoles only when a supplied source requires them; the target repository .gitattributes is authoritative. Do not add deployment, paid services, providers, recovery, or later scope.\n\nObjective:\n${request.objective}\n\nBase: ${request.baseSha}\n\nSources:\n${request.sources.map((s) => `--- ${s.path} ---\n${s.content}`).join("\n")}`;
     const result = await thread.run(prompt, { outputSchema: request.schema });
     return JSON.parse(result.finalResponse) as T;
   }
@@ -487,9 +489,9 @@ export async function compileObjective(
               }
             })()
           : kind === "local"
-            ? path.startsWith("/")
+            ? visibility === "private" && isAbsolute(path) && body.includes(path)
             : kind === "github-attachment"
-              ? /^https:\/\/github\.com\//.test(path)
+              ? recognizedObjectiveAttachment(path) && body.includes(path)
               : false;
       if (
         !role ||

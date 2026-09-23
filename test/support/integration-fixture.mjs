@@ -210,6 +210,7 @@ class ScriptedHarness {
       item: request.item.id,
       worktree: request.worktree,
       sourceAssets: request.sourceAssets,
+      selectedAssets: request.selectedAssets,
     });
     writeFileSync(logPath, "scripted harness\n");
     appendEvent(this.eventsPath, {
@@ -285,6 +286,24 @@ class ScriptedHarness {
         destination,
         file.base64 ? Buffer.from(file.base64, "base64") : file.text,
       );
+    }
+    if (action.consumeSelected) {
+      const request = readJson(data.requestPath);
+      const selected = request.selectedAssets ?? [];
+      assert.deepEqual(
+        selected.map((asset) => asset.role).sort(),
+        action.consumeSelected.roles.slice().sort(),
+      );
+      const output =
+        selected
+          .map(
+            (asset) =>
+              `${asset.role}:${readFileSync(asset.path).toString("hex")}`,
+          )
+          .join("\n") + "\n";
+      const destination = join(data.worktree, action.consumeSelected.output);
+      mkdirSync(dirname(destination), { recursive: true });
+      writeFileSync(destination, output);
     }
     const assets = (action.assets ?? []).map((set) => ({
       id: set.id,
