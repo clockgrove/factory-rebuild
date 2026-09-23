@@ -126,25 +126,62 @@ export async function runRegularGraph(args: {
       work.step = "deliver";
       save();
       const branch = `factory/objective-${objective}/${item.id}`;
-      const published = await delivery.publish({
-        item,
-        baseSha: itemBase,
-        treeSha: work.treeSha!,
-        changeRef: work.changeRef!,
-        branch,
-        lfs: Boolean(work.selectedAssetSet),
-      });
+      const publish = () =>
+        delivery.publish({
+          item,
+          baseSha: itemBase,
+          treeSha: work.treeSha!,
+          changeRef: work.changeRef!,
+          branch,
+          lfs: Boolean(work.selectedAssetSet),
+        });
+      const published = args.diagnostics
+        ? await args.diagnostics.span(
+            {
+              runId: state.runId,
+              itemId: item.id,
+              attemptId: work.attempt,
+              operation: "github-publication",
+              metadata: {
+                baseSha: itemBase,
+                treeSha: work.treeSha!,
+                headSha: work.changeRef!,
+              },
+            },
+            publish,
+            (result) => ({ pullRequest: result.pullRequest }),
+          )
+        : await publish();
       work.pullRequest = published.pullRequest;
       save();
       const integrate = mergeTail.then(async () => {
-        const merged = await delivery.merge(published);
-        git(config.checkout, "fetch", "origin", github.defaultBranch());
-        const observedHead = git(config.checkout, "rev-parse", "FETCH_HEAD");
-        if (observedHead !== merged.integratedSha) {
-          throw new Error(
-            `Default branch moved after PR #${published.pullRequest} merged; expected ${merged.integratedSha}, observed ${observedHead}`,
-          );
-        }
+        const merge = async () => {
+          const merged = await delivery.merge(published);
+          git(config.checkout, "fetch", "origin", github.defaultBranch());
+          const observedHead = git(config.checkout, "rev-parse", "FETCH_HEAD");
+          if (observedHead !== merged.integratedSha) {
+            throw new Error(
+              `Default branch moved after PR #${published.pullRequest} merged; expected ${merged.integratedSha}, observed ${observedHead}`,
+            );
+          }
+          return observedHead;
+        };
+        const observedHead = args.diagnostics
+          ? await args.diagnostics.span(
+              {
+                runId: state.runId,
+                itemId: item.id,
+                attemptId: work.attempt,
+                operation: "github-merge",
+                metadata: {
+                  pullRequest: published.pullRequest,
+                  headSha: work.changeRef!,
+                },
+              },
+              merge,
+              (headSha) => ({ integratedSha: headSha }),
+            )
+          : await merge();
         state.integratedSha = observedHead;
         work.integratedSha = observedHead;
         work.status = "done";

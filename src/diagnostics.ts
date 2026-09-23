@@ -98,6 +98,46 @@ export class DiagnosticEmitter {
       );
     }
   }
+
+  async span<T>(
+    context: Pick<
+      DiagnosticEvent,
+      "operation" | "runId" | "itemId" | "attemptId" | "metadata"
+    >,
+    task: () => Promise<T>,
+    completedMetadata?: (
+      result: T,
+    ) => Record<string, string | number | boolean>,
+  ): Promise<T> {
+    const started = Date.now();
+    this.emit({ ...context, outcome: "started" });
+    try {
+      const result = await task();
+      let metadata = context.metadata;
+      try {
+        metadata = { ...metadata, ...completedMetadata?.(result) };
+      } catch (error) {
+        process.stderr.write(
+          `Factory diagnostics unavailable: ${error instanceof Error ? error.message : String(error)}\n`,
+        );
+      }
+      this.emit({
+        ...context,
+        outcome: "completed",
+        durationMs: Date.now() - started,
+        metadata,
+      });
+      return result;
+    } catch (error) {
+      this.emit({
+        ...context,
+        outcome: "failed",
+        durationMs: Date.now() - started,
+        detail: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
+  }
 }
 
 export function readDiagnostics(

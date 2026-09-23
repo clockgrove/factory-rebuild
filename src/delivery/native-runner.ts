@@ -275,17 +275,35 @@ export async function runNativeGraph(args: {
         );
         work.step = "deliver";
         save();
-        const published = await delivery.publish({
-          item,
-          baseSha: itemBase,
-          treeSha: work.treeSha!,
-          changeRef: work.changeRef!,
-          branch: branchFor(item.id),
-          lfs: Boolean(work.selectedAssetSet),
-          baseBranch: previous
-            ? branchFor(unit.items[index - 1]!.id)
-            : defaultBranch,
-        });
+        const publish = () =>
+          delivery.publish({
+            item,
+            baseSha: itemBase,
+            treeSha: work.treeSha!,
+            changeRef: work.changeRef!,
+            branch: branchFor(item.id),
+            lfs: Boolean(work.selectedAssetSet),
+            baseBranch: previous
+              ? branchFor(unit.items[index - 1]!.id)
+              : defaultBranch,
+          });
+        const published = args.diagnostics
+          ? await args.diagnostics.span(
+              {
+                runId: state.runId,
+                itemId: item.id,
+                attemptId: work.attempt,
+                operation: "github-publication",
+                metadata: {
+                  baseSha: itemBase,
+                  treeSha: work.treeSha!,
+                  headSha: work.changeRef!,
+                },
+              },
+              publish,
+              (result) => ({ pullRequest: result.pullRequest }),
+            )
+          : await publish();
         work.pullRequest = published.pullRequest;
         work.status = "published";
         delete work.step;
@@ -344,23 +362,49 @@ export async function runNativeGraph(args: {
           );
     }
     let integratedSha: string;
+    const mergeOperation = {
+      runId: state.runId,
+      operation: layers.length === 1 ? "github-merge" : "github-stack-merge",
+      metadata: {
+        unit: unit.id,
+        topPullRequest: layers.at(-1)!.pullRequest,
+        headSha: layers.at(-1)!.headSha,
+      },
+    };
     if (layers.length === 1) {
       const layer = layers[0]!;
-      integratedSha = (
-        await github.merge(
-          {
-            number: layer.pullRequest,
-            branch: layer.branch,
-            headSha: layer.headSha,
-          },
-          layer.headSha,
-        )
-      ).integratedSha;
+      const merge = async () =>
+        (
+          await github.merge(
+            {
+              number: layer.pullRequest,
+              branch: layer.branch,
+              headSha: layer.headSha,
+            },
+            layer.headSha,
+          )
+        ).integratedSha;
+      integratedSha = args.diagnostics
+        ? await args.diagnostics.span(mergeOperation, merge, (headSha) => ({
+            integratedSha: headSha,
+          }))
+        : await merge();
     } else {
       state.stackNumbers ??= {};
+      const ensureStack = () => github.ensureNativeStack(layers, defaultBranch);
       const stackNumber =
         state.stackNumbers[unit.id] ??
-        (await github.ensureNativeStack(layers, defaultBranch));
+        (args.diagnostics
+          ? await args.diagnostics.span(
+              {
+                runId: state.runId,
+                operation: "github-stack",
+                metadata: { unit: unit.id, layerCount: layers.length },
+              },
+              ensureStack,
+              (number) => ({ stack: number }),
+            )
+          : await ensureStack());
       if (
         state.stackNumbers[unit.id] &&
         state.stackNumbers[unit.id] !== stackNumber
@@ -379,11 +423,8 @@ export async function runNativeGraph(args: {
         throw new Error(
           "Pending native merge identity changed; operator direction required",
         );
-      integratedSha = await github.mergeNativeStack(
-        layers,
-        defaultBranch,
-        stackNumber,
-        {
+      const mergeStack = () =>
+        github.mergeNativeStack(layers, defaultBranch, stackNumber, {
           resumeUuid: pending?.uuid,
           onPending: (uuid) => {
             state.stackMerges ??= {};
@@ -395,8 +436,14 @@ export async function runNativeGraph(args: {
             save();
           },
           cancelled: args.cancelled,
-        },
-      );
+        });
+      integratedSha = args.diagnostics
+        ? await args.diagnostics.span(
+            mergeOperation,
+            mergeStack,
+            (headSha) => ({ integratedSha: headSha }),
+          )
+        : await mergeStack();
     }
     git(config.checkout, "fetch", "origin", defaultBranch);
     const observedAfter = git(config.checkout, "rev-parse", "FETCH_HEAD");

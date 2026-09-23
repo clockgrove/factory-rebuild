@@ -260,6 +260,16 @@ test("regular application path runs a source-grounded concurrent DAG with stable
           (event) => event.itemId === id && event.metadata?.pullRequest,
         ),
       );
+      for (const operation of ["github-publication", "github-merge"])
+        assert.ok(
+          timeline.some(
+            (event) =>
+              event.itemId === id &&
+              event.operation === operation &&
+              event.outcome === "completed" &&
+              event.durationMs >= 0,
+          ),
+        );
     }
     assert.ok(
       timeline.some(
@@ -540,6 +550,24 @@ test("native application path runs a linear stack beside an independent replayed
     assert.equal(
       remote.pullRequests[stackPulls[1]].base,
       "factory/objective-1/stack-a",
+    );
+    const timeline = readDiagnostics(descriptor.config.repository, objective);
+    assert.ok(
+      timeline.some(
+        (event) =>
+          event.operation === "github-stack" &&
+          event.outcome === "completed" &&
+          event.durationMs >= 0,
+      ),
+    );
+    assert.ok(
+      timeline.some(
+        (event) =>
+          event.operation === "github-stack-merge" &&
+          event.outcome === "completed" &&
+          event.durationMs >= 0 &&
+          event.metadata?.integratedSha === stackEvent.integratedSha,
+      ),
     );
   });
 });
