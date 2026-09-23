@@ -427,13 +427,16 @@ export async function runObjective(
           detail: entry.output,
         }),
       (entry) =>
-        diagnostics.emit({
-          runId: state.runId,
-          operation: "objective-validation-output",
-          outcome: "observed",
-          metadata: { commandIndex: entry.index, stream: entry.stream },
-          detail: entry.output,
-        }),
+        diagnostics.emitStream(
+          {
+            runId: state.runId,
+            operation: "objective-validation-output",
+            outcome: "observed",
+            metadata: { commandIndex: entry.index, stream: entry.stream },
+          },
+          entry.output,
+          entry.final,
+        ),
     );
     let finalEvidence;
     try {

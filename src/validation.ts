@@ -294,6 +294,7 @@ export interface ValidationOutputObservation {
   index: number;
   stream: "stdout" | "stderr";
   output: string;
+  final: boolean;
 }
 
 export async function validateTree(
@@ -327,25 +328,18 @@ export async function validateTree(
       let stderr = "";
       const watch = (stream: "stdout" | "stderr") => {
         const decoder = new StringDecoder("utf8");
-        let pending = "";
         child[stream].on("data", (chunk: Buffer) => {
           const text = decoder.write(chunk);
           if (stream === "stdout") stdout += text;
           else stderr += text;
-          pending += text;
-          let newline: number;
-          while ((newline = pending.indexOf("\n")) >= 0) {
-            const line = pending.slice(0, newline + 1);
-            pending = pending.slice(newline + 1);
-            observeOutput?.({ index, stream, output: line });
-          }
+          if (text)
+            observeOutput?.({ index, stream, output: text, final: false });
         });
         return () => {
           const trailing = decoder.end();
           if (stream === "stdout") stdout += trailing;
           else stderr += trailing;
-          pending += trailing;
-          if (pending) observeOutput?.({ index, stream, output: pending });
+          observeOutput?.({ index, stream, output: trailing, final: true });
         };
       };
       const flushStdout = watch("stdout");

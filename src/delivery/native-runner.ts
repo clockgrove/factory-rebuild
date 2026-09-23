@@ -298,15 +298,18 @@ export async function runNativeGraph(args: {
               detail: entry.output,
             }),
           (entry) =>
-            args.diagnostics?.emit({
-              runId: state.runId,
-              itemId: item.id,
-              attemptId: work.attempt,
-              operation: "validation-output",
-              outcome: "observed",
-              metadata: { commandIndex: entry.index, stream: entry.stream },
-              detail: entry.output,
-            }),
+            args.diagnostics?.emitStream(
+              {
+                runId: state.runId,
+                itemId: item.id,
+                attemptId: work.attempt,
+                operation: "validation-output",
+                outcome: "observed",
+                metadata: { commandIndex: entry.index, stream: entry.stream },
+              },
+              entry.output,
+              entry.final,
+            ),
         );
         const reviewResult = () =>
           reviewAcceptance({

@@ -46,12 +46,25 @@ test("private diagnostics redact secrets and validation streams command output",
       /private-credential|abc123|xy|multi|line|ghp_abcdefghijklmnopqrstuvwxyz/,
     );
     assert.match(entries[0].detail, /REDACTED/);
+    const splitBearer = {
+      operation: "split-bearer",
+      outcome: "observed",
+    };
+    emitter.emitStream(splitBearer, "Authorization: Be");
+    emitter.emitStream(splitBearer, "arer abc123", true);
+    const splitToken = { operation: "split-token", outcome: "observed" };
+    emitter.emitStream(splitToken, "ghp_abc");
+    emitter.emitStream(splitToken, "defghijklmnop", true);
+    assert.doesNotMatch(
+      JSON.stringify(readDiagnostics("example/diagnostics", 1)),
+      /Bearer abc123|ghp_abcdefghijklmnop/,
+    );
     emitter.emit({ operation: "duplicate", outcome: "observed" });
     emitter.emit({ operation: "duplicate", outcome: "observed" });
     const identities = readDiagnostics("example/diagnostics", 1).map(
       (event) => event.eventId,
     );
-    assert.equal(new Set(identities).size, 3);
+    assert.equal(new Set(identities).size, identities.length);
     assert.equal(
       statSync(diagnosticPath("example/diagnostics", 1)).mode & 0o777,
       0o600,
@@ -72,14 +85,20 @@ test("private diagnostics redact secrets and validation streams command output",
       join(root, "validation"),
       target.baseSha,
       tree,
-      ["printf 'visible output\\n'; sleep 0.2; printf 'later output\\n'"],
+      [
+        "printf 'starting'; sleep 0.2; printf 'private-'; sleep 0.1; printf 'credential\\n'",
+      ],
       (entry) => observed.push(entry),
       (entry) => {
-        emitter.emit({
-          operation: "validation-output",
-          outcome: "observed",
-          detail: entry.output,
-        });
+        emitter.emitStream(
+          {
+            operation: "validation-output",
+            outcome: "observed",
+            metadata: { stream: entry.stream, commandIndex: entry.index },
+          },
+          entry.output,
+          entry.final,
+        );
         firstOutput();
       },
     );
@@ -92,13 +111,21 @@ test("private diagnostics redact secrets and validation streams command output",
       readDiagnostics("example/diagnostics", 1).some(
         (event) =>
           event.operation === "validation-output" &&
-          /visible output/.test(event.detail),
+          /startin/.test(event.detail),
       ),
     );
     await validation;
     assert.equal(observed.length, 1);
     assert.equal(observed[0].passed, true);
-    assert.match(observed[0].output, /visible output/);
+    assert.match(observed[0].output, /startingprivate-credential/);
+    const streamed = readDiagnostics("example/diagnostics", 1).filter(
+      (event) => event.operation === "validation-output",
+    );
+    assert.doesNotMatch(
+      JSON.stringify(streamed),
+      /private-credential|private-|credential/,
+    );
+    assert.ok(streamed.some((event) => /REDACTED/.test(event.detail)));
     assert.equal(redactDiagnosticDetail("sk-abcdefghijklmnop"), "[REDACTED]");
     const attemptId = "11111111-1111-4111-8111-111111111111";
     emitter.emit({

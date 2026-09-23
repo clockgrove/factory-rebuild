@@ -49,6 +49,51 @@ export function redactDiagnosticDetail(
   return result;
 }
 
+/** Keep only a suffix that could become a secret when the next chunk arrives. */
+function safeStreamingPrefixLength(value: string, secrets: string[]): number {
+  let hold = 0;
+  const candidates = [
+    ...secrets.flatMap((secret) => secret.split(/\r?\n/)).filter(Boolean),
+    "ghp_",
+    "gho_",
+    "ghu_",
+    "ghs_",
+    "ghr_",
+    "github_pat_",
+    "sk-",
+    "Authorization:",
+  ];
+  for (const candidate of candidates)
+    for (let length = 1; length < candidate.length; length++)
+      if (
+        value.toLowerCase().endsWith(candidate.slice(0, length).toLowerCase())
+      )
+        hold = Math.max(hold, length);
+  for (const prefix of [
+    "ghp_",
+    "gho_",
+    "ghu_",
+    "ghs_",
+    "ghr_",
+    "github_pat_",
+    "sk-",
+  ]) {
+    const index = value.lastIndexOf(prefix);
+    if (
+      index >= 0 &&
+      /^[A-Za-z0-9_-]*$/.test(value.slice(index + prefix.length))
+    )
+      hold = Math.max(hold, value.length - index);
+  }
+  const bearer = value.match(/Authorization:\s*Bearer\s+\S*$/i);
+  if (bearer) hold = Math.max(hold, bearer[0].length);
+  const partialBearer = value.match(
+    /Authorization:\s*(?:B(?:e(?:a(?:r(?:e(?:r)?)?)?)?)?)?$/i,
+  );
+  if (partialBearer) hold = Math.max(hold, partialBearer[0].length);
+  return value.length - hold;
+}
+
 export function diagnosticPath(repository: string, objective: number): string {
   return join(
     stateRoot(repository),
@@ -59,6 +104,7 @@ export function diagnosticPath(repository: string, objective: number): string {
 }
 
 export class DiagnosticEmitter {
+  private streamBuffers = new Map<string, string>();
   constructor(
     private repository: string,
     private objective: number,
@@ -103,6 +149,24 @@ export class DiagnosticEmitter {
         `Factory diagnostics unavailable: ${error instanceof Error ? error.message : String(error)}\n`,
       );
     }
+  }
+
+  emitStream(
+    event: Omit<
+      DiagnosticEvent,
+      "eventId" | "at" | "repository" | "objective" | "detail"
+    >,
+    chunk: string,
+    final = false,
+  ): void {
+    const key = JSON.stringify(event);
+    const pending = (this.streamBuffers.get(key) ?? "") + chunk;
+    const cut = final
+      ? pending.length
+      : safeStreamingPrefixLength(pending, this.secrets);
+    if (cut) this.emit({ ...event, detail: pending.slice(0, cut) });
+    if (final) this.streamBuffers.delete(key);
+    else this.streamBuffers.set(key, pending.slice(cut));
   }
 
   async span<T>(
