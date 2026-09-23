@@ -17,7 +17,7 @@ The target repository owns its product and runtime truth. Factory state and cred
 
 ## Install a development candidate
 
-The first versioned public artifact is pending the [release checklist](https://github.com/clockgrove/factory-rebuild/blob/main/docs/RELEASE-CHECKLIST.md). Until it is published, the following commands exercise a development candidate built from this repository. They do not count as the final third-party installation gate.
+The first versioned public artifact is pending the [release checklist](https://github.com/clockgrove/factory-rebuild/blob/main/docs/RELEASE-CHECKLIST.md). The [public release procedure](https://github.com/clockgrove/factory-rebuild/blob/main/docs/PUBLIC-RELEASE.md) describes the pinned Git marketplace, SHA-256-verified CLI tarball, and fresh third-party Objective gate. Until it is published, the following commands exercise a development candidate built from this repository. They do not count as the final third-party installation gate.
 
 Requires Node.js 22 or later, Git, GitHub CLI authentication for the target repository, and an authenticated Codex SDK environment. Media Objectives also require Git LFS. Clone this repository, then build and install its package in an isolated prefix:
 
