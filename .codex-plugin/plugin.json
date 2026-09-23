@@ -8,6 +8,7 @@
   "skills": "./skills/",
   "interface": {
     "displayName": "Factory",
+    "logo": "./assets/factory-mark.svg",
     "shortDescription": "Run development Objectives in a target repository",
     "longDescription": "Compile repository Objectives into Work Items, execute with an installed harness, validate exact results, and deliver through GitHub.",
     "developerName": "Clockgrove",

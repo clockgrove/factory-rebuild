@@ -2,6 +2,8 @@
 
 Start with an issue in this repository and keep each pull request tied to an observable Factory behavior. The [public project](https://github.com/orgs/clockgrove/projects/2) shows the current trunk order; later capability branches follow trunk acceptance.
 
+For a development Objective in another repository, its owner can adapt the [Objective issue form](.github/ISSUE_TEMPLATE/objective.yml). This repository is never an execution target for Factory. Contributors building Factory follow [AGENTS.md](AGENTS.md); users of an installed plugin follow its packaged `director` and `setup` skills.
+
 ## Local checks
 
 Use Node.js 22 or later. From a clean checkout:
@@ -14,6 +16,7 @@ npm run lint
 npm run format:check
 npm test
 npm pack --dry-run
+npm run notices:check
 ```
 
 The [Quality workflow](.github/workflows/quality.yml) runs this local gate on pull requests and main. Live GitHub and Codex acceptance remains an explicit disposable-target run.
@@ -28,4 +31,4 @@ For behavior that touches GitHub delivery, process lifecycle, or binary content,
 - Keep archived code as reference only. Record reimplemented behavior in [the provenance ledger](docs/SOURCE-PROVENANCE.md); do not copy archived runtime files or tests.
 - Keep product/runtime decisions in their target repositories. Factory is the delivery capability.
 
-This project uses the [MIT license](LICENSE).
+The [governance policy](GOVERNANCE.md), [code of conduct](CODE_OF_CONDUCT.md), [support guide](SUPPORT.md), and [security policy](SECURITY.md) describe participation and reporting. This project uses the [MIT license](LICENSE).
