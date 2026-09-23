@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, realpathSync } from "node:fs";
-import { basename, isAbsolute, join, resolve } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 
 export type ExecutionConfig =
   | { kind: "local"; concurrency: number; harness: { kind: "codex-sdk" } }
@@ -27,7 +27,22 @@ export interface FactoryConfig {
   };
 }
 
-const factoryNames = new Set(["factory", "factory-rebuild", "factory-archive"]);
+const factoryRepositories = new Set([
+  "clockgrove/factory",
+  "clockgrove/factory-rebuild",
+  "clockgrove/factory-archive",
+]);
+
+function isFactorySource(checkout: string): boolean {
+  try {
+    const manifest = JSON.parse(
+      readFileSync(join(checkout, "package.json"), "utf8"),
+    ) as { name?: string };
+    return manifest.name === "@clockgrove/factory";
+  } catch {
+    return false;
+  }
+}
 
 function assertObject(
   value: unknown,
@@ -68,9 +83,9 @@ export function validateTarget(repository: string, checkout: string): void {
   const repo = repository.toLowerCase();
   const remote = remoteRepository(actual);
   if (
-    factoryNames.has(repo.split("/")[1] ?? "") ||
-    factoryNames.has(basename(actual).toLowerCase()) ||
-    (remote && factoryNames.has(remote.split("/")[1] ?? ""))
+    factoryRepositories.has(repo) ||
+    isFactorySource(actual) ||
+    (remote && factoryRepositories.has(remote))
   ) {
     throw new Error(
       "Factory cannot be installed or run against a Factory repository",
