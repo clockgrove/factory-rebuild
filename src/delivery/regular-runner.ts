@@ -2,24 +2,27 @@ import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import type { FactoryConfig } from "../config.js";
 import type { FactoryState } from "../state.js";
-import type { WorkItem } from "../contracts.js";
-import { LocalContentStore } from "../content/local.js";
-import { LocalExecutionDriver } from "../execution/local.js";
-import { RealGitHubGateway } from "../github.js";
+import type {
+  ContentStore,
+  DeliveryStrategy,
+  ExecutionDriver,
+  GitHubGateway,
+  WorkItem,
+} from "../contracts.js";
 import { materializeAssetSet } from "../media.js";
 import { git } from "../process.js";
 import { readyItems } from "../scheduler.js";
 import { validateWorkItem } from "../validation.js";
-import { RegularDelivery } from "./regular.js";
 
 export async function runRegularGraph(args: {
   config: FactoryConfig;
   objective: number;
   root: string;
   state: FactoryState;
-  driver: LocalExecutionDriver;
-  contentStore: LocalContentStore;
-  github: RealGitHubGateway;
+  driver: ExecutionDriver;
+  delivery: DeliveryStrategy;
+  contentStore: ContentStore;
+  github: GitHubGateway;
   save: () => void;
   active: Map<string, Promise<void>>;
   cancelled: () => boolean;
@@ -30,6 +33,7 @@ export async function runRegularGraph(args: {
     root,
     state,
     driver,
+    delivery,
     contentStore,
     github,
     save,
@@ -38,8 +42,6 @@ export async function runRegularGraph(args: {
   const graph = state.graph;
   const baseSha = state.baseSha;
   const projected = { issueByItemId: state.issueByItemId };
-  const commits = new Map<string, string>();
-  const delivery = new RegularDelivery(config.checkout, github, commits);
   let mergeTail: Promise<void> = Promise.resolve();
   const execute = async (
     item: WorkItem,
@@ -103,12 +105,12 @@ export async function runRegularGraph(args: {
       );
       work.step = "deliver";
       save();
-      commits.set(work.treeSha!, work.changeRef!);
       const branch = `factory/objective-${objective}/${item.id}`;
       const published = await delivery.publish({
         item,
         baseSha: itemBase,
         treeSha: work.treeSha!,
+        changeRef: work.changeRef!,
         branch,
         lfs: Boolean(work.selectedAssetSet),
       });
@@ -134,7 +136,7 @@ export async function runRegularGraph(args: {
         () => undefined,
       );
       await integrate;
-      github.closeIssue(
+      await github.closeIssue(
         projected.issueByItemId[item.id]!,
         `Completed by PR #${published.pullRequest}; validated tree ${work.treeSha}.`,
       );
@@ -174,7 +176,9 @@ export async function runRegularGraph(args: {
   }
   while (graph.items.some((item) => state.work[item.id]?.status !== "done")) {
     if (args.cancelled()) throw new Error("Objective cancelled");
-    const available = await driver.availableSlots();
+    const reported = await driver.availableSlots();
+    const available =
+      reported === "unknown" ? config.execution.concurrency : reported;
     const slots = Math.min(
       config.execution.concurrency - active.size,
       available,

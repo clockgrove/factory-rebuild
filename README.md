@@ -58,6 +58,18 @@ The target owns its `.gitattributes` policy. Factory checks selected bytes again
 
 Configuration lives under `$XDG_CONFIG_HOME/clockgrove-factory` (or `~/.config/clockgrove-factory`); durable run state lives under `$XDG_STATE_HOME/clockgrove-factory` (or `~/.local/state/clockgrove-factory`). Do not put either in the target repository.
 
+## Deterministic contributor gate
+
+Run the complete credential-free gate with one command:
+
+```sh
+npm test
+```
+
+In addition to the focused DAG, delivery-plan, state-ingress, content, media, and transplant tests, this runs bounded application-path scenarios against real temporary Git repositories. A scripted planning model and harness enter through the same composition boundary as the production Codex adapters, while a small stateful GitHub-domain fake records stable Issue, pull-request, and native-stack identities and integrates real commits through a local bare remote. The scenarios prove concurrent regular DAG execution and final-head validation, restart reattachment/cancel/explicit retry, a native linear stack beside an independently replayed and revalidated lane, whole-set media selection, target-owned Git LFS policy, and exact hydrated bytes.
+
+The same gate packs the current working tree, installs the tarball into an isolated prefix with isolated configuration and state, and invokes the documented `install` and `status` commands. The current release candidate has no public read-only `plan` command, so the smoke does not fabricate one. Live Codex/GitHub disposable Objectives remain separate release evidence; deterministic CI does not replace them.
+
 ## Project and provenance
 
 The [Factory Rebuild project](https://github.com/orgs/clockgrove/projects/2) tracks one acceptance issue per trunk slice and later capability branches. [The implementation plan](docs/IMPLEMENTATION-PLAN.md), [current build status](docs/BUILD-STATUS.md), and [source provenance](docs/SOURCE-PROVENANCE.md) provide the complete public contributor handoff. The archived source is reference material; this repository is a clean implementation. Generic acceptance uses [public disposable fixtures](test/fixtures/disposable-target/) and requires no private adopter documents.

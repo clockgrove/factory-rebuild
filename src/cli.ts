@@ -3,13 +3,6 @@ import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { configPath, readConfig, stateRoot, validateConfig } from "./config.js";
 import { compose } from "./index.js";
-import {
-  cancelObjective,
-  exportAssetSetForReview,
-  retryWorkItem,
-  runObjective,
-  selectAssetSet,
-} from "./runner.js";
 import { readState } from "./state-store.js";
 import { itemsConflict } from "./scheduler.js";
 import { linearDeliveryUnits } from "./delivery/plan.js";
@@ -70,7 +63,7 @@ async function main(): Promise<void> {
   )
     throw new Error(`Unknown command: ${command}`);
   const config = readConfig(path);
-  compose(config);
+  const application = compose(config);
   const objective = Number(option(args, "objective"));
   if (!Number.isSafeInteger(objective) || objective <= 0)
     throw new Error(`${command} requires --objective N`);
@@ -124,18 +117,18 @@ async function main(): Promise<void> {
       }
     }
   } else if (command === "cancel") {
-    const result = await cancelObjective(config, objective);
+    const result = await application.cancelObjective(objective);
     console.log(`Objective #${objective} cancellation ${result}`);
   } else if (command === "retry") {
     const item = option(args, "item");
     if (!item) throw new Error("retry requires --item ID");
-    retryWorkItem(config, objective, item);
+    application.retryWorkItem(objective, item);
     console.log(`Work Item ${item} is pending for a new explicit attempt`);
   } else if (command === "select") {
     const item = option(args, "item");
     const set = option(args, "set");
     if (!item || !set) throw new Error("select requires --item and --set");
-    await selectAssetSet(config, objective, item, set);
+    await application.selectAssetSet(objective, item, set);
     console.log(
       `Selected AssetSet ${set} for Work Item ${item}; run the Objective to continue`,
     );
@@ -145,10 +138,10 @@ async function main(): Promise<void> {
     const output = option(args, "output");
     if (!item || !set || !output)
       throw new Error("review requires --item, --set, and --output");
-    await exportAssetSetForReview(config, objective, item, set, output);
+    await application.exportAssetSetForReview(objective, item, set, output);
     console.log(`Exported AssetSet ${set} to ${output} for review`);
   } else {
-    const state = await runObjective(config, objective);
+    const state = await application.runObjective(objective);
     console.log(
       state.finalValidation?.passed
         ? `Objective #${objective} completed at ${state.integratedSha}; final validation passed`

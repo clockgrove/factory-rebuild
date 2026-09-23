@@ -1,0 +1,595 @@
+import assert from "node:assert/strict";
+import { execFileSync, spawn } from "node:child_process";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { once } from "node:events";
+import test from "node:test";
+import { readState, statePath } from "../dist/state-store.js";
+import {
+  createTarget,
+  factoryConfig,
+  git,
+  makeApplication,
+  readEvents,
+  waitFor,
+  waitForFile,
+  writeDescriptor,
+} from "./support/integration-fixture.mjs";
+
+const objective = 1;
+
+function item(id, options = {}) {
+  const command = options.command ?? `test -s ${options.path}`;
+  return {
+    id,
+    title: `Implement ${id}`,
+    goal: `Create ${options.path}`,
+    acceptance: [`${options.path} has the scripted result`],
+    nonGoals: ["No deployment"],
+    citations: [{ path: "OBJECTIVE", heading: "Acceptance" }],
+    dependencies: options.dependencies ?? [],
+    ownedPaths: options.ownedPaths ?? [options.path],
+    resources: options.resources ?? [],
+    validation: [
+      { command, provenance: "source-declared", source: "OBJECTIVE" },
+    ],
+    brief: `Make only the ${id} fixture change.`,
+    sourceAssets: options.sourceAssets ?? [],
+    expectedOutputRoles: options.expectedOutputRoles ?? [],
+    minimumAssetSets: options.minimumAssetSets ?? 0,
+    requiredLfsRoles: options.requiredLfsRoles ?? [],
+  };
+}
+
+function body(commands, finalCommands = commands) {
+  return `# Deterministic Objective
+
+## Acceptance
+${commands.map((command) => `- \`${command}\``).join("\n")}
+
+## Final validation
+${finalCommands.map((command) => `- \`${command}\``).join("\n")}
+`;
+}
+
+async function fixture(name, callback) {
+  const root = mkdtempSync(join(tmpdir(), `factory-${name}-`));
+  const previous = process.env.XDG_STATE_HOME;
+  process.env.XDG_STATE_HOME = join(root, "state");
+  try {
+    return await callback(root);
+  } finally {
+    if (previous === undefined) delete process.env.XDG_STATE_HOME;
+    else process.env.XDG_STATE_HOME = previous;
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
+test("regular application path runs a source-grounded concurrent DAG with stable identities", async () => {
+  await fixture("regular-integration", async (root) => {
+    const target = createTarget(root);
+    const fakeRoot = join(root, "fake");
+    const barrier = join(root, "barriers", "roots.go");
+    const commands = [
+      'test "$(cat alpha.txt)" = alpha',
+      'test "$(cat beta.txt)" = beta',
+      'test "$(cat conflict.txt)" = conflict',
+      "test -s joined.txt && grep -q alpha joined.txt && grep -q beta joined.txt",
+    ];
+    const graph = {
+      objective,
+      baseSha: target.baseSha,
+      items: [
+        item("alpha", {
+          path: "alpha.txt",
+          command: commands[0],
+          resources: ["shared-fixture"],
+        }),
+        item("beta", { path: "beta.txt", command: commands[1] }),
+        item("conflict", {
+          path: "conflict.txt",
+          command: commands[2],
+          resources: ["shared-fixture"],
+        }),
+        item("join", {
+          path: "joined.txt",
+          command: commands[3],
+          dependencies: ["alpha", "beta"],
+        }),
+      ],
+    };
+    const descriptor = {
+      config: factoryConfig(
+        target.checkout,
+        "example/regular-integration",
+        "regular",
+        3,
+      ),
+      graph,
+      objectiveBody: body(commands),
+      fakeRoot,
+      actions: {
+        alpha: { barrier, files: [{ path: "alpha.txt", text: "alpha\n" }] },
+        beta: { barrier, files: [{ path: "beta.txt", text: "beta\n" }] },
+        conflict: { files: [{ path: "conflict.txt", text: "conflict\n" }] },
+        join: {
+          files: [{ path: "joined.txt", text: "alpha\nbeta\n" }],
+        },
+      },
+    };
+    const { application, eventsPath, github } = makeApplication(descriptor);
+    const running = application.runObjective(objective);
+    await waitFor(
+      () => {
+        const starts = readEvents(eventsPath).filter(
+          (event) => event.type === "start",
+        );
+        return starts.some((event) => event.item === "alpha") &&
+          starts.some((event) => event.item === "beta")
+          ? starts
+          : undefined;
+      },
+      fakeRoot,
+      "independent root attempts",
+    );
+    const initialStarts = readEvents(eventsPath).filter(
+      (event) => event.type === "start",
+    );
+    assert.deepEqual(
+      new Set(initialStarts.map((event) => event.item)),
+      new Set(["alpha", "beta"]),
+    );
+    mkdirSync(join(root, "barriers"), { recursive: true });
+    writeFileSync(barrier, "go\n");
+    const state = await running;
+    assert.equal(state.finalValidation.passed, true);
+    assert.ok(
+      Object.values(state.work).every((work) => work.status === "done"),
+    );
+    for (const work of Object.values(state.work)) {
+      assert.equal(work.validation.treeSha, work.treeSha);
+      assert.ok(work.validation.commands.every((check) => check.passed));
+    }
+    assert.equal(
+      state.finalValidation.treeSha,
+      git(target.checkout, "rev-parse", `${state.integratedSha}^{tree}`),
+    );
+    const events = readEvents(eventsPath);
+    const joinStart = events.findIndex(
+      (event) => event.type === "start" && event.item === "join",
+    );
+    for (const dependency of ["alpha", "beta"])
+      assert.ok(
+        joinStart >
+          events.findIndex(
+            (event) => event.type === "complete" && event.item === dependency,
+          ),
+      );
+    const remote = github.state();
+    assert.equal(Object.keys(remote.issues).length, 4);
+    assert.equal(Object.keys(remote.pullRequests).length, 4);
+    assert.deepEqual(remote.projections.join.dependencies, ["alpha", "beta"]);
+    assert.deepEqual(remote.projections.join.citations, [
+      { path: "OBJECTIVE", heading: "Acceptance" },
+    ]);
+    assert.equal(remote.projections.join.validation[0].command, commands[3]);
+    const identities = {
+      issues: structuredClone(remote.issues),
+      pulls: Object.values(remote.pullRequests).map((pull) => pull.number),
+      starts: events.filter((event) => event.type === "start").length,
+    };
+    const rerun = await application.runObjective(objective);
+    assert.equal(rerun.integratedSha, state.integratedSha);
+    assert.deepEqual(github.state().issues, identities.issues);
+    assert.deepEqual(
+      Object.values(github.state().pullRequests).map((pull) => pull.number),
+      identities.pulls,
+    );
+    assert.equal(
+      readEvents(eventsPath).filter((event) => event.type === "start").length,
+      identities.starts,
+    );
+    const planning = readEvents(join(fakeRoot, "planning.ndjson"));
+    assert.deepEqual(planning[0].sources, [
+      "OBJECTIVE",
+      "AGENTS.md",
+      "README.md",
+    ]);
+    assert.equal(planning[0].baseSha, target.baseSha);
+  });
+});
+
+test("application lifecycle reattaches once, cancels owned work, and retries only explicitly", async () => {
+  await fixture("lifecycle-restart", async (root) => {
+    const target = createTarget(root);
+    const fakeRoot = join(root, "fake");
+    const barrier = join(root, "barriers", "restart.go");
+    const command = 'test "$(cat restart.txt)" = resumed';
+    const descriptor = {
+      config: factoryConfig(target.checkout, "example/lifecycle-restart"),
+      graph: {
+        objective,
+        baseSha: target.baseSha,
+        items: [item("restart", { path: "restart.txt", command })],
+      },
+      objectiveBody: body([command]),
+      fakeRoot,
+      actions: {
+        restart: {
+          barrier,
+          files: [{ path: "restart.txt", text: "resumed\n" }],
+        },
+      },
+    };
+    const descriptorPath = join(root, "restart.json");
+    writeDescriptor(descriptorPath, descriptor);
+    const restartStatePath = statePath(descriptor.config.repository, objective);
+    mkdirSync(dirname(restartStatePath), { recursive: true });
+    const child = spawn(
+      process.execPath,
+      [
+        join(import.meta.dirname, "support", "restart-controller.mjs"),
+        descriptorPath,
+        String(objective),
+      ],
+      {
+        cwd: join(import.meta.dirname, ".."),
+        env: { ...process.env, XDG_STATE_HOME: process.env.XDG_STATE_HOME },
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
+    let childOutput = "";
+    child.stdout.on("data", (chunk) => (childOutput += chunk));
+    child.stderr.on("data", (chunk) => (childOutput += chunk));
+    try {
+      await waitForFile(
+        () => {
+          const state = existsSync(restartStatePath)
+            ? readState(descriptor.config.repository, objective)
+            : undefined;
+          return state?.work.restart.execution ? state : undefined;
+        },
+        restartStatePath,
+        "persisted restart handle",
+      );
+    } catch (error) {
+      const detail = `${error.message}; child=${child.exitCode ?? "running"}; output=${childOutput}; events=${JSON.stringify(readEvents(join(fakeRoot, "harness.ndjson")))}`;
+      if (child.exitCode === null) {
+        const exited = once(child, "exit");
+        child.kill("SIGKILL");
+        await exited;
+      }
+      throw new Error(detail);
+    }
+    child.kill("SIGKILL");
+    await once(child, "exit");
+    mkdirSync(dirnameFor(barrier), { recursive: true });
+    writeFileSync(barrier, "go\n");
+    const { application, eventsPath, github } = makeApplication(descriptor);
+    const resumed = await application.runObjective(objective);
+    assert.equal(resumed.finalValidation.passed, true);
+    assert.equal(Object.keys(github.state().pullRequests).length, 1);
+    assert.equal(
+      readEvents(eventsPath).filter(
+        (event) => event.type === "start" && event.item === "restart",
+      ).length,
+      1,
+    );
+  });
+
+  await fixture("lifecycle-cancel", async (root) => {
+    const target = createTarget(root);
+    const fakeRoot = join(root, "fake");
+    const barrier = join(root, "barriers", "cancel.go");
+    const command = 'test "$(cat retry.txt)" = retried';
+    const descriptor = {
+      config: factoryConfig(target.checkout, "example/lifecycle-cancel"),
+      graph: {
+        objective,
+        baseSha: target.baseSha,
+        items: [item("retry", { path: "retry.txt", command })],
+      },
+      objectiveBody: body([command]),
+      fakeRoot,
+      actions: {
+        retry: {
+          barrier,
+          files: [{ path: "retry.txt", text: "retried\n" }],
+        },
+      },
+    };
+    const { application, eventsPath } = makeApplication(descriptor);
+    const unrelated = join(root, "unrelated-process-sentinel");
+    writeFileSync(unrelated, "untouched\n");
+    const running = application.runObjective(objective);
+    await waitFor(
+      () =>
+        readEvents(eventsPath).some(
+          (event) => event.type === "start" && event.item === "retry",
+        ),
+      fakeRoot,
+      "cancellable owned attempt",
+    );
+    assert.equal(await application.cancelObjective(objective), "requested");
+    await assert.rejects(running, /cancel/i);
+    assert.equal(readFileSync(unrelated, "utf8"), "untouched\n");
+    assert.equal(
+      readEvents(eventsPath).filter((event) => event.type === "start").length,
+      1,
+    );
+    const cancelled = readState(descriptor.config.repository, objective);
+    assert.equal(cancelled.work.retry.status, "cancelled");
+    application.retryWorkItem(objective, "retry");
+    assert.equal(
+      readEvents(eventsPath).filter((event) => event.type === "start").length,
+      1,
+    );
+    mkdirSync(dirnameFor(barrier), { recursive: true });
+    writeFileSync(barrier, "go\n");
+    const retried = await application.runObjective(objective);
+    assert.equal(retried.finalValidation.passed, true);
+    assert.equal(
+      readEvents(eventsPath).filter((event) => event.type === "start").length,
+      2,
+    );
+  });
+});
+
+test("native application path runs a linear stack beside an independent replayed lane", async () => {
+  await fixture("native-integration", async (root) => {
+    const target = createTarget(root);
+    const fakeRoot = join(root, "fake");
+    const barrier = join(root, "barriers", "native-roots.go");
+    const commands = [
+      'test "$(cat stack-a.txt)" = A',
+      'test "$(cat stack-b.txt)" = B',
+      'test "$(cat lane.txt)" = lane',
+    ];
+    const descriptor = {
+      config: factoryConfig(
+        target.checkout,
+        "example/native-integration",
+        "native-stack",
+        2,
+      ),
+      graph: {
+        objective,
+        baseSha: target.baseSha,
+        items: [
+          item("stack-a", { path: "stack-a.txt", command: commands[0] }),
+          item("stack-b", {
+            path: "stack-b.txt",
+            command: commands[1],
+            dependencies: ["stack-a"],
+          }),
+          item("lane", { path: "lane.txt", command: commands[2] }),
+        ],
+      },
+      objectiveBody: body(commands),
+      fakeRoot,
+      actions: {
+        "stack-a": {
+          barrier,
+          files: [{ path: "stack-a.txt", text: "A\n" }],
+        },
+        "stack-b": { files: [{ path: "stack-b.txt", text: "B\n" }] },
+        lane: { barrier, files: [{ path: "lane.txt", text: "lane\n" }] },
+      },
+    };
+    const { application, eventsPath, github } = makeApplication(descriptor);
+    const running = application.runObjective(objective);
+    await waitFor(
+      () => {
+        const starts = readEvents(eventsPath).filter(
+          (event) => event.type === "start",
+        );
+        return starts.some((event) => event.item === "stack-a") &&
+          starts.some((event) => event.item === "lane")
+          ? starts
+          : undefined;
+      },
+      fakeRoot,
+      "native independent roots",
+    );
+    assert.ok(
+      !readEvents(eventsPath).some(
+        (event) => event.type === "start" && event.item === "stack-b",
+      ),
+    );
+    mkdirSync(dirnameFor(barrier), { recursive: true });
+    writeFileSync(barrier, "go\n");
+    const state = await running;
+    assert.equal(state.finalValidation.passed, true);
+    const starts = readEvents(eventsPath).filter(
+      (event) => event.type === "start",
+    );
+    assert.equal(
+      starts.find((event) => event.item === "stack-a").baseSha,
+      target.baseSha,
+    );
+    assert.equal(
+      starts.find((event) => event.item === "lane").baseSha,
+      target.baseSha,
+    );
+    assert.equal(
+      starts.find((event) => event.item === "stack-b").baseSha,
+      state.work["stack-a"].changeRef,
+    );
+    const remote = github.state();
+    const stackEvent = remote.events.find(
+      (event) => event.type === "merge-stack",
+    );
+    assert.ok(stackEvent);
+    assert.equal(state.work.lane.baseSha, stackEvent.integratedSha);
+    assert.equal(state.work.lane.validation.treeSha, state.work.lane.treeSha);
+    assert.equal(
+      git(target.checkout, "rev-parse", `${state.work.lane.changeRef}^`),
+      stackEvent.integratedSha,
+    );
+    const stackPulls = [
+      state.work["stack-a"].pullRequest,
+      state.work["stack-b"].pullRequest,
+    ];
+    assert.equal(remote.pullRequests[stackPulls[0]].base, "main");
+    assert.equal(
+      remote.pullRequests[stackPulls[1]].base,
+      "factory/objective-1/stack-a",
+    );
+  });
+});
+
+test("asset selection preserves a complete multi-file set and hydrates target-owned LFS bytes", async () => {
+  await fixture("asset-integration", async (root) => {
+    const selectedModel = Buffer.concat([
+      Buffer.from("selected model bytes", "utf8"),
+      Buffer.from([0, 1, 2]),
+    ]);
+    const target = createTarget(root, {
+      ".gitattributes": "approved/*.bin filter=lfs diff=lfs merge=lfs -text\n",
+      "inputs/source.bin": "source fixture bytes\n",
+    });
+    git(target.checkout, "lfs", "install", "--local");
+    const fakeRoot = join(root, "fake");
+    const command =
+      'test -s approved/model.bin && test "$(cat approved/metadata.json)" = \'{"candidate":"b"}\'';
+    const media = item("media", {
+      path: "approved/model.bin",
+      command,
+      ownedPaths: ["approved/model.bin", "approved/metadata.json"],
+      sourceAssets: [
+        {
+          path: "inputs/source.bin",
+          role: "source",
+          mediaType: "application/octet-stream",
+          visibility: "repository",
+        },
+      ],
+      expectedOutputRoles: ["model", "metadata"],
+      minimumAssetSets: 2,
+      requiredLfsRoles: ["model"],
+    });
+    const provenance = {
+      source: "inputs/source.bin",
+      rights: "public integration fixture",
+      visibility: "repository",
+      lineage: ["inputs/source.bin"],
+    };
+    const descriptor = {
+      config: factoryConfig(target.checkout, "example/asset-integration"),
+      graph: { objective, baseSha: target.baseSha, items: [media] },
+      objectiveBody: body([command]),
+      fakeRoot,
+      actions: {
+        media: {
+          assets: [
+            {
+              id: "candidate-a",
+              members: [
+                {
+                  role: "model",
+                  file: "model.bin",
+                  mediaType: "application/octet-stream",
+                  destination: "approved/model.bin",
+                  text: "other model bytes",
+                },
+                {
+                  role: "metadata",
+                  file: "metadata.json",
+                  mediaType: "application/json",
+                  destination: "approved/metadata.json",
+                  text: '{"candidate":"a"}\n',
+                },
+              ],
+              provenance,
+            },
+            {
+              id: "candidate-b",
+              members: [
+                {
+                  role: "model",
+                  file: "model.bin",
+                  mediaType: "application/octet-stream",
+                  destination: "approved/model.bin",
+                  base64: selectedModel.toString("base64"),
+                },
+                {
+                  role: "metadata",
+                  file: "metadata.json",
+                  mediaType: "application/json",
+                  destination: "approved/metadata.json",
+                  text: '{"candidate":"b"}\n',
+                },
+              ],
+              relationships: [
+                {
+                  from: "inputs/source.bin",
+                  toRole: "model",
+                  kind: "derived-from",
+                },
+              ],
+              provenance,
+            },
+          ],
+        },
+      },
+    };
+    const { application } = makeApplication(descriptor);
+    const waiting = await application.runObjective(objective);
+    assert.equal(waiting.work.media.status, "waiting");
+    assert.equal(waiting.work.media.assets.length, 2);
+    assert.equal(waiting.work.media.assets[1].members.length, 2);
+    const review = join(root, "review");
+    await application.exportAssetSetForReview(
+      objective,
+      "media",
+      "candidate-b",
+      review,
+    );
+    assert.deepEqual(
+      readFileSync(join(review, "model-model.bin")),
+      selectedModel,
+    );
+    assert.equal(
+      readFileSync(join(review, "metadata-metadata.json"), "utf8"),
+      '{"candidate":"b"}\n',
+    );
+    await application.selectAssetSet(objective, "media", "candidate-b");
+    const completed = await application.runObjective(objective);
+    assert.equal(completed.finalValidation.passed, true);
+    assert.equal(completed.work.media.selectedAssetSet, "candidate-b");
+    git(target.checkout, "fetch", "origin", "main");
+    const pointer = git(
+      target.checkout,
+      "show",
+      `${completed.integratedSha}:approved/model.bin`,
+    );
+    assert.match(pointer, /oid sha256:/);
+    const clone = join(root, "hydrated");
+    execFileSync("git", ["clone", "--no-checkout", target.origin, clone], {
+      stdio: "ignore",
+    });
+    git(clone, "lfs", "install", "--local");
+    git(clone, "checkout", "--detach", completed.integratedSha);
+    git(clone, "lfs", "pull");
+    assert.deepEqual(
+      readFileSync(join(clone, "approved/model.bin")),
+      selectedModel,
+    );
+    assert.equal(
+      readFileSync(join(clone, "approved/metadata.json"), "utf8"),
+      '{"candidate":"b"}\n',
+    );
+  });
+});
+
+function dirnameFor(path) {
+  return path.slice(0, path.lastIndexOf("/"));
+}

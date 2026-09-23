@@ -145,7 +145,7 @@ export async function compileObjective(
   body: string,
   baseSha: string,
   checkout: string,
-  model: PlanningModel = new CodexPlanningModel(checkout),
+  model: PlanningModel,
   extraSources: { path: string; content: string }[] = [],
 ): Promise<WorkGraph> {
   const sources = [{ path: "OBJECTIVE", content: body }];

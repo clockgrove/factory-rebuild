@@ -5,9 +5,13 @@ import type { FactoryConfig } from "./config.js";
 import { stateRoot, validateTarget } from "./config.js";
 import type { FactoryState } from "./state.js";
 import { compileObjective } from "./compiler.js";
-import { RealGitHubGateway } from "./github.js";
-import { CodexHarness, LocalExecutionDriver } from "./execution/local.js";
-import { LocalContentStore } from "./content/local.js";
+import type {
+  ContentStore,
+  DeliveryStrategy,
+  ExecutionDriver,
+  GitHubGateway,
+  PlanningModel,
+} from "./contracts.js";
 import { assetSelectionDigest, verifyHydratedAssets } from "./media.js";
 import { runNativeGraph } from "./delivery/native-runner.js";
 import { runRegularGraph } from "./delivery/regular-runner.js";
@@ -21,6 +25,14 @@ import {
   saveState,
   statePath,
 } from "./state-store.js";
+
+export interface ApplicationServices {
+  planningModel: PlanningModel;
+  driver: ExecutionDriver;
+  github: GitHubGateway;
+  delivery: DeliveryStrategy;
+  contentStore: ContentStore;
+}
 
 function objectiveCommands(
   body: string,
@@ -48,6 +60,7 @@ function objectiveCommands(
 export async function runObjective(
   config: FactoryConfig,
   objective: number,
+  services: ApplicationServices,
 ): Promise<FactoryState> {
   validateTarget(config.repository, config.checkout);
   if (config.execution.kind !== "local")
@@ -58,7 +71,7 @@ export async function runObjective(
   const lockHandle = acquireControllerLock(lock, objective);
   const path = statePath(config.repository, objective);
   const active = new Map<string, Promise<void>>();
-  let driver: LocalExecutionDriver | undefined;
+  const { driver, github, delivery, contentStore, planningModel } = services;
   let stateForSignal: FactoryState | undefined;
   let cancellationRequested = false;
   const onCancel = () => {
@@ -67,7 +80,7 @@ export async function runObjective(
       stateForSignal.cancelRequested = true;
       saveState(path, stateForSignal);
     }
-    if (driver && stateForSignal) {
+    if (stateForSignal) {
       for (const id of active.keys()) {
         const handle = stateForSignal.work[id]?.execution;
         if (handle) void driver.cancel(handle).catch(() => undefined);
@@ -76,8 +89,7 @@ export async function runObjective(
   };
   process.on("SIGUSR1", onCancel);
   try {
-    const github = new RealGitHubGateway(config.repository);
-    const issue = github.objective(objective);
+    const issue = await github.objective(objective);
     const configDigest = createHash("sha256")
       .update(JSON.stringify(config))
       .digest("hex");
@@ -119,6 +131,7 @@ export async function runObjective(
         issue.body,
         baseSha,
         config.checkout,
+        planningModel,
       );
       const projected = await github.projectGraph({
         graph,
@@ -142,16 +155,6 @@ export async function runObjective(
     const graph = state.graph;
     stateForSignal = state;
     saveState(path, state);
-    const credentials = join(root, "empty-gh-config");
-    mkdirSync(credentials, { recursive: true, mode: 0o700 });
-    const contentStore = new LocalContentStore(join(root, "content"));
-    driver = new LocalExecutionDriver(
-      config.checkout,
-      join(root, "worktrees"),
-      new CodexHarness(credentials, config.policy.network),
-      config.execution.concurrency,
-      contentStore,
-    );
     if (config.delivery.kind === "native-stack") {
       await runNativeGraph({
         config,
@@ -159,6 +162,8 @@ export async function runObjective(
         root,
         state,
         driver,
+        delivery,
+        contentStore,
         github,
         save: () => saveState(path, state),
         active,
@@ -173,6 +178,7 @@ export async function runObjective(
         root,
         state,
         driver,
+        delivery,
         contentStore,
         github,
         save: () => saveState(path, state),
@@ -213,20 +219,18 @@ export async function runObjective(
     });
     state.finalValidation = { ...finalEvidence, passed: true };
     saveState(path, state);
-    github.closeIssue(
+    await github.closeIssue(
       objective,
       `Factory completed ${graph.items.length} Work Items; final validation passed at ${integratedSha}.`,
     );
     return state;
   } catch (error) {
-    if (driver) {
-      for (const item of active.keys()) {
-        const handle = readState(config.repository, objective)?.work[item]
-          ?.execution;
-        if (handle) await driver.cancel(handle).catch(() => undefined);
-      }
-      await Promise.allSettled(active.values());
+    for (const item of active.keys()) {
+      const handle = readState(config.repository, objective)?.work[item]
+        ?.execution;
+      if (handle) await driver.cancel(handle).catch(() => undefined);
     }
+    await Promise.allSettled(active.values());
     if (existsSync(path)) {
       const state = readState(config.repository, objective)!;
       if (cancellationRequested || state.cancelRequested) {
@@ -250,6 +254,7 @@ export async function runObjective(
 export async function cancelObjective(
   config: FactoryConfig,
   objective: number,
+  driver: ExecutionDriver,
 ): Promise<"requested" | "cancelled"> {
   const root = stateRoot(config.repository);
   const lock = join(root, "controller.lock");
@@ -268,16 +273,6 @@ export async function cancelObjective(
     const state = readState(config.repository, objective);
     if (!state) throw new Error("Objective has no Factory state");
     if (state.finalValidation?.passed || state.cancelledAt) return "cancelled";
-    if (config.execution.kind !== "local")
-      throw new Error("Unsupported execution mode");
-    const credentials = join(root, "empty-gh-config");
-    const driver = new LocalExecutionDriver(
-      config.checkout,
-      join(root, "worktrees"),
-      new CodexHarness(credentials, config.policy.network),
-      config.execution.concurrency,
-      new LocalContentStore(join(root, "content")),
-    );
     for (const work of Object.values(state.work)) {
       if (work.status !== "running") continue;
       if (!work.execution)
@@ -335,6 +330,7 @@ export async function selectAssetSet(
   objective: number,
   itemId: string,
   setId: string,
+  store: ContentStore,
 ): Promise<void> {
   const root = stateRoot(config.repository);
   const lock = join(root, "controller.lock");
@@ -348,7 +344,6 @@ export async function selectAssetSet(
       throw new Error(`Work Item ${itemId} is not awaiting asset selection`);
     const set = work.assets?.find((candidate) => candidate.id === setId);
     if (!set) throw new Error(`AssetSet ${setId} is not a captured candidate`);
-    const store = new LocalContentStore(join(root, "content"));
     for (const member of set.members) await store.verify(member.ref);
     work.selectedAssetSet = setId;
     work.selectionDigest = assetSelectionDigest(set);
@@ -365,6 +360,7 @@ export async function exportAssetSetForReview(
   itemId: string,
   setId: string,
   output: string,
+  store: ContentStore,
 ): Promise<void> {
   const state = readState(config.repository, objective);
   const work = state?.work[itemId];
@@ -381,9 +377,6 @@ export async function exportAssetSetForReview(
       "Review output must be a new absolute directory outside the target checkout",
     );
   mkdirSync(output, { recursive: true, mode: 0o700 });
-  const store = new LocalContentStore(
-    join(stateRoot(config.repository), "content"),
-  );
   for (const member of set.members)
     await store.materialize(
       member.ref,

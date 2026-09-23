@@ -3,23 +3,21 @@ import type {
   DeliveryResult,
   DeliveryObservation,
   DeliveryStrategy,
+  GitHubGateway,
   MergeResult,
 } from "../contracts.js";
-import { RealGitHubGateway } from "../github.js";
 import { git } from "../process.js";
 
 export class RegularDelivery implements DeliveryStrategy {
   constructor(
     private checkout: string,
-    private github: RealGitHubGateway,
-    private commitByTree: Map<string, string>,
+    private github: GitHubGateway,
   ) {}
 
   async publish(request: DeliveryRequest): Promise<DeliveryResult> {
-    const commit = this.commitByTree.get(request.treeSha);
-    if (!commit) throw new Error("Validated commit is missing for result tree");
+    const commit = request.changeRef;
     const base = request.baseBranch ?? this.github.defaultBranch();
-    const existing = this.github.findOpenPullRequest(
+    const existing = await this.github.findOpenPullRequest(
       request.branch,
       base,
       commit,

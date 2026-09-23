@@ -145,6 +145,7 @@ export interface DeliveryRequest {
   item: WorkItem;
   baseSha: string;
   treeSha: string;
+  changeRef: string;
   branch: string;
   baseBranch?: string;
   lfs?: boolean;
@@ -241,12 +242,43 @@ export interface PullRequestObservation {
   state: "open" | "merged" | "closed";
   checks: "pending" | "passing" | "failing";
 }
+export interface ObjectiveIssue {
+  body: string;
+  title: string;
+}
+export interface NativeStackLayer {
+  pullRequest: number;
+  branch: string;
+  headSha: string;
+}
 export interface GitHubGateway {
+  objective(number: number): Promise<ObjectiveIssue>;
+  defaultBranch(): string;
+  closeIssue(number: number, comment: string): Promise<void>;
   projectGraph(request: GraphProjection): Promise<ProjectedGraph>;
+  findOpenPullRequest(
+    branch: string,
+    base: string,
+    headSha: string,
+  ): Promise<PullRequestIdentity | undefined>;
   publish(request: PullRequestPublication): Promise<PullRequestIdentity>;
   observe(identity: PullRequestIdentity): Promise<PullRequestObservation>;
   merge(
     identity: PullRequestIdentity,
     expectedHead: string,
   ): Promise<MergeResult>;
+  ensureNativeStack(
+    layers: NativeStackLayer[],
+    baseBranch: string,
+  ): Promise<number>;
+  mergeNativeStack(
+    layers: NativeStackLayer[],
+    baseBranch: string,
+    expectedStack: number,
+    options: {
+      resumeUuid?: string;
+      onPending: (uuid: string) => void;
+      cancelled: () => boolean;
+    },
+  ): Promise<string>;
 }
