@@ -4,7 +4,7 @@
 
 Factory turns a repository development Objective into source-grounded Work Items, runs bounded coding attempts, validates their exact result trees, and delivers the changes through GitHub. It is an open-source Clockgrove plugin installed for one target repository at a time.
 
-**Version:** `v0.1.0`. Factory runs the local Codex SDK path with a source-grounded dependency DAG, regular pull requests or native linear stacks, human-selected AssetSets, Git LFS, and private diagnostics. See [current build status](https://github.com/clockgrove/factory-rebuild/blob/main/docs/BUILD-STATUS.md) for the published artifact identity and exact Objective acceptance evidence.
+**Version:** `v0.1.1`. Factory runs the local Codex SDK path with a source-grounded dependency DAG, regular pull requests or native linear stacks, human-selected AssetSets, Git LFS, and private diagnostics. See [current build status](https://github.com/clockgrove/factory-rebuild/blob/main/docs/BUILD-STATUS.md) for the published artifact identity and exact Objective acceptance evidence.
 
 ## How it works
 
@@ -15,19 +15,19 @@ Factory turns a repository development Objective into source-grounded Work Items
 
 The target repository owns its product and runtime truth. Factory state and credentials stay outside the target checkout. Factory refuses to run against any Factory source repository.
 
-## Install v0.1.0
+## Install v0.1.1
 
-Install the plugin from the pinned Clockgrove marketplace and its bundled CLI from the matching [release page](https://github.com/clockgrove/factory-rebuild/releases/tag/v0.1.0) on Linux x64 with Node.js 22 or later. Compare the tarball digest with the independent value in [build status](https://github.com/clockgrove/factory-rebuild/blob/main/docs/BUILD-STATUS.md):
+Install the plugin from the pinned Clockgrove marketplace and its bundled CLI from the matching [release page](https://github.com/clockgrove/factory-rebuild/releases/tag/v0.1.1) on Linux x64 with Node.js 22 or later. Compare the tarball digest with the independent value in [build status](https://github.com/clockgrove/factory-rebuild/blob/main/docs/BUILD-STATUS.md):
 
 ```sh
-codex plugin marketplace add clockgrove/factory-rebuild --ref v0.1.0
+codex plugin marketplace add clockgrove/factory-rebuild --ref v0.1.1
 codex plugin add factory@clockgrove
-gh release download v0.1.0 --repo clockgrove/factory-rebuild \
-  --pattern clockgrove-factory-0.1.0.tgz --pattern SHA256SUMS
+gh release download v0.1.1 --repo clockgrove/factory-rebuild \
+  --pattern clockgrove-factory-0.1.1.tgz --pattern SHA256SUMS
 sha256sum --check SHA256SUMS
 # Compare the tarball digest with the independently recorded build status value.
 npm install --offline --ignore-scripts --prefix /absolute/private/factory-prefix \
-  ./clockgrove-factory-0.1.0.tgz
+  ./clockgrove-factory-0.1.1.tgz
 export PATH="/absolute/private/factory-prefix/node_modules/.bin:$PATH"
 factory help
 ```
@@ -36,7 +36,7 @@ The plugin supplies the packaged `director` and `setup` skills; the verified CLI
 
 ## Build from source
 
-For development, the following commands build and install the current checkout as a local candidate. A local build has its own package identity and does not count as installation of the published `v0.1.0` artifact. The [release checklist](https://github.com/clockgrove/factory-rebuild/blob/main/docs/RELEASE-CHECKLIST.md) and [public release procedure](https://github.com/clockgrove/factory-rebuild/blob/main/docs/PUBLIC-RELEASE.md) describe the exact-artifact gate.
+For development, the following commands build and install the current checkout as a local candidate. A local build has its own package identity and does not count as installation of the published `v0.1.1` artifact. The [release checklist](https://github.com/clockgrove/factory-rebuild/blob/main/docs/RELEASE-CHECKLIST.md) and [public release procedure](https://github.com/clockgrove/factory-rebuild/blob/main/docs/PUBLIC-RELEASE.md) describe the exact-artifact gate.
 
 Requires Node.js 22 or later, Git, GitHub CLI authentication for the target repository, and an authenticated Codex SDK environment. Media Objectives also require Git LFS. Clone this repository, then build and install its package in an isolated prefix:
 
@@ -48,7 +48,7 @@ npm run lint
 npm run format:check
 npm test
 npm pack
-npm install --prefix /tmp/factory-candidate ./clockgrove-factory-0.1.0.tgz
+npm install --prefix /tmp/factory-candidate ./clockgrove-factory-0.1.1.tgz
 ```
 
 Bind one target checkout, inspect a read-only plan, and run that exact candidate with the installed CLI:
@@ -84,7 +84,11 @@ Run `/tmp/factory-candidate/node_modules/.bin/factory help` for the installed co
 
 Diagnostic and worker progress files live under the private Factory state root with mode `0600`; containing directories are private. The local log is observational and is never used to reconstruct or retry work. A write failure appears on controller stderr and does not alter execution. Operators may delete old `diagnostics.ndjson` and `harness/*.progress.ndjson` files after runs have stopped, subject to their own retention policy. The event `metadata` field holds identities suitable for a future exporter; `detail` is local-only and must not be exported without explicit redaction policy. No hosted telemetry backend is required.
 
-The preview lists each Work Item command and every final Objective command with its exact source and host execution status. A source-declared command must appear as a complete line in its cited pinned source. A base-observed command must name a tracked file at the accepted base containing that exact line, or a matching `package.json` script invocation. A blocked command stops activation; editing a plan file cannot grant authority. At runtime Factory runs admitted commands on the exact result tree. For root `npm test`, `npm run NAME`, `pnpm test`, `pnpm check`, and `pnpm run NAME`, Factory checks the selected script, its pre/post hooks, and package-manager configuration against the accepted base before shell execution. Metadata, dependency, and unrelated script edits may proceed. Nested package-manager wrappers stop for separate authority. A fresh validation worktree may run the exact source-declared bootstrap `pnpm install --frozen-lockfile --ignore-scripts` before its pnpm checks, using a tracked lockfile and no pnpmfile hooks; plain install remains blocked. This pins the package-script entrypoints; source-declared validation can still run candidate code on the local host under the target operator's authority, and Factory does not sandbox that code. Factory then independently checks each stated Work Item and Objective acceptance criterion against the pinned sources, command evidence, and an exact-tree change packet with a conservative 48,000-byte text excerpt budget, explicit truncation markers, and blob descriptors for opaque files. Operators using a reviewer with a larger context can set `FACTORY_RESULT_REVIEW_TEXT_BUDGET_BYTES` to a positive byte budget. A truncated text excerpt cannot auto-pass a criterion even if the reviewer returns pass; the criterion waits for an exact-tree operator decision or a retry with a larger text budget and reviewer context. Reviewer failures also wait with their specific error. A source-backed clean result review passes without routine operator approval. Missing, conflicting, or human-owned evidence pauses on one specific criterion. `factory status --objective ISSUE_NUMBER` shows its question and tree. To answer, run `factory decide-result --objective ISSUE_NUMBER [--item WORK_ITEM_ID] --tree EXACT_TREE_SHA --outcome accept|refuse --actor NAME --reason TEXT`, then `factory run --objective ISSUE_NUMBER`. Omit `--item` for final Objective acceptance. The recorded decision is valid only for that criterion and tree; a refusal stops delivery. This decision approves the result criterion, while the target repository's branch protection and GitHub checks still govern PR integration.
+The preview lists each Work Item command and every final Objective command with its exact source and host execution status. A source-declared command must appear as a complete line in its cited pinned source. A base-observed command must name a tracked file at the accepted base containing that exact line, or a matching `package.json` script invocation. A blocked command stops activation; editing a plan file cannot grant authority. A source-declared package command whose script or lockfile is not yet in the accepted base appears as authorized but explicitly deferred: Factory checks that entrypoint in the exact result tree before execution.
+
+At runtime Factory runs admitted commands on the exact result tree. For root `npm test`, `npm run NAME`, `pnpm test`, `pnpm check`, and `pnpm run NAME`, a script that existed at the Objective base remains pinned there. A script newly established by an Objective is permitted only through an exact source declaration; later Work Items pin it to their exact predecessor. Selected scripts cannot add pre/post hooks or nested package-manager wrappers without separate authority. Existing package-manager configuration stays pinned; a new pnpm workspace file may be created under source-declared command authority. Metadata, dependency, and unrelated script edits may proceed. A fresh validation worktree may run the exact source-declared bootstrap `pnpm install --frozen-lockfile --ignore-scripts` before its pnpm checks, using a lockfile tracked in the result tree and no pnpmfile hooks; plain install remains blocked. A new `.npmrc` remains blocked by this narrow path. Source-declared validation can still run candidate code on the local host under the target operator's authority; Factory does not sandbox that code.
+
+Factory then independently checks each stated Work Item and Objective acceptance criterion against the pinned sources, command evidence, and an exact-tree change packet with a conservative 48,000-byte text excerpt budget, explicit truncation markers, and blob descriptors for opaque files. Operators using a reviewer with a larger context can set `FACTORY_RESULT_REVIEW_TEXT_BUDGET_BYTES` to a positive byte budget. A truncated text excerpt cannot auto-pass a criterion even if the reviewer returns pass; the criterion waits for an exact-tree operator decision or a retry with a larger text budget and reviewer context. Reviewer failures also wait with their specific error. A source-backed clean result review passes without routine operator approval. Missing, conflicting, or human-owned evidence pauses on one specific criterion. `factory status --objective ISSUE_NUMBER` shows its question and tree. To answer, run `factory decide-result --objective ISSUE_NUMBER [--item WORK_ITEM_ID] --tree EXACT_TREE_SHA --outcome accept|refuse --actor NAME --reason TEXT`, then `factory run --objective ISSUE_NUMBER`. Omit `--item` for final Objective acceptance. The recorded decision is valid only for that criterion and tree; a refusal stops delivery. This decision approves the result criterion, while the target repository's branch protection and GitHub checks still govern PR integration.
 
 Use `--delivery native-stack` at install time to deliver maximal linear chains through GitHub's native stacked pull requests. The default is regular PR delivery.
 
