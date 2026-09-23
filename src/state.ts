@@ -2,7 +2,13 @@ import type { ExecutionHandle, WorkGraph } from "./contracts.js";
 import type { ValidationEvidence } from "./validation.js";
 
 export type WorkStatus =
-  "pending" | "running" | "waiting" | "done" | "failed" | "cancelled";
+  | "pending"
+  | "running"
+  | "published"
+  | "waiting"
+  | "done"
+  | "failed"
+  | "cancelled";
 export type WorkStep = "execute" | "validate" | "approve-asset" | "deliver";
 
 export interface WorkState {
@@ -32,6 +38,11 @@ export interface FactoryState {
   objectiveCommands?: string[];
   issueByItemId: Record<string, number>;
   work: Record<string, WorkState>;
+  stackNumbers?: Record<string, number>;
+  stackMerges?: Record<
+    string,
+    { topPullRequest: number; expectedHeadSha: string; uuid: string }
+  >;
   integratedSha?: string;
   finalValidation?: ValidationEvidence & { passed: boolean; detail?: string };
   cancelRequested?: boolean;

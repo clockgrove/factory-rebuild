@@ -137,6 +137,7 @@ export interface DeliveryRequest {
   baseSha: string;
   treeSha: string;
   branch: string;
+  baseBranch?: string;
 }
 export interface DeliveryResult {
   branch: string;

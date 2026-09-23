@@ -10,6 +10,7 @@ import {
   runObjective,
 } from "./runner.js";
 import { itemsConflict } from "./scheduler.js";
+import { linearDeliveryUnits } from "./delivery/plan.js";
 
 function option(args: string[], name: string): string | undefined {
   const index = args.indexOf(`--${name}`);
@@ -74,6 +75,11 @@ async function main(): Promise<void> {
     if (!state)
       console.log(`Factory for ${config.repository}: no active Objective`);
     else {
+      const unitByItem = new Map(
+        linearDeliveryUnits(state.graph).flatMap((unit) =>
+          unit.items.map((item) => [item.id, unit.id] as const),
+        ),
+      );
       const describe = (id: string): string => {
         const work = state.work[id]!;
         if (work.status !== "pending")
@@ -82,7 +88,13 @@ async function main(): Promise<void> {
           (candidate) => candidate.id === id,
         )!;
         const dependency = item.dependencies.find(
-          (name) => state.work[name]?.status !== "done",
+          (name) =>
+            state.work[name]?.status !== "done" &&
+            !(
+              config.delivery.kind === "native-stack" &&
+              state.work[name]?.status === "published" &&
+              unitByItem.get(name) === unitByItem.get(id)
+            ),
         );
         if (dependency) return `${id} waiting for ${dependency}`;
         const conflict = state.graph.items.find(
