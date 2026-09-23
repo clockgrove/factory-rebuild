@@ -1,0 +1,107 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import {
+  itemsConflict,
+  readyItems,
+  validateAndOrderGraph,
+} from "../dist/scheduler.js";
+
+function item(
+  id,
+  dependencies = [],
+  ownedPaths = [`${id}.txt`],
+  resources = [],
+) {
+  return {
+    id,
+    title: id,
+    goal: id,
+    acceptance: [id],
+    nonGoals: ["Other work"],
+    citations: [{ path: "OBJECTIVE" }],
+    dependencies,
+    ownedPaths,
+    resources,
+    validation: [
+      {
+        command: `test -f ${id}.txt`,
+        provenance: "source-declared",
+        source: "OBJECTIVE",
+      },
+    ],
+    brief: id,
+  };
+}
+
+test("dependency readiness admits independent lanes and waits for the join", () => {
+  const graph = {
+    objective: 1,
+    baseSha: "base",
+    items: [
+      item("foundation"),
+      item("left", ["foundation"]),
+      item("right", ["foundation"]),
+      item("join", ["left", "right"]),
+    ],
+  };
+  assert.deepEqual(
+    validateAndOrderGraph(graph, 1, "base", new Set(["OBJECTIVE"])).map(
+      (x) => x.id,
+    ),
+    ["foundation", "left", "right", "join"],
+  );
+  const work = Object.fromEntries(
+    graph.items.map((x) => [x.id, { status: "pending" }]),
+  );
+  assert.deepEqual(
+    readyItems(graph, work, new Set(), 4).map((x) => x.id),
+    ["foundation"],
+  );
+  work.foundation.status = "done";
+  assert.deepEqual(
+    readyItems(graph, work, new Set(), 4).map((x) => x.id),
+    ["left", "right"],
+  );
+  work.left.status = "done";
+  assert.deepEqual(
+    readyItems(graph, work, new Set(["right"]), 4).map((x) => x.id),
+    [],
+  );
+  work.right.status = "done";
+  assert.deepEqual(
+    readyItems(graph, work, new Set(), 4).map((x) => x.id),
+    ["join"],
+  );
+});
+
+test("path and named resource conflicts serialize otherwise ready items", () => {
+  const first = item("first", [], ["src/"], ["browser"]);
+  const second = item("second", [], ["src/a.ts"]);
+  const third = item("third", [], ["other.ts"], ["browser"]);
+  const fourth = item("fourth", [], ["free.ts"]);
+  assert.equal(itemsConflict(first, second), true);
+  assert.equal(itemsConflict(first, third), true);
+  assert.equal(itemsConflict(first, fourth), false);
+  const graph = {
+    objective: 1,
+    baseSha: "base",
+    items: [first, second, third, fourth],
+  };
+  const work = Object.fromEntries(
+    graph.items.map((x) => [x.id, { status: "pending" }]),
+  );
+  assert.deepEqual(
+    readyItems(graph, work, new Set(), 4).map((x) => x.id),
+    ["first", "fourth"],
+  );
+  assert.throws(
+    () =>
+      validateAndOrderGraph(
+        { ...graph, items: [item("a", ["b"]), item("b", ["a"])] },
+        1,
+        "base",
+        new Set(["OBJECTIVE"]),
+      ),
+    /cycle/,
+  );
+});

@@ -5,6 +5,7 @@ export interface WorkItem {
   title: string;
   goal: string;
   acceptance: string[];
+  nonGoals: string[];
   citations: { path: string; heading?: string }[];
   dependencies: string[];
   ownedPaths: string[];
@@ -40,6 +41,7 @@ export interface PlanningModel {
 export interface ExecutionRequest {
   item: WorkItem;
   baseSha: string;
+  attemptId?: string;
   sourceAssets?: ContentRef[];
 }
 export interface ExecutionHandle {
@@ -68,6 +70,7 @@ export interface ExecutionDriver {
 export interface HarnessRequest {
   item: WorkItem;
   worktree: string;
+  attemptId?: string;
   sourceAssets?: ContentRef[];
 }
 export interface HarnessHandle {

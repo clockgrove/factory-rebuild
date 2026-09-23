@@ -3,7 +3,13 @@ import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { configPath, readConfig, stateRoot, validateConfig } from "./config.js";
 import { compose } from "./index.js";
-import { readState, runObjective } from "./runner.js";
+import {
+  cancelObjective,
+  readState,
+  retryWorkItem,
+  runObjective,
+} from "./runner.js";
+import { itemsConflict } from "./scheduler.js";
 
 function option(args: string[], name: string): string | undefined {
   const index = args.indexOf(`--${name}`);
@@ -12,7 +18,7 @@ function option(args: string[], name: string): string | undefined {
 
 function help(): void {
   console.log(
-    `Factory CLI\n\nCommands:\n  install --repository OWNER/REPO --checkout ABSOLUTE_PATH --concurrency N [--delivery regular|native-stack] [--network host|off] [--config PATH]\n  run --objective N [--config PATH]\n  status --objective N [--config PATH]\n  cancel [--config PATH]`,
+    `Factory CLI\n\nCommands:\n  install --repository OWNER/REPO --checkout ABSOLUTE_PATH --concurrency N [--delivery regular|native-stack] [--network host|off] [--config PATH]\n  run --objective N [--config PATH]\n  status --objective N [--config PATH]\n  cancel --objective N [--config PATH]\n  retry --objective N --item ID [--config PATH]`,
   );
 }
 
@@ -56,34 +62,51 @@ async function main(): Promise<void> {
     console.log(`Installed Factory for ${repository} at ${path}`);
     return;
   }
-  if (!["run", "status", "cancel"].includes(command))
+  if (!["run", "status", "cancel", "retry"].includes(command))
     throw new Error(`Unknown command: ${command}`);
   const config = readConfig(path);
   compose(config);
+  const objective = Number(option(args, "objective"));
+  if (!Number.isSafeInteger(objective) || objective <= 0)
+    throw new Error(`${command} requires --objective N`);
   if (command === "status") {
-    const objective = Number(option(args, "objective"));
-    const state = objective
-      ? readState(config.repository, objective)
-      : undefined;
+    const state = readState(config.repository, objective);
     if (!state)
       console.log(`Factory for ${config.repository}: no active Objective`);
-    else
+    else {
+      const describe = (id: string): string => {
+        const work = state.work[id]!;
+        if (work.status !== "pending")
+          return `${id} ${work.status}${work.step ? ` (${work.step})` : ""}`;
+        const item = state.graph.items.find(
+          (candidate) => candidate.id === id,
+        )!;
+        const dependency = item.dependencies.find(
+          (name) => state.work[name]?.status !== "done",
+        );
+        if (dependency) return `${id} waiting for ${dependency}`;
+        const conflict = state.graph.items.find(
+          (candidate) =>
+            state.work[candidate.id]?.status === "running" &&
+            itemsConflict(item, candidate),
+        );
+        return conflict
+          ? `${id} waiting for ${conflict.id} path/resource`
+          : `${id} ready`;
+      };
       console.log(
-        `Objective #${objective}: ${Object.entries(state.work)
-          .map(
-            ([id, work]) =>
-              `${id} ${work.status}${work.step ? ` (${work.step})` : ""}`,
-          )
-          .join(
-            ", ",
-          )}; final validation ${state.finalValidation?.passed ? "passed" : state.error ? "failed" : "pending"}${state.error ? `; error: ${state.error}` : ""}`,
+        `Objective #${objective}: ${state.graph.items.map((item) => describe(item.id)).join(", ")}; final validation ${state.finalValidation?.passed ? "passed" : state.cancelledAt ? "cancelled" : state.error ? "failed" : "pending"}${state.error ? `; error: ${state.error}` : ""}`,
       );
+    }
   } else if (command === "cancel") {
-    console.log("No active Objective to cancel");
+    const result = await cancelObjective(config, objective);
+    console.log(`Objective #${objective} cancellation ${result}`);
+  } else if (command === "retry") {
+    const item = option(args, "item");
+    if (!item) throw new Error("retry requires --item ID");
+    retryWorkItem(config, objective, item);
+    console.log(`Work Item ${item} is pending for a new explicit attempt`);
   } else {
-    const objective = Number(option(args, "objective"));
-    if (!Number.isSafeInteger(objective) || objective <= 0)
-      throw new Error("run requires --objective N");
     const state = await runObjective(config, objective);
     console.log(
       `Objective #${objective} completed at ${state.integratedSha}; final validation passed`,

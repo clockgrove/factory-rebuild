@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { readFileSync, readdirSync } from "node:fs";
 
 export function command(
   file: string,
@@ -72,4 +73,35 @@ export function sanitizedWorkerEnvironment(
     GCM_INTERACTIVE: "Never",
   });
   return env;
+}
+
+export function linuxProcessIdentity(
+  pid: number,
+): { group: number; startTime: string; state: string } | null {
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+    const close = stat.lastIndexOf(") ");
+    if (close < 0) throw new Error(`Cannot parse process identity for ${pid}`);
+    const fields = stat
+      .slice(close + 2)
+      .trim()
+      .split(/\s+/);
+    const group = Number(fields[2]);
+    const startTime = fields[19];
+    if (!Number.isSafeInteger(group) || !startTime || !fields[0])
+      throw new Error(`Cannot parse process identity for ${pid}`);
+    return { group, startTime, state: fields[0] };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
+}
+
+export function processGroupExists(group: number): boolean {
+  for (const name of readdirSync("/proc")) {
+    if (!/^[1-9]\d*$/.test(name)) continue;
+    const identity = linuxProcessIdentity(Number(name));
+    if (identity?.group === group && identity.state !== "Z") return true;
+  }
+  return false;
 }
