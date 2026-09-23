@@ -24,10 +24,6 @@ export const graphSchema = {
             items: {
               type: "object",
               properties: {
-                kind: {
-                  type: "string",
-                  enum: ["repository", "local", "github-attachment"],
-                },
                 path: { type: "string" },
                 heading: { type: "string" },
               },
@@ -60,6 +56,10 @@ export const graphSchema = {
             items: {
               type: "object",
               properties: {
+                kind: {
+                  type: "string",
+                  enum: ["repository", "local", "github-attachment"],
+                },
                 path: { type: "string" },
                 role: { type: "string" },
                 mediaType: { type: "string" },
