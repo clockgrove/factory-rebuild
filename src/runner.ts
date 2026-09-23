@@ -182,7 +182,13 @@ export async function runObjective(
   let stateDiagnostics: StateDiagnostics | undefined;
   const save = (state: FactoryState) => {
     saveState(path, state);
-    stateDiagnostics?.observe();
+    try {
+      stateDiagnostics?.observe();
+    } catch (error) {
+      process.stderr.write(
+        `Factory diagnostics unavailable: ${error instanceof Error ? error.message : String(error)}\n`,
+      );
+    }
   };
   const active = new Map<string, Promise<void>>();
   const { driver, github, delivery, contentStore, planningModel } = services;

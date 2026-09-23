@@ -178,7 +178,9 @@ async function main(): Promise<void> {
           );
         }
       if (
-        event.type === "item.completed" &&
+        (event.type === "item.started" ||
+          event.type === "item.updated" ||
+          event.type === "item.completed") &&
         event.item.type === "agent_message"
       )
         finalResponse = event.item.text;

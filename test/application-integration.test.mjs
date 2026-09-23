@@ -684,6 +684,19 @@ test("native execution failure is terminal until an explicit safe retry", async 
     assert.equal(failed.work.retry.status, "failed");
     assert.match(failed.work.retry.error, /Scripted failure for retry/);
     assert.equal(failed.work.retry.pullRequest, undefined);
+    const failureTimeline = readDiagnostics(
+      descriptor.config.repository,
+      objective,
+    );
+    assert.ok(
+      failureTimeline.some(
+        (event) =>
+          event.itemId === "retry" &&
+          event.attemptId === failed.work.retry.attempt &&
+          event.outcome === "failed" &&
+          /Scripted failure/.test(event.detail),
+      ),
+    );
     await assert.rejects(application.runObjective(objective), /explicit retry/);
     application.retryWorkItem(objective, "retry");
     const done = await application.runObjective(objective);
@@ -693,6 +706,19 @@ test("native execution failure is terminal until an explicit safe retry", async 
         (event) => event.type === "start" && event.item === "retry",
       ).length,
       2,
+    );
+    const retryTimeline = readDiagnostics(
+      descriptor.config.repository,
+      objective,
+    );
+    assert.ok(retryTimeline.some((event) => event.operation === "work-retry"));
+    assert.ok(
+      retryTimeline.some(
+        (event) =>
+          event.itemId === "retry" &&
+          event.attemptId === done.work.retry.attempt &&
+          event.outcome === "completed",
+      ),
     );
   });
 });

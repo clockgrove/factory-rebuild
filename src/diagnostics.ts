@@ -165,8 +165,20 @@ export function readAgentTimeline(
         )
         .map((event) => [event.attemptId as string, event.itemId as string]),
     );
+    const runByAttempt = new Map<string, string>(
+      events
+        .filter(
+          (event) =>
+            typeof event.attemptId === "string" &&
+            typeof event.runId === "string",
+        )
+        .map((event) => [event.attemptId as string, event.runId as string]),
+    );
     for (const [id, work] of Object.entries(state?.work ?? {}))
-      if (work.attempt) itemByAttempt.set(work.attempt, id);
+      if (work.attempt) {
+        itemByAttempt.set(work.attempt, id);
+        if (state?.runId) runByAttempt.set(work.attempt, state.runId);
+      }
     for (const name of readdirSync(root).filter((name) =>
       /^[0-9a-f-]{36}\.progress\.ndjson$/.test(name),
     )) {
@@ -178,7 +190,7 @@ export function readAgentTimeline(
         events.push({
           repository,
           objective,
-          runId: state?.runId,
+          runId: runByAttempt.get(attemptId),
           workItemId: itemByAttempt.get(attemptId),
           ...event,
         });

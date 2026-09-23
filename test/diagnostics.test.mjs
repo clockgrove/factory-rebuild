@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, statSync } from "node:fs";
+import {
+  mkdtempSync,
+  mkdirSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -8,9 +14,12 @@ import {
   DiagnosticEmitter,
   diagnosticPath,
   readDiagnostics,
+  readAgentTimeline,
+  readWorkerOutput,
   redactDiagnosticDetail,
 } from "../dist/diagnostics.js";
 import { validateTree } from "../dist/validation.js";
+import { stateRoot } from "../dist/config.js";
 import { createTarget } from "./support/integration-fixture.mjs";
 
 test("private diagnostics redact secrets and validation preserves command output", () => {
@@ -57,6 +66,37 @@ test("private diagnostics redact secrets and validation preserves command output
     assert.equal(observed[0].passed, true);
     assert.match(observed[0].output, /visible output/);
     assert.equal(redactDiagnosticDetail("sk-abcdefghijklmnop"), "[REDACTED]");
+    const attemptId = "11111111-1111-4111-8111-111111111111";
+    emitter.emit({
+      runId: "run-1",
+      itemId: "one",
+      attemptId,
+      operation: "harness",
+      outcome: "started",
+    });
+    const harnessRoot = join(stateRoot("example/diagnostics"), "harness");
+    mkdirSync(harnessRoot, { recursive: true, mode: 0o700 });
+    writeFileSync(
+      join(harnessRoot, `${attemptId}.progress.ndjson`),
+      `${JSON.stringify({ at: new Date().toISOString(), attemptId, operation: "turn.completed", usage: { input_tokens: 12 } })}\n`,
+      { mode: 0o600 },
+    );
+    writeFileSync(join(harnessRoot, `${attemptId}.log`), "worker stderr\n", {
+      mode: 0o600,
+    });
+    const timeline = readAgentTimeline("example/diagnostics", 1);
+    assert.ok(
+      timeline.some(
+        (event) =>
+          event.workItemId === "one" &&
+          event.runId === "run-1" &&
+          event.usage?.input_tokens === 12,
+      ),
+    );
+    assert.equal(
+      readWorkerOutput("example/diagnostics", attemptId),
+      "worker stderr\n",
+    );
   } finally {
     if (previous === undefined) delete process.env.XDG_STATE_HOME;
     else process.env.XDG_STATE_HOME = previous;
