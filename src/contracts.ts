@@ -1,6 +1,7 @@
 export type Repository = `${string}/${string}`;
 
 export interface SourceAssetBinding {
+  kind?: "repository" | "local" | "github-attachment";
   path: string;
   role: string;
   mediaType: string;
@@ -45,6 +46,19 @@ export interface PlanningRequest<T> {
 }
 export interface PlanningModel {
   generateStructured<T>(request: PlanningRequest<T>): Promise<T>;
+  reviewGraph(request: {
+    objective: string;
+    baseSha: string;
+    sources: { path: string; content: string }[];
+    graph: WorkGraph;
+  }): Promise<{
+    findings: {
+      source: string;
+      quote: string;
+      detail: string;
+      question: string;
+    }[];
+  }>;
 }
 
 export interface ExecutionRequest {

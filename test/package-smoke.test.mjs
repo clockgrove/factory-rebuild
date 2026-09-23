@@ -1,12 +1,13 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import test from "node:test";
 import { createTarget } from "./support/integration-fixture.mjs";
 
-test("fresh packed artifact installs and exposes documented install/status commands", () => {
+test("fresh packed artifact installs and exposes documented install/status/plan operations", async () => {
   const root = mkdtempSync(join(tmpdir(), "factory-package-smoke-"));
   try {
     const target = createTarget(root);
@@ -84,6 +85,80 @@ test("fresh packed artifact installs and exposes documented install/status comma
       { encoding: "utf8", env: environment },
     );
     assert.match(status, /no active Objective/);
+    const installedPackage = await import(
+      pathToFileURL(
+        join(
+          prefix,
+          "node_modules",
+          "@clockgrove",
+          "factory",
+          "dist",
+          "index.js",
+        ),
+      ).href
+    );
+    const body = "# Packed Objective\n\n## Acceptance\n- `test -s one.txt`\n";
+    const graph = {
+      objective: 1,
+      baseSha: target.baseSha,
+      items: [
+        {
+          id: "one",
+          title: "One",
+          goal: "Create one.txt",
+          acceptance: ["one.txt exists"],
+          nonGoals: ["No deployment"],
+          citations: [{ path: "OBJECTIVE", heading: "Acceptance" }],
+          dependencies: [],
+          ownedPaths: ["one.txt"],
+          resources: [],
+          validation: [
+            {
+              command: "test -s one.txt",
+              provenance: "source-declared",
+              source: "OBJECTIVE",
+            },
+          ],
+          brief: "Create one.txt",
+          sourceAssets: [],
+          expectedOutputRoles: [],
+          minimumAssetSets: 0,
+          requiredLfsRoles: [],
+        },
+      ],
+    };
+    const application = installedPackage.createApplication(
+      installedPackage.readConfig(config),
+      {
+        github: {
+          async objective() {
+            return { body, title: "Packed Objective" };
+          },
+        },
+        planningModel: {
+          async generateStructured() {
+            return graph;
+          },
+          async reviewGraph() {
+            return { findings: [] };
+          },
+        },
+      },
+    );
+    const candidate = await application.planObjective(1);
+    assert.equal(candidate.review.status, "clean");
+    assert.equal(candidate.baseSha, target.baseSha);
+    assert.equal(
+      existsSync(
+        join(
+          installedPackage.stateRoot("example/package-smoke"),
+          "objectives",
+          "1",
+          "state.json",
+        ),
+      ),
+      false,
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

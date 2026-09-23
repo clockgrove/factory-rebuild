@@ -7,7 +7,7 @@ Factory turns a repository development Objective into source-grounded Work Items
 ## How it works
 
 1. A human writes an Objective as a GitHub Issue in the target repository.
-2. Factory compiles a small Work Item graph with owned paths, dependencies, acceptance, non-goals, source citations, and validation commands.
+2. Factory previews a pinned-source Work Item graph with owned paths, dependencies, acceptance, non-goals, source citations, and validation commands. One independent source-backed review checks the graph before run.
 3. An isolated local Codex attempt works each ready item. Independent lanes may run together; path and named-resource conflicts wait.
 4. Factory validates each resulting tree in a fresh worktree, opens GitHub pull requests, integrates them, and validates the complete Objective at the observed default-branch head.
 
@@ -28,16 +28,30 @@ npm pack
 npm install --prefix /tmp/factory-candidate ./clockgrove-factory-0.1.0.tgz
 ```
 
-Bind one target checkout and run a GitHub Objective with the installed CLI:
+Bind one target checkout, inspect a read-only plan, and run that exact candidate with the installed CLI:
 
 ```sh
 /tmp/factory-candidate/node_modules/.bin/factory install \
   --repository OWNER/REPO \
   --checkout /absolute/path/to/target \
   --concurrency 2
-/tmp/factory-candidate/node_modules/.bin/factory run --objective ISSUE_NUMBER
+/tmp/factory-candidate/node_modules/.bin/factory plan --objective ISSUE_NUMBER \
+  --output /absolute/private/plan.json
+/tmp/factory-candidate/node_modules/.bin/factory run --objective ISSUE_NUMBER \
+  --plan /absolute/private/plan.json
 /tmp/factory-candidate/node_modules/.bin/factory status --objective ISSUE_NUMBER
 ```
+
+An Objective may name additional canonical source paths or a section by exact heading:
+
+```markdown
+## Planning sources
+
+- `docs/INDEX.md`
+- `docs/WAVE-0.md#Acceptance`
+```
+
+Factory reads those bytes from the exact Git base, includes them in the preview with source digests, and ignores dirty checkout edits. Root `AGENTS.md` and `README.md`, when present, are also read from that base. `plan` creates no Work Item issues or run state; its output contains target source text and should stay outside the target checkout. A missing or ambiguous heading stops planning. A sourced graph-review finding allows one revision and re-review. If it remains unresolved, the plan names a specific question; the operator can record an answer with `factory decide --objective ISSUE_NUMBER --plan /absolute/private/plan.json --outcome accept --actor NAME --reason TEXT --answer TEXT --output /absolute/private/decided.json`, or refuse it with `--outcome refuse`. A clean decided plan can be passed to `run --plan`. Running without `--plan` explicitly compiles and reviews a fresh graph. A changed Objective, base, or source packet requires a new plan.
 
 Use `--delivery native-stack` at install time to deliver maximal linear chains through GitHub's native stacked pull requests. The default is regular PR delivery.
 
@@ -70,7 +84,7 @@ npm test
 
 In addition to the focused DAG, delivery-plan, state-ingress, content, media, and transplant tests, this runs bounded application-path scenarios against real temporary Git repositories. A scripted planning model and harness enter through the same composition boundary as the production Codex adapters, while a small stateful GitHub-domain fake records stable Issue, pull-request, and native-stack identities and integrates real commits through a local bare remote. The scenarios prove concurrent regular DAG execution and final-head validation, restart reattachment/cancel/explicit retry, a native linear stack beside an independently replayed and revalidated lane, whole-set media selection, target-owned Git LFS policy, and exact hydrated bytes.
 
-The same gate packs the current working tree, installs the tarball into an isolated prefix with isolated configuration and state, and invokes the documented `install` and `status` commands. The current release candidate has no public read-only `plan` command, so the smoke does not fabricate one. Live Codex/GitHub disposable Objectives remain separate release evidence; deterministic CI does not replace them.
+The same gate packs the current working tree, installs the tarball into an isolated prefix with isolated configuration and state, and exercises the public `install`, `status`, and application `planObjective` operations. Live Codex/GitHub disposable Objectives remain separate release evidence; deterministic CI does not replace them.
 
 ## Project and provenance
 

@@ -2,7 +2,7 @@ import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import type { FactoryConfig } from "./config.js";
 import { stateRoot, validateTarget } from "./config.js";
-import { CodexPlanningModel } from "./compiler.js";
+import { CodexPlanningModel, type PlanCandidate } from "./compiler.js";
 import { LocalContentStore } from "./content/local.js";
 import { NativeStackDelivery } from "./delivery/native-stack.js";
 import { RegularDelivery } from "./delivery/regular.js";
@@ -11,7 +11,9 @@ import { RealGitHubGateway } from "./github.js";
 import type { FactoryState } from "./state.js";
 import {
   cancelObjective,
+  decidePlan,
   exportAssetSetForReview,
+  planObjective,
   retryWorkItem,
   runObjective,
   selectAssetSet,
@@ -19,7 +21,21 @@ import {
 } from "./runner.js";
 
 export interface FactoryApplication {
-  runObjective(objective: number): Promise<FactoryState>;
+  planObjective(objective: number): Promise<PlanCandidate>;
+  decidePlan(
+    objective: number,
+    candidate: PlanCandidate,
+    input: {
+      actor: string;
+      outcome: "accept" | "refuse";
+      answer: string;
+      reason: string;
+    },
+  ): Promise<PlanCandidate>;
+  runObjective(
+    objective: number,
+    acceptedPlan?: PlanCandidate,
+  ): Promise<FactoryState>;
   cancelObjective(objective: number): Promise<"requested" | "cancelled">;
   retryWorkItem(objective: number, itemId: string): void;
   selectAssetSet(
@@ -40,7 +56,11 @@ export function createApplication(
   services: ApplicationServices,
 ): FactoryApplication {
   return {
-    runObjective: (objective) => runObjective(config, objective, services),
+    planObjective: (objective) => planObjective(config, objective, services),
+    decidePlan: (objective, candidate, input) =>
+      decidePlan(config, objective, services, candidate, input),
+    runObjective: (objective, acceptedPlan) =>
+      runObjective(config, objective, services, acceptedPlan),
     cancelObjective: (objective) =>
       cancelObjective(config, objective, services.driver),
     retryWorkItem: (objective, itemId) =>
@@ -56,6 +76,25 @@ export function createApplication(
         output,
         services.contentStore,
       ),
+  };
+}
+
+/** Planning composition never constructs a driver, content store, or run state. */
+export function composePlanning(
+  config: FactoryConfig,
+): Pick<FactoryApplication, "planObjective" | "decidePlan"> {
+  validateTarget(config.repository, config.checkout);
+  const services = {
+    planningModel: new CodexPlanningModel(config.checkout),
+    github: new RealGitHubGateway(
+      config.repository,
+      new NativeStackDelivery(config.repository),
+    ),
+  };
+  return {
+    planObjective: (objective) => planObjective(config, objective, services),
+    decidePlan: (objective, candidate, input) =>
+      decidePlan(config, objective, services, candidate, input),
   };
 }
 

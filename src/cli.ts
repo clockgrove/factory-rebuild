@@ -1,8 +1,9 @@
 #!/usr/bin/env node
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, resolve, sep } from "node:path";
+import type { PlanCandidate } from "./compiler.js";
 import { configPath, readConfig, stateRoot, validateConfig } from "./config.js";
-import { compose } from "./index.js";
+import { compose, composePlanning } from "./index.js";
 import { readState } from "./state-store.js";
 import { itemsConflict } from "./scheduler.js";
 import { linearDeliveryUnits } from "./delivery/plan.js";
@@ -14,7 +15,7 @@ function option(args: string[], name: string): string | undefined {
 
 function help(): void {
   console.log(
-    `Factory CLI\n\nCommands:\n  install --repository OWNER/REPO --checkout ABSOLUTE_PATH --concurrency N [--delivery regular|native-stack] [--network host|off] [--config PATH]\n  run --objective N [--config PATH]\n  status --objective N [--config PATH]\n  review --objective N --item ID --set SET_ID --output ABSOLUTE_NEW_DIRECTORY [--config PATH]\n  select --objective N --item ID --set SET_ID [--config PATH]\n  cancel --objective N [--config PATH]\n  retry --objective N --item ID [--config PATH]`,
+    `Factory CLI\n\nCommands:\n  install --repository OWNER/REPO --checkout ABSOLUTE_PATH --concurrency N [--delivery regular|native-stack] [--network host|off] [--config PATH]\n  plan --objective N [--output ABSOLUTE_NEW_FILE] [--config PATH]\n  decide --objective N --plan PLAN_FILE --outcome accept|refuse --actor NAME --reason TEXT [--answer TEXT] --output ABSOLUTE_NEW_FILE [--config PATH]\n  run --objective N [--plan PLAN_FILE] [--config PATH]\n  status --objective N [--config PATH]\n  review --objective N --item ID --set SET_ID --output ABSOLUTE_NEW_DIRECTORY [--config PATH]\n  select --objective N --item ID --set SET_ID [--config PATH]\n  cancel --objective N [--config PATH]\n  retry --objective N --item ID [--config PATH]`,
   );
 }
 
@@ -59,14 +60,84 @@ async function main(): Promise<void> {
     return;
   }
   if (
-    !["run", "status", "review", "select", "cancel", "retry"].includes(command)
+    ![
+      "plan",
+      "decide",
+      "run",
+      "status",
+      "review",
+      "select",
+      "cancel",
+      "retry",
+    ].includes(command)
   )
     throw new Error(`Unknown command: ${command}`);
   const config = readConfig(path);
-  const application = compose(config);
   const objective = Number(option(args, "objective"));
   if (!Number.isSafeInteger(objective) || objective <= 0)
     throw new Error(`${command} requires --objective N`);
+  const savePlan = (output: string, candidate: PlanCandidate): void => {
+    if (!output.startsWith("/"))
+      throw new Error("Plan output requires an absolute file path");
+    const target = resolve(config.checkout);
+    const destination = resolve(output);
+    if (destination === target || destination.startsWith(`${target}${sep}`))
+      throw new Error("Plan output must stay outside the target checkout");
+    mkdirSync(dirname(destination), { recursive: true, mode: 0o700 });
+    writeFileSync(destination, `${JSON.stringify(candidate, null, 2)}\n`, {
+      flag: "wx",
+      mode: 0o600,
+    });
+  };
+  if (command === "plan") {
+    const candidate = await composePlanning(config).planObjective(objective);
+    const output = option(args, "output");
+    const json = `${JSON.stringify(candidate, null, 2)}\n`;
+    if (output) {
+      savePlan(output, candidate);
+      console.log(
+        `Plan for Objective #${objective}: ${candidate.review.status}; saved ${output}`,
+      );
+      if (candidate.review.findings.length)
+        console.log(candidate.review.findings[0]!.question);
+    } else console.log(json.trimEnd());
+    return;
+  } else if (command === "decide") {
+    const planPath = option(args, "plan");
+    const outcome = option(args, "outcome");
+    const actor = option(args, "actor");
+    const reason = option(args, "reason");
+    const output = option(args, "output");
+    if (
+      !planPath ||
+      !actor ||
+      !reason ||
+      !output ||
+      !["accept", "refuse"].includes(outcome ?? "")
+    )
+      throw new Error(
+        "decide requires --plan, --outcome, --actor, --reason, and --output",
+      );
+    const candidate = JSON.parse(
+      readFileSync(planPath, "utf8"),
+    ) as PlanCandidate;
+    const decided = await composePlanning(config).decidePlan(
+      objective,
+      candidate,
+      {
+        actor,
+        outcome: outcome as "accept" | "refuse",
+        answer: option(args, "answer") ?? "",
+        reason,
+      },
+    );
+    savePlan(output, decided);
+    console.log(
+      `Plan decision for Objective #${objective}: ${decided.review.status}; saved ${output}`,
+    );
+    return;
+  }
+  const application = compose(config);
   if (command === "status") {
     const state = readState(config.repository, objective);
     if (!state)
@@ -141,7 +212,15 @@ async function main(): Promise<void> {
     await application.exportAssetSetForReview(objective, item, set, output);
     console.log(`Exported AssetSet ${set} to ${output} for review`);
   } else {
-    const state = await application.runObjective(objective);
+    const planPath = option(args, "plan");
+    const acceptedPlan = planPath
+      ? (JSON.parse(readFileSync(planPath, "utf8")) as PlanCandidate)
+      : undefined;
+    if (!planPath)
+      console.error(
+        "Factory: compiling and independently reviewing a fresh plan",
+      );
+    const state = await application.runObjective(objective, acceptedPlan);
     console.log(
       state.finalValidation?.passed
         ? `Objective #${objective} completed at ${state.integratedSha}; final validation passed`

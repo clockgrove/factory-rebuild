@@ -126,7 +126,10 @@ test("regular application path runs a source-grounded concurrent DAG with stable
       },
     };
     const { application, eventsPath, github } = makeApplication(descriptor);
-    const running = application.runObjective(objective);
+    const acceptedPlan = await application.planObjective(objective);
+    assert.equal(acceptedPlan.review.status, "clean");
+    assert.equal(Object.keys(github.state().issues).length, 0);
+    const running = application.runObjective(objective, acceptedPlan);
     await waitFor(
       () => {
         const starts = readEvents(eventsPath).filter(
@@ -819,7 +822,7 @@ test("partial projection reuses issues and dependency relationships", async () =
           item("second", { path: "second.txt", dependencies: ["first"] }),
         ],
       },
-      objectiveBody: body([command]),
+      objectiveBody: body([command, "test -s first.txt", "test -s second.txt"]),
       fakeRoot: join(root, "fake"),
       actions: {
         first: { files: [{ path: "first.txt", text: "first\n" }] },
