@@ -288,10 +288,12 @@ export interface PlanCandidate {
     at: string;
     outcome: "accept" | "refuse";
     reason: string;
+    graphDigest?: string;
   };
   review: {
-    status: "clean" | "needs-human" | "refused";
+    status: "clean" | "needs-human" | "human-accepted" | "refused";
     revisions: number;
+    failure?: { detail: string; question: string };
     findings: {
       source: string;
       quote: string;
@@ -786,6 +788,36 @@ function checkedFindings(
   return findings;
 }
 
+async function checkedGraphReview(
+  model: PlanningModel,
+  objective: string,
+  baseSha: string,
+  sources: PlanningSource[],
+  graph: WorkGraph,
+): Promise<{
+  findings: ReturnType<typeof checkedFindings>;
+  failure?: { detail: string; question: string };
+}> {
+  try {
+    return {
+      findings: checkedFindings(
+        (await model.reviewGraph({ objective, baseSha, sources, graph }))
+          .findings,
+        sources,
+      ),
+    };
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    return {
+      findings: [],
+      failure: {
+        detail: `Independent graph review could not be validated: ${detail}`,
+        question: `Inspect pinned Work Item graph ${digest(JSON.stringify(graph))} for missing Objective obligations, unsupported scope, citations, dependencies, ownership, and observable acceptance. Do you accept it despite the invalid independent review?`,
+      },
+    };
+  }
+}
+
 /** Compile and independently review a candidate without GitHub or run-state writes. */
 export async function compilePlan(
   objective: number,
@@ -796,16 +828,10 @@ export async function compilePlan(
 ): Promise<PlanCandidate> {
   const sources = planningSources(body, baseSha, checkout);
   let graph = await compileObjective(objective, body, baseSha, checkout, model);
-  let findings = checkedFindings(
-    (
-      await model
-        .reviewGraph({ objective: body, baseSha, sources, graph })
-        .catch(planningFailure)
-    ).findings,
-    sources,
-  );
+  let review = await checkedGraphReview(model, body, baseSha, sources, graph);
+  let findings = review.findings;
   let revisions = 0;
-  if (findings.length) {
+  if (findings.length && !review.failure) {
     try {
       graph = await compileObjective(
         objective,
@@ -817,14 +843,8 @@ export async function compilePlan(
         findings,
       );
       revisions = 1;
-      findings = checkedFindings(
-        (
-          await model
-            .reviewGraph({ objective: body, baseSha, sources, graph })
-            .catch(planningFailure)
-        ).findings,
-        sources,
-      );
+      review = await checkedGraphReview(model, body, baseSha, sources, graph);
+      findings = review.findings;
     } catch (error) {
       if (
         error instanceof Error &&
@@ -857,9 +877,10 @@ export async function compilePlan(
     commands: commandAuthorizations(graph, sources, checkout),
     finalCommands: finalObjectiveCommands(body),
     review: {
-      status: findings.length ? "needs-human" : "clean",
+      status: findings.length || review.failure ? "needs-human" : "clean",
       revisions,
       findings,
+      ...(review.failure ? { failure: review.failure } : {}),
     },
   };
 }
@@ -903,7 +924,17 @@ export function verifyPlanCandidate(
     );
   if (
     !allowPending &&
-    (candidate.review.status !== "clean" || candidate.review.findings.length)
+    !(
+      (candidate.review.status === "clean" &&
+        !candidate.review.findings.length &&
+        !candidate.review.failure) ||
+      (candidate.review.status === "human-accepted" &&
+        !candidate.review.findings.length &&
+        candidate.review.failure !== undefined &&
+        candidate.humanDecision?.outcome === "accept" &&
+        candidate.humanDecision.graphDigest === candidate.graphDigest &&
+        candidate.humanDecision.question === candidate.review.failure.question)
+    )
   )
     throw new Error("Plan needs a specific human source decision before run");
   if (
@@ -941,7 +972,7 @@ export async function resolvePlan(
   verifyPlanCandidate(candidate, objective, body, baseSha, checkout, true);
   if (
     candidate.review.status !== "needs-human" ||
-    !candidate.review.findings.length
+    (!candidate.review.findings.length && !candidate.review.failure)
   )
     throw new Error("This plan has no unresolved specific human question");
   if (
@@ -953,12 +984,15 @@ export async function resolvePlan(
       "A human decision needs actor, reason, and a specific answer when accepted",
     );
   const decision = {
-    question: candidate.review.findings[0]!.question,
+    question:
+      candidate.review.failure?.question ??
+      candidate.review.findings[0]!.question,
     answer: input.answer,
     actor: input.actor,
     at: new Date().toISOString(),
     outcome: input.outcome,
     reason: input.reason,
+    ...(candidate.review.failure ? { graphDigest: candidate.graphDigest } : {}),
   };
   const sources = [
     ...planningSources(body, baseSha, checkout),
@@ -975,6 +1009,18 @@ export async function resolvePlan(
         digest: digest(content),
       })),
       review: { ...candidate.review, status: "refused" },
+    };
+  if (candidate.review.failure)
+    return {
+      ...candidate,
+      humanDecision: decision,
+      sources,
+      sourceDigests: sources.map(({ path, heading, content }) => ({
+        path,
+        ...(heading ? { heading } : {}),
+        digest: digest(content),
+      })),
+      review: { ...candidate.review, status: "human-accepted" },
     };
   const graph = await compileObjective(
     objective,

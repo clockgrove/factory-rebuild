@@ -320,6 +320,81 @@ test("regular application path runs a source-grounded concurrent DAG with stable
   });
 });
 
+test("an explicitly accepted malformed graph review runs the same pinned graph without re-review", async () => {
+  await fixture("malformed-graph-integration", async (root) => {
+    const target = createTarget(root);
+    const command = 'test "$(cat alpha.txt)" = alpha';
+    const graph = {
+      objective,
+      baseSha: target.baseSha,
+      items: [item("alpha", { path: "alpha.txt", command })],
+    };
+    let reviewCount = 0;
+    const planningModel = {
+      async generateStructured() {
+        return structuredClone(graph);
+      },
+      async reviewGraph() {
+        reviewCount += 1;
+        return {
+          findings: [
+            {
+              source: "invented",
+              quote: "not in any pinned source",
+              detail: "Malformed source citation",
+              question: "Approve?",
+            },
+          ],
+        };
+      },
+      async reviewResult(request) {
+        return {
+          findings: request.criteria.map((criterion) => ({
+            criterion,
+            verdict: "pass",
+            source: "OBJECTIVE",
+            quote: "## Acceptance",
+            detail:
+              "The scripted result and command evidence prove this criterion",
+            question: "",
+          })),
+        };
+      },
+    };
+    const { application, github } = makeApplication({
+      config: factoryConfig(
+        target.checkout,
+        "example/malformed-graph-integration",
+        "regular",
+        1,
+      ),
+      graph,
+      objectiveBody: body([command]),
+      fakeRoot: join(root, "fake"),
+      planningModel,
+      actions: { alpha: { files: [{ path: "alpha.txt", text: "alpha\n" }] } },
+    });
+    const candidate = await application.planObjective(objective);
+    assert.equal(candidate.review.status, "needs-human");
+    assert.equal(Object.keys(github.state().issues).length, 0);
+    assert.equal(
+      existsSync(statePath("example/malformed-graph-integration", objective)),
+      false,
+    );
+    const accepted = await application.decidePlan(objective, candidate, {
+      actor: "test operator",
+      outcome: "accept",
+      answer: "I inspected the exact graph and accept its sole item",
+      reason: "Pinned Objective and graph match",
+    });
+    assert.equal(accepted.review.status, "human-accepted");
+    assert.equal(reviewCount, 1);
+    const completed = await application.runObjective(objective, accepted);
+    assert.equal(completed.finalValidation.passed, true);
+    assert.equal(reviewCount, 1);
+  });
+});
+
 test("application lifecycle reattaches once, cancels owned work, and retries only explicitly", async () => {
   await fixture("lifecycle-restart", async (root) => {
     const target = createTarget(root);

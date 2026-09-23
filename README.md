@@ -4,7 +4,7 @@
 
 Factory turns a repository development Objective into source-grounded Work Items, runs bounded coding attempts, validates their exact result trees, and delivers the changes through GitHub. It is an open-source Clockgrove plugin installed for one target repository at a time.
 
-**Version:** `v0.1.2`. Factory runs the local Codex SDK path with a source-grounded dependency DAG, regular pull requests or native linear stacks, human-selected AssetSets, Git LFS, and private diagnostics. See [current build status](https://github.com/clockgrove/factory-rebuild/blob/main/docs/BUILD-STATUS.md) for the published artifact identity and exact Objective acceptance evidence.
+**Version:** `v0.1.3`. Factory runs the local Codex SDK path with a source-grounded dependency DAG, regular pull requests or native linear stacks, human-selected AssetSets, Git LFS, and private diagnostics. See [current build status](https://github.com/clockgrove/factory-rebuild/blob/main/docs/BUILD-STATUS.md) for the published artifact identity and exact Objective acceptance evidence.
 
 ## How it works
 
@@ -15,19 +15,19 @@ Factory turns a repository development Objective into source-grounded Work Items
 
 The target repository owns its product and runtime truth. Factory state and credentials stay outside the target checkout. Factory refuses to run against any Factory source repository.
 
-## Install v0.1.2
+## Install v0.1.3
 
-Install the plugin from the pinned Clockgrove marketplace and its bundled CLI from the matching [release page](https://github.com/clockgrove/factory-rebuild/releases/tag/v0.1.2) on Linux x64 with Node.js 22 or later. Compare the tarball digest with the independent value in [build status](https://github.com/clockgrove/factory-rebuild/blob/main/docs/BUILD-STATUS.md):
+Install the plugin from the pinned Clockgrove marketplace and its bundled CLI from the matching [release page](https://github.com/clockgrove/factory-rebuild/releases/tag/v0.1.3) on Linux x64 with Node.js 22 or later. Compare the tarball digest with the independent value in [build status](https://github.com/clockgrove/factory-rebuild/blob/main/docs/BUILD-STATUS.md):
 
 ```sh
-codex plugin marketplace add clockgrove/factory-rebuild --ref v0.1.2
+codex plugin marketplace add clockgrove/factory-rebuild --ref v0.1.3
 codex plugin add factory@clockgrove
-gh release download v0.1.2 --repo clockgrove/factory-rebuild \
-  --pattern clockgrove-factory-0.1.2.tgz --pattern SHA256SUMS
+gh release download v0.1.3 --repo clockgrove/factory-rebuild \
+  --pattern clockgrove-factory-0.1.3.tgz --pattern SHA256SUMS
 sha256sum --check SHA256SUMS
 # Compare the tarball digest with the independently recorded build status value.
 npm install --offline --ignore-scripts --prefix /absolute/private/factory-prefix \
-  ./clockgrove-factory-0.1.2.tgz
+  ./clockgrove-factory-0.1.3.tgz
 export PATH="/absolute/private/factory-prefix/node_modules/.bin:$PATH"
 factory help
 ```
@@ -36,7 +36,7 @@ The plugin supplies the packaged `director` and `setup` skills; the verified CLI
 
 ## Build from source
 
-For development, the following commands build and install the current checkout as a local candidate. A local build has its own package identity and does not count as installation of the published `v0.1.2` artifact. The [release checklist](https://github.com/clockgrove/factory-rebuild/blob/main/docs/RELEASE-CHECKLIST.md) and [public release procedure](https://github.com/clockgrove/factory-rebuild/blob/main/docs/PUBLIC-RELEASE.md) describe the exact-artifact gate.
+For development, the following commands build and install the current checkout as a local candidate. A local build has its own package identity and does not count as installation of the published `v0.1.3` artifact. The [release checklist](https://github.com/clockgrove/factory-rebuild/blob/main/docs/RELEASE-CHECKLIST.md) and [public release procedure](https://github.com/clockgrove/factory-rebuild/blob/main/docs/PUBLIC-RELEASE.md) describe the exact-artifact gate.
 
 Requires Node.js 22 or later, Git, GitHub CLI authentication for the target repository, and an authenticated Codex SDK environment. Media Objectives also require Git LFS. Clone this repository, then build and install its package in an isolated prefix:
 
@@ -48,7 +48,7 @@ npm run lint
 npm run format:check
 npm test
 npm pack
-npm install --prefix /tmp/factory-candidate ./clockgrove-factory-0.1.2.tgz
+npm install --prefix /tmp/factory-candidate ./clockgrove-factory-0.1.3.tgz
 ```
 
 Bind one target checkout, inspect a read-only plan, and run that exact candidate with the installed CLI:
@@ -77,7 +77,7 @@ An Objective may name additional canonical source paths or a section by exact he
 - `docs/WAVE-0.md#Acceptance`
 ```
 
-Factory reads those bytes from the exact Git base, includes them in the preview with source digests, and ignores dirty checkout edits. Root `AGENTS.md` and `README.md`, when present, are also read from that base. `plan` creates no Work Item issues or run state; its output contains target source text and should stay outside the target checkout. A missing or ambiguous heading stops planning. A sourced graph-review finding allows one revision and re-review. If it remains unresolved, the plan names a specific question; the operator can record an answer with `factory decide --objective ISSUE_NUMBER --plan /absolute/private/plan.json --outcome accept --actor NAME --reason TEXT --answer TEXT --output /absolute/private/decided.json`, or refuse it with `--outcome refuse`. A clean decided plan can be passed to `run --plan`. Running without `--plan` explicitly compiles and reviews a fresh graph. A changed Objective, base, or source packet requires a new plan.
+Factory reads those bytes from the exact Git base, includes them in the preview with source digests, and ignores dirty checkout edits. Root `AGENTS.md` and `README.md`, when present, are also read from that base. `plan` creates no Work Item issues or run state; its output contains target source text and should stay outside the target checkout. A missing or ambiguous heading stops planning. A sourced graph-review finding allows one revision and re-review. If it remains unresolved, the plan names a specific question; the operator can record an answer with `factory decide --objective ISSUE_NUMBER --plan /absolute/private/plan.json --outcome accept --actor NAME --reason TEXT --answer TEXT --output /absolute/private/decided.json`, or refuse it with `--outcome refuse`. If the independent reviewer returns malformed or ungrounded findings, the preview instead records the failure and asks for inspection of the exact pinned graph. An explicit `decide` acceptance preserves that graph as `human-accepted` and does not repeat the failed review; it is not labeled an automated clean review. A clean or human-accepted decided plan can be passed to `run --plan`. Running without `--plan` explicitly compiles and reviews a fresh graph. A changed Objective, base, or source packet requires a new plan.
 Run `/tmp/factory-candidate/node_modules/.bin/factory help` for the installed command list. Factory stores configuration and state outside the target checkout. Never bind it to a Factory source repository.
 
 `status --json` reports the current step, scheduler eligibility, ready or blocked reason, pending result criterion and question, issue/PR/stack identity, exact base/tree/head, final validation, and last error from Factory's atomic state snapshot. `eligible` means dependencies and resources permit scheduling. `ready` is `false` when blocked and `null` when admission depends on provider capacity, which is not persisted in the snapshot. Configured concurrency exhaustion appears as `blockedReason: "capacity"`. Its provider progress flag reflects whether the current attempt has produced an SDK stream. `diagnostics` prints private newline-delimited JSON events; `--follow` streams new events until interrupted. Validation stdout/stderr is emitted while the command runs, including partial lines, followed by exit evidence; split credentials are buffered until they can be redacted. `logs --item` reads the current attempt's worker stdout/stderr, with the same follow option, and reports when no worker output exists. The timeline correlates repository, Objective, run, item, attempt, and operation where known. It includes planning, scheduling, worker lifecycle and SDK progress, validation command output, result review and pending decisions, GitHub delivery, media review/selection, and finalization. SDK usage and tool identity appear only when the SDK reports them; unavailable model identity or progress is never inferred from response text. Treat diagnostic output as sensitive: it may include worker command output and validation stdout/stderr. Factory redacts known credential patterns and configured allowed secret values, but arbitrary target commands may print other private data. Keep terminal capture and any export outside the target checkout.
