@@ -30,6 +30,7 @@ export class RegularDelivery implements DeliveryStrategy {
         pullRequest: existing.number,
         headSha: existing.headSha,
       };
+    if (request.lfs) git(this.checkout, "lfs", "push", "origin", commit);
     git(
       this.checkout,
       "push",

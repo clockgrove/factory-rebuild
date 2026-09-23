@@ -16,9 +16,10 @@ export interface WorkItem {
     source?: string;
   }[];
   brief: string;
-  mediaIntents?: unknown[];
   sourceAssets?: string[];
   expectedOutputRoles?: string[];
+  minimumAssetSets?: number;
+  requiredLfsRoles?: string[];
 }
 
 export interface WorkGraph {
@@ -56,7 +57,7 @@ export interface ExecutionObservation {
 export interface ExecutionResult {
   treeSha: string;
   changeRef: string;
-  assets?: ProducedAssetSet[];
+  assets?: CapturedAssetSet[];
   evidence?: unknown;
 }
 export interface ExecutionDriver {
@@ -138,6 +139,7 @@ export interface DeliveryRequest {
   treeSha: string;
   branch: string;
   baseBranch?: string;
+  lfs?: boolean;
 }
 export interface DeliveryResult {
   branch: string;
@@ -159,8 +161,6 @@ export interface DeliveryStrategy {
 
 export interface ContentMetadata {
   mediaType: string;
-  visibility: "private" | "repository";
-  provenance?: unknown;
 }
 export interface ContentRef {
   digest: string;
@@ -185,7 +185,23 @@ export interface ProducedAssetSet {
     mediaType: string;
     destination?: string;
   }[];
-  provenance?: unknown;
+  provenance: {
+    source: string;
+    rights: string;
+    visibility: "private" | "repository";
+    lineage: string[];
+  };
+}
+
+export interface CapturedAssetSet {
+  id: string;
+  members: {
+    role: string;
+    ref: ContentRef;
+    destination: string;
+  }[];
+  provenance: ProducedAssetSet["provenance"];
+  evidence: { harnessIdentity: string; resultDigest: string };
 }
 
 export interface GraphProjection {

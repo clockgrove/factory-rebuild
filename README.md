@@ -15,7 +15,7 @@ The target repository owns its product and runtime truth. Factory state and cred
 
 ## Try the development package
 
-Requires Node.js 22 or later, Git, GitHub CLI authentication for the target repository, and an authenticated Codex SDK environment. Clone this repository, then build and install its package in an isolated prefix:
+Requires Node.js 22 or later, Git, GitHub CLI authentication for the target repository, and an authenticated Codex SDK environment. Media Objectives also require Git LFS. Clone this repository, then build and install its package in an isolated prefix:
 
 ```sh
 npm ci
@@ -40,6 +40,17 @@ Bind one target checkout and run a GitHub Objective with the installed CLI:
 ```
 
 Use `--delivery native-stack` at install time to deliver maximal linear chains through GitHub's native stacked pull requests. The default is regular PR delivery.
+
+For a media Work Item, the harness returns complete candidate AssetSets and Factory stops for human review. `factory status --objective ISSUE_NUMBER` lists their IDs and digests. Export a candidate outside the target checkout, inspect its image and sidecar, then select the whole set and resume:
+
+```sh
+factory review --objective ISSUE_NUMBER --item WORK_ITEM_ID \
+  --set CANDIDATE_ID --output /absolute/new/review-directory
+factory select --objective ISSUE_NUMBER --item WORK_ITEM_ID --set CANDIDATE_ID
+factory run --objective ISSUE_NUMBER
+```
+
+The target owns its `.gitattributes` policy. Factory checks selected bytes against the committed LFS pointer and a fresh clone after merge. The [public media fixture](test/fixtures/objectives/media-lfs.md) shows the required source, roles, and validation commands. If you use a temporary `XDG_CONFIG_HOME` for Factory, keep the controller's GitHub CLI authentication visible through `GH_CONFIG_DIR` or its normal configuration path.
 
 `factory cancel --objective ISSUE_NUMBER` stops owned local processes. `factory retry --objective ISSUE_NUMBER --item WORK_ITEM_ID` starts a new explicit attempt for a failed or cancelled unpublished item. Managed-agent and sandbox modes are reserved contract shapes and fail preflight until their branches ship.
 

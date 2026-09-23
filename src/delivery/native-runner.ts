@@ -10,6 +10,8 @@ import { validateWorkItem } from "../validation.js";
 import { RegularDelivery } from "./regular.js";
 import { linearDeliveryUnits } from "./plan.js";
 import { NativeStackDelivery, type StackLayer } from "./native-stack.js";
+import { LocalContentStore } from "../content/local.js";
+import { materializeAssetSet } from "../media.js";
 
 export async function runNativeGraph(args: {
   config: FactoryConfig;
@@ -26,6 +28,7 @@ export async function runNativeGraph(args: {
   const commits = new Map<string, string>();
   const regular = new RegularDelivery(config.checkout, github, commits);
   const native = new NativeStackDelivery(config.repository);
+  const contentStore = new LocalContentStore(join(root, "content"));
   const branchFor = (id: string) => `factory/objective-${objective}/${id}`;
   const defaultBranch = github.defaultBranch();
   for (const unit of linearDeliveryUnits(state.graph)) {
@@ -44,6 +47,7 @@ export async function runNativeGraph(args: {
       if (args.cancelled()) throw new Error("Objective cancelled");
       const work = state.work[item.id]!;
       if (work.status === "published") continue;
+      if (state.work[item.id]?.status === "waiting") return;
       if (work.status !== "pending" && work.status !== "running")
         throw new Error(`Work Item ${item.id} cannot enter native delivery`);
       const previous = index ? state.work[unit.items[index - 1]!.id]! : null;
@@ -61,47 +65,76 @@ export async function runNativeGraph(args: {
         work.startedAt = new Date().toISOString();
         save();
       }
-      if (work.step !== "execute" || (work.execution && !work.attempt))
+      if (
+        (work.step !== "execute" && work.step !== "approve-asset") ||
+        (work.execution && !work.attempt)
+      )
         throw new Error(
           `Work Item ${item.id} has ambiguous active state; operator direction required`,
         );
       const perform = async (): Promise<void> => {
-        const handle: ExecutionHandle =
-          work.execution ??
-          (await driver.start({
+        if (work.step === "approve-asset") {
+          const selected = work.assets?.find(
+            (set) => set.id === work.selectedAssetSet,
+          );
+          if (!selected || !work.changeRef)
+            throw new Error("Selected AssetSet or captured change is missing");
+          const applied = await materializeAssetSet({
+            checkout: config.checkout,
+            workRoot: join(root, "asset-materialization"),
+            baseCommit: work.changeRef,
             item,
-            baseSha: itemBase,
-            attemptId: work.attempt,
-          }));
-        if (!work.execution) {
-          work.execution = handle;
-          save();
+            set: selected,
+            store: contentStore,
+          });
+          work.changeRef = applied.changeRef;
+          work.treeSha = applied.treeSha;
+        } else {
+          const handle: ExecutionHandle =
+            work.execution ??
+            (await driver.start({
+              item,
+              baseSha: itemBase,
+              attemptId: work.attempt,
+            }));
+          if (!work.execution) {
+            work.execution = handle;
+            save();
+          }
+          if (args.cancelled()) {
+            await driver.cancel(handle);
+            throw new Error("Objective cancelled");
+          }
+          const result = await driver.collect(handle);
+          if (args.cancelled()) throw new Error("Objective cancelled");
+          work.changeRef = result.changeRef;
+          work.treeSha = result.treeSha;
+          if (result.assets?.length) {
+            work.assets = result.assets;
+            work.status = "waiting";
+            work.step = "approve-asset";
+            save();
+            return;
+          }
         }
-        if (args.cancelled()) {
-          await driver.cancel(handle);
-          throw new Error("Objective cancelled");
-        }
-        const result = await driver.collect(handle);
-        if (args.cancelled()) throw new Error("Objective cancelled");
-        work.changeRef = result.changeRef;
-        work.treeSha = result.treeSha;
         work.step = "validate";
         save();
         work.validation = validateWorkItem(
           config.checkout,
           join(root, "validation"),
           item,
-          result.changeRef,
-          result.treeSha,
+          work.changeRef!,
+          work.treeSha!,
         );
         work.step = "deliver";
         save();
-        commits.set(result.treeSha, result.changeRef);
+        commits.set(work.treeSha!, work.changeRef!);
         const published = await regular.publish({
           item,
           baseSha: itemBase,
-          treeSha: result.treeSha,
+          treeSha: work.treeSha!,
           branch: branchFor(item.id),
+          lfs: Boolean(work.selectedAssetSet),
           baseBranch: previous
             ? branchFor(unit.items[index - 1]!.id)
             : defaultBranch,
@@ -118,6 +151,7 @@ export async function runNativeGraph(args: {
       } finally {
         active.delete(item.id);
       }
+      if (state.work[item.id]?.status === "waiting") return;
     }
     const layers: StackLayer[] = unit.items.map((item) => {
       const work = state.work[item.id]!;

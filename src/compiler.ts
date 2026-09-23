@@ -51,6 +51,10 @@ export const graphSchema = {
             },
           },
           brief: { type: "string" },
+          sourceAssets: { type: "array", items: { type: "string" } },
+          expectedOutputRoles: { type: "array", items: { type: "string" } },
+          minimumAssetSets: { type: "integer" },
+          requiredLfsRoles: { type: "array", items: { type: "string" } },
         },
         required: [
           "id",
@@ -64,6 +68,10 @@ export const graphSchema = {
           "resources",
           "validation",
           "brief",
+          "sourceAssets",
+          "expectedOutputRoles",
+          "minimumAssetSets",
+          "requiredLfsRoles",
         ],
         additionalProperties: false,
       },
@@ -83,7 +91,7 @@ export class CodexPlanningModel implements PlanningModel {
       sandboxMode: "read-only",
       approvalPolicy: "never",
     });
-    const prompt = `Compile this human Objective into the smallest complete dependency-aware Work Item graph. Use parallel lanes only when ownership and resources allow them. Return the requested JSON only. Use exact supplied base SHA and Objective number. Cite only supplied source paths. Give each item explicit non-goals. Choose observable acceptance and owned paths. For every validation command, set provenance to base-observed or source-declared. If source-declared, set source to the exact supplied path that declares it, such as OBJECTIVE or AGENTS.md; if base-observed, set source to an empty string. Do not add deployment, paid services, providers, recovery, or later scope.\n\nObjective:\n${request.objective}\n\nBase: ${request.baseSha}\n\nSources:\n${request.sources.map((s) => `--- ${s.path} ---\n${s.content}`).join("\n")}`;
+    const prompt = `Compile this human Objective into the smallest complete dependency-aware Work Item graph. Use parallel lanes only when ownership and resources allow them. Return the requested JSON only. Use exact supplied base SHA and Objective number. Cite only supplied source paths. Give each item explicit non-goals. Choose observable acceptance and owned paths. For every validation command, set provenance to base-observed or source-declared. If source-declared, set source to the exact supplied path that declares it, such as OBJECTIVE or AGENTS.md; if base-observed, set source to an empty string. List repository source asset paths and expected output roles for media work; use empty arrays for ordinary work. Set minimumAssetSets from the Objective candidate count, or 1 for unspecified media and 0 for ordinary work. List requiredLfsRoles only when a supplied source requires them; the target repository .gitattributes is authoritative. Do not add deployment, paid services, providers, recovery, or later scope.\n\nObjective:\n${request.objective}\n\nBase: ${request.baseSha}\n\nSources:\n${request.sources.map((s) => `--- ${s.path} ---\n${s.content}`).join("\n")}`;
     const result = await thread.run(prompt, { outputSchema: request.schema });
     return JSON.parse(result.finalResponse) as T;
   }
@@ -143,5 +151,40 @@ export async function compileObjective(
   });
   validateGraph(graph, objective, baseSha, new Set(sources.map((s) => s.path)));
   validateCommandProvenance(graph, sources);
+  for (const item of graph.items) {
+    if (
+      new Set(item.expectedOutputRoles ?? []).size !==
+      (item.expectedOutputRoles ?? []).length
+    )
+      throw new Error(
+        `Work Item ${item.id} has duplicate expected output roles`,
+      );
+    if (
+      !Number.isSafeInteger(item.minimumAssetSets) ||
+      (item.minimumAssetSets ?? 0) < 0 ||
+      ((item.expectedOutputRoles?.length ?? 0) > 0 &&
+        (item.minimumAssetSets ?? 0) < 1)
+    )
+      throw new Error(`Work Item ${item.id} has an invalid candidate count`);
+    if (
+      (item.requiredLfsRoles ?? []).some(
+        (role) => !item.expectedOutputRoles?.includes(role),
+      )
+    )
+      throw new Error(
+        `Work Item ${item.id} requires LFS for an unknown output role`,
+      );
+    for (const path of item.sourceAssets ?? []) {
+      if (
+        !/^[A-Za-z0-9_./-]+$/.test(path) ||
+        path.startsWith("/") ||
+        path.split("/").includes("..") ||
+        !existsSync(join(checkout, path))
+      )
+        throw new Error(
+          `Work Item ${item.id} cites an unavailable source asset: ${path}`,
+        );
+    }
+  }
   return graph;
 }
