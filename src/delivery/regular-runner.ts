@@ -10,6 +10,7 @@ import type {
   WorkItem,
 } from "../contracts.js";
 import { materializeAssetSet } from "../media.js";
+import { closeWorkItem } from "../completion.js";
 import { git } from "../process.js";
 import { readyItems } from "../scheduler.js";
 import { validateWorkItem } from "../validation.js";
@@ -41,7 +42,6 @@ export async function runRegularGraph(args: {
   } = args;
   const graph = state.graph;
   const baseSha = state.baseSha;
-  const projected = { issueByItemId: state.issueByItemId };
   let mergeTail: Promise<void> = Promise.resolve();
   const execute = async (
     item: WorkItem,
@@ -126,6 +126,7 @@ export async function runRegularGraph(args: {
           );
         }
         state.integratedSha = observedHead;
+        work.integratedSha = observedHead;
         work.status = "done";
         work.completedAt = new Date().toISOString();
         delete work.step;
@@ -136,10 +137,7 @@ export async function runRegularGraph(args: {
         () => undefined,
       );
       await integrate;
-      await github.closeIssue(
-        projected.issueByItemId[item.id]!,
-        `Completed by PR #${published.pullRequest}; validated tree ${work.treeSha}.`,
-      );
+      await closeWorkItem(state, item.id, github, save, false);
     } catch (error) {
       if (work.status !== "done")
         work.status = args.cancelled() ? "cancelled" : "failed";

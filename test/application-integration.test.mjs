@@ -593,3 +593,112 @@ test("asset selection preserves a complete multi-file set and hydrates target-ow
 function dirnameFor(path) {
   return path.slice(0, path.lastIndexOf("/"));
 }
+
+test("partial projection reuses issues and dependency relationships", async () => {
+  await fixture("projection-replay", async (root) => {
+    const target = createTarget(root);
+    const command = "test -s first.txt && test -s second.txt";
+    const descriptor = {
+      config: factoryConfig(
+        target.checkout,
+        "example/projection-replay",
+        "regular",
+        1,
+      ),
+      graph: {
+        objective,
+        baseSha: target.baseSha,
+        items: [
+          item("first", { path: "first.txt" }),
+          item("second", { path: "second.txt", dependencies: ["first"] }),
+        ],
+      },
+      objectiveBody: body([command]),
+      fakeRoot: join(root, "fake"),
+      actions: {
+        first: { files: [{ path: "first.txt", text: "first\n" }] },
+        second: { files: [{ path: "second.txt", text: "second\n" }] },
+      },
+    };
+    const { application, github } = makeApplication(descriptor);
+    github.failProjectionAfter = 1;
+    await assert.rejects(
+      application.runObjective(objective),
+      /partial projection/,
+    );
+    const firstIssue = github.state().issues.first;
+    assert.equal(github.state().issues.second, undefined);
+    const completed = await application.runObjective(objective);
+    assert.equal(completed.finalValidation.passed, true);
+    assert.equal(github.state().issues.first, firstIssue);
+    assert.equal(Object.keys(github.state().issues).length, 2);
+    assert.deepEqual(github.state().dependencies.second, ["first"]);
+    assert.equal(github.state().closedIssues[firstIssue], true);
+  });
+});
+
+test("close failures replay after merge and final validation without worker or PR replay", async () => {
+  await fixture("closure-replay", async (root) => {
+    const target = createTarget(root);
+    const command = "test -s result.txt";
+    const descriptor = {
+      config: factoryConfig(
+        target.checkout,
+        "example/closure-replay",
+        "regular",
+        1,
+      ),
+      graph: {
+        objective,
+        baseSha: target.baseSha,
+        items: [item("result", { path: "result.txt", command })],
+      },
+      objectiveBody: body([command]),
+      fakeRoot: join(root, "fake"),
+      actions: {
+        result: { files: [{ path: "result.txt", text: "complete\n" }] },
+      },
+    };
+    const { application, github, eventsPath } = makeApplication(descriptor);
+    github.failCloseAfterComment = 100;
+    await assert.rejects(application.runObjective(objective), /close failure/);
+    const afterMerge = readState(descriptor.config.repository, objective);
+    assert.equal(afterMerge.work.result.status, "done");
+    assert.equal(afterMerge.work.result.githubClosure, "pending");
+    assert.equal(afterMerge.error, undefined);
+    assert.match(afterMerge.githubClosureError, /close failure/);
+    const mergedPr = afterMerge.work.result.pullRequest;
+    const expectedHead = github.state().pullRequests[mergedPr].headSha;
+    github.update((state) => {
+      state.pullRequests[mergedPr].headSha = target.baseSha;
+    });
+    await assert.rejects(
+      application.runObjective(objective),
+      /identity changed/,
+    );
+    github.update((state) => {
+      state.pullRequests[mergedPr].headSha = expectedHead;
+    });
+    const counts = () => ({
+      starts: readEvents(eventsPath).filter((event) => event.type === "start")
+        .length,
+      publishes: github
+        .state()
+        .events.filter((event) => event.type === "publish").length,
+      merges: github.state().events.filter((event) => event.type === "merge")
+        .length,
+    });
+    const beforeReplay = counts();
+    github.failCloseAfterComment = objective;
+    await assert.rejects(application.runObjective(objective), /close failure/);
+    const afterValidation = readState(descriptor.config.repository, objective);
+    assert.equal(afterValidation.finalValidation.passed, true);
+    assert.equal(afterValidation.work.result.githubClosure, "complete");
+    assert.equal(afterValidation.objectiveClosure, "pending");
+    const completed = await application.runObjective(objective);
+    assert.equal(completed.objectiveClosure, "complete");
+    assert.deepEqual(counts(), beforeReplay);
+    assert.equal(github.state().issueComments[100].length, 1);
+    assert.equal(github.state().issueComments[objective].length, 1);
+  });
+});

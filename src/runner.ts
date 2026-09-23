@@ -5,6 +5,11 @@ import type { FactoryConfig } from "./config.js";
 import { stateRoot, validateTarget } from "./config.js";
 import type { FactoryState } from "./state.js";
 import { compileObjective } from "./compiler.js";
+import {
+  closeObjectiveIssue,
+  closeWorkItem,
+  GitHubClosureFailure,
+} from "./completion.js";
 import type {
   ContentStore,
   DeliveryStrategy,
@@ -108,7 +113,28 @@ export async function runObjective(
         throw new Error(
           `Objective stopped: ${state.error}. Use explicit retry or operator direction.`,
         );
-      if (state.finalValidation?.passed) return state;
+      if (
+        state.objectiveBodyDigest &&
+        state.objectiveBodyDigest !==
+          createHash("sha256").update(issue.body).digest("hex")
+      )
+        throw new Error(
+          "Objective issue body changed; operator direction required",
+        );
+      const save = () => saveState(path, state!);
+      for (const item of state.graph.items)
+        if (state.work[item.id]?.status === "done")
+          await closeWorkItem(
+            state,
+            item.id,
+            github,
+            save,
+            config.delivery.kind === "native-stack",
+          );
+      if (state.finalValidation?.passed) {
+        await closeObjectiveIssue(state, issue.body, github, save);
+        return state;
+      }
       if (state.cancelRequested || state.cancelledAt)
         throw new Error(
           "Objective was cancelled; use explicit retry or operator direction",
@@ -146,6 +172,9 @@ export async function runObjective(
         baseSha,
         graph,
         objectiveCommands: objectiveCommands(issue.body, graph),
+        objectiveBodyDigest: createHash("sha256")
+          .update(issue.body)
+          .digest("hex"),
         issueByItemId: projected.issueByItemId,
         work: Object.fromEntries(
           graph.items.map((item) => [item.id, { status: "pending" }]),
@@ -219,9 +248,8 @@ export async function runObjective(
     });
     state.finalValidation = { ...finalEvidence, passed: true };
     saveState(path, state);
-    await github.closeIssue(
-      objective,
-      `Factory completed ${graph.items.length} Work Items; final validation passed at ${integratedSha}.`,
+    await closeObjectiveIssue(state, issue.body, github, () =>
+      saveState(path, state),
     );
     return state;
   } catch (error) {
@@ -239,6 +267,8 @@ export async function runObjective(
         for (const work of Object.values(state.work))
           if (work.status === "running" || work.status === "pending")
             work.status = "cancelled";
+      } else if (error instanceof GitHubClosureFailure) {
+        state.githubClosureError = error.message;
       } else {
         state.error = error instanceof Error ? error.message : String(error);
       }
