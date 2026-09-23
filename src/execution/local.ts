@@ -231,7 +231,11 @@ export class LocalExecutionDriver implements ExecutionDriver {
         attemptId: identity,
         sourceAssets,
       });
-      const active = { request, worktree, handle };
+      const active = {
+        request: { ...request, sourceAssets },
+        worktree,
+        handle,
+      };
       this.active.set(identity, active);
       return { provider: "local", identity, data: active };
     } catch (error) {
@@ -268,6 +272,7 @@ export class LocalExecutionDriver implements ExecutionDriver {
         active.request.item,
         result.assets ?? [],
         result.evidence,
+        active.request.sourceAssets,
       );
       rmSync(join(active.worktree, ".factory-assets.json"), { force: true });
       if (

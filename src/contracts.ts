@@ -206,6 +206,7 @@ export interface ProducedAssetSet {
 
 export interface CapturedAssetSet {
   id: string;
+  inputs?: { binding: SourceAssetBinding; ref: ContentRef }[];
   members: {
     role: string;
     ref: ContentRef;

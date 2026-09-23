@@ -159,6 +159,7 @@ export async function captureAssetSets(
   item: WorkItem,
   sets: ProducedAssetSet[],
   evidence: unknown,
+  inputs: { binding: SourceAssetBinding; ref: ContentRef }[] = [],
 ): Promise<CapturedAssetSet[]> {
   parseProducedAssetSets(sets);
   if (new Set(sets.map((set) => set.id)).size !== sets.length)
@@ -255,6 +256,7 @@ export async function captureAssetSets(
         throw new Error(`AssetSet ${set.id} lacks expected role ${role}`);
     captured.push({
       id: set.id,
+      ...(inputs.length && { inputs }),
       members,
       ...(set.relationships && { relationships: set.relationships }),
       provenance,

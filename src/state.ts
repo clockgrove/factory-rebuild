@@ -254,6 +254,27 @@ export function parseFactoryState(
         if (!["private", "repository"].includes(String(provenance.visibility)))
           throw new Error("AssetSet visibility is invalid");
         strings(provenance.lineage, "AssetSet lineage");
+        if (set.inputs !== undefined) {
+          if (!Array.isArray(set.inputs))
+            throw new Error("AssetSet inputs are invalid");
+          for (const rawInput of set.inputs) {
+            const input = record(rawInput, "AssetSet input");
+            const binding = record(input.binding, "AssetSet source binding");
+            string(binding.path, "AssetSet source path");
+            string(binding.role, "AssetSet source role");
+            string(binding.mediaType, "AssetSet source media type");
+            if (!["private", "repository"].includes(String(binding.visibility)))
+              throw new Error("AssetSet source visibility is invalid");
+            const ref = record(input.ref, "AssetSet source ref");
+            sha(ref.digest, "AssetSet source digest", 64);
+            if (
+              !Number.isSafeInteger(ref.bytes) ||
+              Number(ref.bytes) < 0 ||
+              typeof ref.mediaType !== "string"
+            )
+              throw new Error("AssetSet source reference is invalid");
+          }
+        }
         if (!Array.isArray(set.members) || !set.members.length)
           throw new Error("AssetSet has no members");
         const memberRoles = new Set<string>();

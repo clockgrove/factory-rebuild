@@ -127,9 +127,17 @@ test("opaque 3D source and multi-file output retain bindings, relationships, met
         },
       },
     ];
-    const captured = await captureAssetSets(store, staging, item, sets, {
-      harness: "scripted",
-    });
+    const captured = await captureAssetSets(
+      store,
+      staging,
+      item,
+      sets,
+      {
+        harness: "scripted",
+      },
+      imported,
+    );
+    assert.equal(captured[0].inputs[0].ref.digest, imported[0].ref.digest);
     assert.deepEqual(captured[0].relationships, sets[0].relationships);
     assert.deepEqual(
       captured[0].members[0].formatMetadata,
