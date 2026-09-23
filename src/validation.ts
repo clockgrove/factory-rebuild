@@ -199,13 +199,55 @@ export function validateTree(
   }
 }
 
+/** npm resolves scripts and lifecycle hooks from the result worktree. Pin that
+ * implementation to the accepted Objective base before any shell runs. */
+export function assertPinnedNpmScripts(
+  checkout: string,
+  acceptedBaseSha: string,
+  commit: string,
+  commands: string[],
+): void {
+  const npmCommands = commands.filter((check) => /\bnpm\b/.test(check));
+  if (!npmCommands.length) return;
+  if (
+    npmCommands.some(
+      (check) => !/^npm (?:test|run [A-Za-z0-9:_-]+)$/.test(check.trim()),
+    )
+  )
+    throw new Error(
+      "npm validation command blocked: only root npm test or npm run NAME can be pinned",
+    );
+  for (const path of ["package.json", ".npmrc"]) {
+    const blob = (revision: string): string | undefined => {
+      try {
+        return pinnedGit(checkout, "rev-parse", `${revision}:${path}`);
+      } catch {
+        return undefined;
+      }
+    };
+    const before = blob(acceptedBaseSha);
+    const after = blob(commit);
+    if ((path === "package.json" && !before) || before !== after)
+      throw new Error(
+        `npm validation command blocked: ${path} differs from the accepted base`,
+      );
+  }
+}
+
 export function validateWorkItem(
   checkout: string,
   root: string,
   item: WorkItem,
   commit: string,
   treeSha: string,
+  acceptedBaseSha: string,
 ): ValidationEvidence {
+  assertPinnedNpmScripts(
+    checkout,
+    acceptedBaseSha,
+    commit,
+    item.validation.map((v) => v.command),
+  );
   return validateTree(
     checkout,
     root,

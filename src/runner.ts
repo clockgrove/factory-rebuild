@@ -34,6 +34,7 @@ import { runRegularGraph } from "./delivery/regular-runner.js";
 import { git, linuxProcessIdentity, pinnedGit } from "./process.js";
 import {
   AcceptanceDecisionRequired,
+  assertPinnedNpmScripts,
   reviewAcceptance,
   validateTree,
 } from "./validation.js";
@@ -308,6 +309,12 @@ export async function runObjective(
       config.checkout,
       "rev-parse",
       `${integratedSha}^{tree}`,
+    );
+    assertPinnedNpmScripts(
+      config.checkout,
+      state.baseSha,
+      integratedSha,
+      state.objectiveCommands ?? finalObjectiveCommands(issue.body),
     );
     const commandEvidence = validateTree(
       config.checkout,

@@ -112,6 +112,7 @@ export async function runRegularGraph(args: {
         item,
         work.changeRef!,
         work.treeSha!,
+        state.baseSha,
       );
       work.validation = await reviewAcceptance({
         model: args.planningModel,

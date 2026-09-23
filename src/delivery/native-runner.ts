@@ -262,6 +262,7 @@ export async function runNativeGraph(args: {
           item,
           work.changeRef!,
           work.treeSha!,
+          state.baseSha,
         );
         work.validation = await reviewAcceptance({
           model: args.planningModel,

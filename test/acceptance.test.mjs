@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -12,6 +12,7 @@ import {
   AcceptanceDecisionRequired,
   reviewAcceptance,
   validateTree,
+  validateWorkItem,
 } from "../dist/validation.js";
 import { decideResult } from "../dist/runner.js";
 import { readState, saveState, statePath } from "../dist/state-store.js";
@@ -179,6 +180,54 @@ test("Objective criteria use explicit acceptance or the source Goal", () => {
       "### Outcome\n\nDeliver a result.\n\n### What must be true\n\nA user sees the result.\n\n### Boundaries\nNo deployment\n",
     ),
     ["A user sees the result."],
+  );
+});
+
+test("changed npm lifecycle hooks stop validation before any result shell runs", async () => {
+  await withTarget(
+    "npm-scripts",
+    { "package.json": JSON.stringify({ scripts: { test: "true" } }) },
+    async (root, target) => {
+      const marker = join(root, "unexpected-script-execution");
+      writeFileSync(
+        join(target.checkout, "package.json"),
+        JSON.stringify({
+          scripts: { test: "true", pretest: `touch ${marker}` },
+        }),
+      );
+      git(target.checkout, "add", "package.json");
+      git(
+        target.checkout,
+        "-c",
+        "user.name=Factory Test",
+        "-c",
+        "user.email=factory-test@example.com",
+        "commit",
+        "-m",
+        "Add lifecycle hook",
+      );
+      const commit = git(target.checkout, "rev-parse", "HEAD");
+      const treeSha = git(target.checkout, "rev-parse", "HEAD^{tree}");
+      assert.throws(
+        () =>
+          validateWorkItem(
+            target.checkout,
+            join(root, "validation"),
+            item(target.baseSha, [
+              {
+                command: "npm test",
+                provenance: "base-observed",
+                source: "package.json",
+              },
+            ]).items[0],
+            commit,
+            treeSha,
+            target.baseSha,
+          ),
+        /package.json differs from the accepted base/,
+      );
+      assert.equal(existsSync(marker), false);
+    },
   );
 });
 
