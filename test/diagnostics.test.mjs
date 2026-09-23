@@ -30,20 +30,27 @@ test("private diagnostics redact secrets and validation preserves command output
     const target = createTarget(root);
     const emitter = new DiagnosticEmitter("example/diagnostics", 1, [
       "private-credential",
+      "xy",
     ]);
     emitter.emit({
       operation: "test",
       outcome: "failed",
       detail:
-        "Authorization: Bearer abc123 private-credential ghp_abcdefghijklmnopqrstuvwxyz",
+        "Authorization: Bearer abc123 private-credential xy ghp_abcdefghijklmnopqrstuvwxyz",
     });
     const entries = readDiagnostics("example/diagnostics", 1);
     assert.equal(entries.length, 1);
     assert.doesNotMatch(
       JSON.stringify(entries),
-      /private-credential|abc123|ghp_abcdefghijklmnopqrstuvwxyz/,
+      /private-credential|abc123|xy|ghp_abcdefghijklmnopqrstuvwxyz/,
     );
     assert.match(entries[0].detail, /REDACTED/);
+    emitter.emit({ operation: "duplicate", outcome: "observed" });
+    emitter.emit({ operation: "duplicate", outcome: "observed" });
+    const identities = readDiagnostics("example/diagnostics", 1).map(
+      (event) => event.eventId,
+    );
+    assert.equal(new Set(identities).size, 3);
     assert.equal(
       statSync(diagnosticPath("example/diagnostics", 1)).mode & 0o777,
       0o600,

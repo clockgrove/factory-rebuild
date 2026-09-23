@@ -9,6 +9,7 @@ import {
   fstatSync,
   readdirSync,
 } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
 import { stateRoot } from "./config.js";
 import type { FactoryState, WorkState } from "./state.js";
@@ -16,6 +17,7 @@ import { itemsConflict } from "./scheduler.js";
 import { linearDeliveryUnits } from "./delivery/plan.js";
 
 export interface DiagnosticEvent {
+  eventId: string;
   at: string;
   repository: string;
   objective: number;
@@ -42,7 +44,7 @@ export function redactDiagnosticDetail(
     )
     .replace(/(Authorization:\s*Bearer\s+)\S+/gi, "$1[REDACTED]");
   for (const secret of secrets)
-    if (secret.length >= 4) result = result.split(secret).join("[REDACTED]");
+    if (secret.length) result = result.split(secret).join("[REDACTED]");
   return result;
 }
 
@@ -62,9 +64,12 @@ export class DiagnosticEmitter {
     private secrets: string[] = [],
   ) {}
 
-  emit(event: Omit<DiagnosticEvent, "at" | "repository" | "objective">): void {
+  emit(
+    event: Omit<DiagnosticEvent, "eventId" | "at" | "repository" | "objective">,
+  ): void {
     const path = diagnosticPath(this.repository, this.objective);
     const value: DiagnosticEvent = {
+      eventId: randomUUID(),
       at: new Date().toISOString(),
       repository: this.repository,
       objective: this.objective,
@@ -522,7 +527,11 @@ export class StateDiagnostics {
       });
       this.previousIntegrated = this.state.integratedSha;
     }
-    if (this.state.finalValidation?.passed && !this.previousFinal) {
+    if (
+      this.state.finalValidation?.passed &&
+      this.state.objectiveClosure === "complete" &&
+      !this.previousFinal
+    ) {
       this.emitter.emit({
         runId: this.state.runId,
         operation: "objective-finalization",

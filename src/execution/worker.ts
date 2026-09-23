@@ -49,7 +49,7 @@ function redact(value: string, secrets: string[]): string {
     "[REDACTED]",
   );
   for (const secret of secrets)
-    if (secret.length >= 4) result = result.split(secret).join("[REDACTED]");
+    if (secret.length) result = result.split(secret).join("[REDACTED]");
   return result;
 }
 
@@ -60,6 +60,7 @@ function progressEvent(
   commandOffsets: Map<string, number>,
 ): Record<string, unknown> {
   const base: Record<string, unknown> = {
+    eventId: randomUUID(),
     at: new Date().toISOString(),
     attemptId,
     operation: event.type,

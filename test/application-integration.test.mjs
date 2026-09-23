@@ -1131,8 +1131,22 @@ test("close failures replay after merge and final validation without worker or P
     assert.equal(afterValidation.finalValidation.passed, true);
     assert.equal(afterValidation.work.result.githubClosure, "complete");
     assert.equal(afterValidation.objectiveClosure, "pending");
+    assert.equal(
+      readDiagnostics(descriptor.config.repository, objective).filter(
+        (event) => event.operation === "objective-finalization",
+      ).length,
+      0,
+    );
     const completed = await application.runObjective(objective);
     assert.equal(completed.objectiveClosure, "complete");
+    assert.equal(
+      readDiagnostics(descriptor.config.repository, objective).filter(
+        (event) =>
+          event.operation === "objective-finalization" &&
+          event.outcome === "completed",
+      ).length,
+      1,
+    );
     assert.deepEqual(counts(), beforeReplay);
     assert.equal(github.state().issueComments[100].length, 1);
     assert.equal(github.state().issueComments[objective].length, 1);
