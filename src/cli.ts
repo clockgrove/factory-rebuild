@@ -5,10 +5,12 @@ import { configPath, readConfig, stateRoot, validateConfig } from "./config.js";
 import { compose } from "./index.js";
 import {
   cancelObjective,
-  readState,
+  exportAssetSetForReview,
   retryWorkItem,
   runObjective,
+  selectAssetSet,
 } from "./runner.js";
+import { readState } from "./state-store.js";
 import { itemsConflict } from "./scheduler.js";
 import { linearDeliveryUnits } from "./delivery/plan.js";
 
@@ -19,7 +21,7 @@ function option(args: string[], name: string): string | undefined {
 
 function help(): void {
   console.log(
-    `Factory CLI\n\nCommands:\n  install --repository OWNER/REPO --checkout ABSOLUTE_PATH --concurrency N [--delivery regular|native-stack] [--network host|off] [--config PATH]\n  run --objective N [--config PATH]\n  status --objective N [--config PATH]\n  cancel --objective N [--config PATH]\n  retry --objective N --item ID [--config PATH]`,
+    `Factory CLI\n\nCommands:\n  install --repository OWNER/REPO --checkout ABSOLUTE_PATH --concurrency N [--delivery regular|native-stack] [--network host|off] [--config PATH]\n  run --objective N [--config PATH]\n  status --objective N [--config PATH]\n  review --objective N --item ID --set SET_ID --output ABSOLUTE_NEW_DIRECTORY [--config PATH]\n  select --objective N --item ID --set SET_ID [--config PATH]\n  cancel --objective N [--config PATH]\n  retry --objective N --item ID [--config PATH]`,
   );
 }
 
@@ -63,7 +65,9 @@ async function main(): Promise<void> {
     console.log(`Installed Factory for ${repository} at ${path}`);
     return;
   }
-  if (!["run", "status", "cancel", "retry"].includes(command))
+  if (
+    !["run", "status", "review", "select", "cancel", "retry"].includes(command)
+  )
     throw new Error(`Unknown command: ${command}`);
   const config = readConfig(path);
   compose(config);
@@ -109,6 +113,15 @@ async function main(): Promise<void> {
       console.log(
         `Objective #${objective}: ${state.graph.items.map((item) => describe(item.id)).join(", ")}; final validation ${state.finalValidation?.passed ? "passed" : state.cancelledAt ? "cancelled" : state.error ? "failed" : "pending"}${state.error ? `; error: ${state.error}` : ""}`,
       );
+      for (const [id, work] of Object.entries(state.work)) {
+        if (work.status !== "waiting" || work.step !== "approve-asset")
+          continue;
+        console.log(`Work Item ${id} awaits selection. Candidate AssetSets:`);
+        for (const set of work.assets ?? [])
+          console.log(
+            `  ${set.id}: ${set.members.map((member) => `${member.role} → ${member.destination} (${member.ref.digest})`).join(", ")}`,
+          );
+      }
     }
   } else if (command === "cancel") {
     const result = await cancelObjective(config, objective);
@@ -118,10 +131,28 @@ async function main(): Promise<void> {
     if (!item) throw new Error("retry requires --item ID");
     retryWorkItem(config, objective, item);
     console.log(`Work Item ${item} is pending for a new explicit attempt`);
+  } else if (command === "select") {
+    const item = option(args, "item");
+    const set = option(args, "set");
+    if (!item || !set) throw new Error("select requires --item and --set");
+    await selectAssetSet(config, objective, item, set);
+    console.log(
+      `Selected AssetSet ${set} for Work Item ${item}; run the Objective to continue`,
+    );
+  } else if (command === "review") {
+    const item = option(args, "item");
+    const set = option(args, "set");
+    const output = option(args, "output");
+    if (!item || !set || !output)
+      throw new Error("review requires --item, --set, and --output");
+    await exportAssetSetForReview(config, objective, item, set, output);
+    console.log(`Exported AssetSet ${set} to ${output} for review`);
   } else {
     const state = await runObjective(config, objective);
     console.log(
-      `Objective #${objective} completed at ${state.integratedSha}; final validation passed`,
+      state.finalValidation?.passed
+        ? `Objective #${objective} completed at ${state.integratedSha}; final validation passed`
+        : `Objective #${objective} awaits asset selection; use status, select, then run`,
     );
   }
 }

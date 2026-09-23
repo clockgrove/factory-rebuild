@@ -24,6 +24,9 @@ import type {
   HarnessRequest,
   HarnessResult,
 } from "../contracts.js";
+import { LocalContentStore } from "../content/local.js";
+import { captureAssetSets, importSourceAssets } from "../media.js";
+import { parseProducedAssetSets } from "../media.js";
 import {
   linuxProcessIdentity,
   pinnedGit,
@@ -147,10 +150,22 @@ export class CodexHarness implements AgentHarness {
       }
       if (observed.state !== "complete")
         throw new Error(observed.detail ?? "Codex harness worker failed");
-      const result = JSON.parse(readFileSync(data.resultPath, "utf8")) as {
-        evidence?: unknown;
-      };
-      return { evidence: result.evidence };
+      const result: unknown = JSON.parse(readFileSync(data.resultPath, "utf8"));
+      if (!result || typeof result !== "object" || Array.isArray(result))
+        throw new Error("Harness result is not an object");
+      const value = result as Record<string, unknown>;
+      if (
+        value.state !== "complete" ||
+        !value.evidence ||
+        typeof value.evidence !== "object" ||
+        Array.isArray(value.evidence)
+      )
+        throw new Error("Harness completion result lacks structured evidence");
+      const assets =
+        value.assets === undefined
+          ? undefined
+          : parseProducedAssetSets(value.assets);
+      return { evidence: value.evidence, assets };
     }
   }
 }
@@ -177,6 +192,7 @@ export class LocalExecutionDriver implements ExecutionDriver {
     private workRoot: string,
     private harness: AgentHarness,
     private concurrency: number,
+    private contentStore: LocalContentStore,
   ) {}
 
   async availableSlots(): Promise<number> {
@@ -204,11 +220,16 @@ export class LocalExecutionDriver implements ExecutionDriver {
       request.baseSha,
     );
     try {
+      const sourceAssets = await importSourceAssets(
+        this.contentStore,
+        worktree,
+        request.item,
+      );
       const handle = await this.harness.start({
         item: request.item,
         worktree,
         attemptId: identity,
-        sourceAssets: request.sourceAssets,
+        sourceAssets: sourceAssets.map((entry) => entry.ref),
       });
       const active = { request, worktree, handle };
       this.active.set(identity, active);
@@ -241,6 +262,21 @@ export class LocalExecutionDriver implements ExecutionDriver {
           "Worker changed HEAD; expected uncommitted changes at exact base",
         );
       }
+      const assets = await captureAssetSets(
+        this.contentStore,
+        active.worktree,
+        active.request.item,
+        result.assets ?? [],
+        result.evidence,
+      );
+      rmSync(join(active.worktree, ".factory-assets.json"), { force: true });
+      if (
+        active.request.item.expectedOutputRoles?.length &&
+        assets.length < (active.request.item.minimumAssetSets ?? 1)
+      )
+        throw new Error(
+          "Media Work Item did not produce the requested AssetSets",
+        );
       pinnedGit(active.worktree, "add", "-A");
       const paths = pinnedGit(
         active.worktree,
@@ -250,7 +286,7 @@ export class LocalExecutionDriver implements ExecutionDriver {
       )
         .split("\n")
         .filter(Boolean);
-      if (!paths.length)
+      if (!paths.length && !assets.length)
         throw new Error("Worker produced no repository change");
       if (!paths.every((path) => owns(path, active.request.item.ownedPaths))) {
         throw new Error(
@@ -269,23 +305,24 @@ export class LocalExecutionDriver implements ExecutionDriver {
       }
       if (readdirSync(active.worktree).includes(".gitmodules"))
         throw new Error("Worker result contains submodules");
-      pinnedGit(
-        active.worktree,
-        "-c",
-        "user.name=Factory",
-        "-c",
-        "user.email=factory@users.noreply.github.com",
-        "commit",
-        "-m",
-        `Factory: ${active.request.item.title}`,
-      );
+      if (paths.length)
+        pinnedGit(
+          active.worktree,
+          "-c",
+          "user.name=Factory",
+          "-c",
+          "user.email=factory@users.noreply.github.com",
+          "commit",
+          "-m",
+          `Factory: ${active.request.item.title}`,
+        );
       const commit = pinnedGit(active.worktree, "rev-parse", "HEAD");
       const treeSha = pinnedGit(active.worktree, "rev-parse", "HEAD^{tree}");
       return {
         changeRef: commit,
         treeSha,
         evidence: result.evidence,
-        assets: result.assets,
+        assets,
       };
     } finally {
       this.active.delete(handle.identity);

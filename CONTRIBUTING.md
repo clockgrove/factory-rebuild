@@ -16,6 +16,8 @@ npm test
 npm pack --dry-run
 ```
 
+The [Quality workflow](.github/workflows/quality.yml) runs this local gate on pull requests and main. Live GitHub and Codex acceptance remains an explicit disposable-target run.
+
 For behavior that touches GitHub delivery, process lifecycle, or binary content, also test an installed package against a disposable target repository and record the Objective, PR, exact integrated head, and validation result in the pull request.
 
 ## Boundaries
