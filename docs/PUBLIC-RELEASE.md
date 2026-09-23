@@ -4,13 +4,13 @@ This is the release procedure for issue [#25](https://github.com/clockgrove/fact
 
 ## Distribution shape
 
-The [Clockgrove marketplace](../.agents/plugins/marketplace.json) names the plugin at this repository's root and pins `v0.1.0`. Codex loads its manifest and use skills from that Git tag. The TypeScript CLI is built into a separate npm tarball attached to the matching public GitHub Release; marketplace installation does not build the CLI. Installing that tarball fetches its public runtime dependencies from npm and needs no npm publishing account. The repo marketplace is a public distribution source for people who add it; a listing in the universal Plugins Directory would require a separate submission and review.
+The [Clockgrove marketplace](../.agents/plugins/marketplace.json) names the plugin at this repository's root and pins `v0.1.0`. Codex loads its manifest and use skills from that Git tag. The TypeScript CLI and its production dependency tree are built into a separate npm tarball attached to the matching public GitHub Release; marketplace installation does not build the CLI. The bundled tree makes the release install independent of later npm dependency resolution and needs no npm publishing account. The first tarball targets Linux x64 with Node.js 22 or later. The repo marketplace is a public distribution source for people who add it; a listing in the universal Plugins Directory would require a separate submission and review.
 
 The release operator must publish the tag and release asset only after the remaining trunk gates pass. Do not point the marketplace at a moving branch. If the accepted version changes, update the package, manifest, marketplace ref, changelog, and commands here together before tagging.
 
 ## Build one candidate
 
-From a clean source checkout at the accepted commit, with Node.js 22 or later, Git, Git LFS, and public npm access, confirm `git status --porcelain` is empty, then run:
+From a clean Linux x64 source checkout at the accepted commit, with Node.js 22 or later, Git, Git LFS, and public npm access, confirm `git status --porcelain` is empty. Choose an empty absolute release directory outside the checkout, then run:
 
 ```sh
 npm ci
@@ -20,23 +20,35 @@ npm run lint
 npm run format:check
 npm run notices:check
 npm test
+mkdir -p /absolute/empty/release-directory
 npm pack --pack-destination /absolute/empty/release-directory
 cd /absolute/empty/release-directory
 sha256sum clockgrove-factory-0.1.0.tgz > SHA256SUMS
 ```
 
-Inspect the tarball file list for the manifest, installed skills, CLI, license, logo, and notices. Record `git rev-parse HEAD`, package version, tarball SHA-256, and the passing CI run. Create an immutable `v0.1.0` tag at that same commit and attach both `clockgrove-factory-0.1.0.tgz` and `SHA256SUMS` to a public GitHub Release. This procedure does not itself publish or tag anything.
+Inspect the tarball file list for the manifest, installed skills, CLI, license, logo, notices, and bundled production dependency tree. In a separate empty prefix, install the tarball with `npm install --offline --ignore-scripts --prefix /absolute/private/check-prefix ./clockgrove-factory-0.1.0.tgz` using an empty npm cache; verify `factory help`, compare every installed bundled package version with `package-lock.json`, and check that notices cover the same tree. Record `git rev-parse HEAD`, package version, tarball SHA-256, and the passing CI run. Create a protected `v0.1.0` tag at that same commit and attach both `clockgrove-factory-0.1.0.tgz` and `SHA256SUMS` to a public GitHub Release. Record the expected SHA-256 outside the mutable Release assets, in [BUILD-STATUS.md](BUILD-STATUS.md). This procedure does not itself publish or tag anything.
 
 ## Install from public artifacts
 
-In a clean environment, after the release exists:
+In a clean Linux x64 environment with Node.js 22 or later, after the release exists, set aside fresh Factory roots outside the target checkout while keeping GitHub CLI authentication reachable:
+
+```sh
+export GH_CONFIG_DIR="${GH_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/gh}"
+FACTORY_TRIAL_ROOT=$(mktemp -d)
+export XDG_CONFIG_HOME="$FACTORY_TRIAL_ROOT/config"
+export XDG_STATE_HOME="$FACTORY_TRIAL_ROOT/state"
+gh auth status
+```
+
+Then install from the public tag and release assets:
 
 ```sh
 codex plugin marketplace add clockgrove/factory-rebuild --ref v0.1.0
 gh release download v0.1.0 --repo clockgrove/factory-rebuild \
   --pattern clockgrove-factory-0.1.0.tgz --pattern SHA256SUMS
 sha256sum --check SHA256SUMS
-npm install --prefix /absolute/private/factory-prefix ./clockgrove-factory-0.1.0.tgz
+# Also compare the digest with the independently recorded release value in BUILD-STATUS.md.
+npm install --offline --ignore-scripts --prefix /absolute/private/factory-prefix ./clockgrove-factory-0.1.0.tgz
 export PATH="/absolute/private/factory-prefix/node_modules/.bin:$PATH"
 factory help
 ```
@@ -47,7 +59,7 @@ Install and enable `factory@clockgrove` from the Clockgrove source in the Codex 
 
 1. Create a new GitHub repository you control from the [public disposable target fixture](../test/fixtures/disposable-target/) and push its initial `main`. Create its Objective issue from the [release candidate Objective](../test/fixtures/objectives/release-candidate.md), with the required media source and target-owned LFS policy. Use a new repository and fresh `XDG_CONFIG_HOME` and `XDG_STATE_HOME`.
 2. Follow only public instructions and the installed interface. Use `factory install --repository OWNER/REPO --checkout /absolute/target --concurrency 2 --delivery native-stack`; run `factory plan --objective N --output /absolute/private/plan.json`; inspect and resolve any named review question; then run `factory run --objective N --plan /absolute/private/plan.json`.
-3. Use `factory status --objective N` and, when requested, `factory review` and `factory select` with the complete chosen AssetSet and explicit `--bind` for each dependent. Resume with `factory run --objective N`. Inspect the final validation result, GitHub issues/PRs, merged default-branch head, and hydrated media bytes.
+3. Use `factory status --objective N` and, when requested, `factory review` and `factory select` with the complete chosen AssetSet and explicit `--bind` for each dependent. Resume with `factory run --objective N`. If status pauses on a result criterion, inspect its named evidence and exact tree, ask the operator to accept or refuse that criterion, record `factory decide-result --objective N [--item ID] --tree EXACT_TREE_SHA --outcome accept|refuse --actor NAME --reason TEXT`, then resume `factory run --objective N` after acceptance. Include `--item` for a Work Item and omit it for final Objective acceptance. Inspect the final validation result, GitHub issues/PRs, merged default-branch head, and hydrated media bytes.
 4. Record the release URL, tag and commit, tarball digest, marketplace source and installed version, target Objective and PR identities, selected AssetSet and LFS evidence, validated tree, exact final head, final commands, and operator acceptance in [BUILD-STATUS.md](BUILD-STATUS.md). The target repository may be private, but the public report must omit its sensitive content.
 
 Issue #26 is a separate private adopter smoke using this exact published artifact after the public disposable gate succeeds.

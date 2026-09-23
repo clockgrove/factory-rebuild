@@ -40,6 +40,12 @@
   "engines": {
     "node": ">=22"
   },
+  "os": [
+    "linux"
+  ],
+  "cpu": [
+    "x64"
+  ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
@@ -63,5 +69,10 @@
     "@openai/codex-sdk": "0.156.0",
     "@secretlint/secretlint-rule-preset-recommend": "^13.0.5",
     "secretlint": "^13.0.5"
-  }
+  },
+  "bundleDependencies": [
+    "@openai/codex-sdk",
+    "@secretlint/secretlint-rule-preset-recommend",
+    "secretlint"
+  ]
 }
