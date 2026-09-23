@@ -13,6 +13,7 @@ import { dirname, join } from "node:path";
 import { once } from "node:events";
 import test from "node:test";
 import { readState, statePath } from "../dist/state-store.js";
+import { readDiagnostics, statusDocument } from "../dist/diagnostics.js";
 import {
   createTarget,
   factoryConfig,
@@ -150,6 +151,43 @@ test("regular application path runs a source-grounded concurrent DAG with stable
       new Set(initialStarts.map((event) => event.item)),
       new Set(["alpha", "beta"]),
     );
+    const inProgress = readState(descriptor.config.repository, objective);
+    const snapshot = statusDocument(
+      inProgress,
+      descriptor.config.repository,
+      objective,
+      "regular",
+    );
+    assert.equal(
+      snapshot.work.find((work) => work.id === "conflict").blockedReason,
+      "resource:alpha",
+    );
+    assert.equal(
+      snapshot.work.find((work) => work.id === "join").blockedReason,
+      "dependency:alpha",
+    );
+    assert.equal(
+      snapshot.work.find((work) => work.id === "alpha").providerProgress,
+      "unavailable",
+    );
+    const capacityState = structuredClone(inProgress);
+    capacityState.graph.items.find((item) => item.id === "conflict").resources =
+      [];
+    const capacitySnapshot = statusDocument(
+      capacityState,
+      descriptor.config.repository,
+      objective,
+      "regular",
+      [],
+      2,
+    );
+    const capacityWork = capacitySnapshot.work.find(
+      (work) => work.id === "conflict",
+    );
+    assert.equal(capacityWork.eligible, true);
+    assert.equal(capacityWork.ready, false);
+    assert.equal(capacityWork.blockedReason, "capacity");
+    assert.equal(capacitySnapshot.configuredSlots, 0);
     mkdirSync(join(root, "barriers"), { recursive: true });
     writeFileSync(barrier, "go\n");
     const state = await running;
@@ -207,6 +245,78 @@ test("regular application path runs a source-grounded concurrent DAG with stable
       "README.md",
     ]);
     assert.equal(planning[0].baseSha, target.baseSha);
+    const timeline = readDiagnostics(descriptor.config.repository, objective);
+    assert.ok(
+      timeline.some(
+        (event) =>
+          event.operation === "planning" && event.outcome === "completed",
+      ),
+    );
+    assert.ok(
+      timeline.some(
+        (event) =>
+          event.operation === "github-projection" &&
+          event.outcome === "completed",
+      ),
+    );
+    for (const id of ["alpha", "beta", "conflict", "join"]) {
+      const attempt = state.work[id].attempt;
+      assert.ok(
+        timeline.some(
+          (event) =>
+            event.itemId === id &&
+            event.attemptId === attempt &&
+            event.operation === "execute",
+        ),
+      );
+      assert.ok(
+        timeline.some(
+          (event) =>
+            event.itemId === id &&
+            event.operation === "validation-command" &&
+            event.outcome === "completed",
+        ),
+      );
+      assert.ok(
+        timeline.some(
+          (event) => event.itemId === id && event.metadata?.pullRequest,
+        ),
+      );
+      for (const operation of ["github-publication", "github-merge"])
+        assert.ok(
+          timeline.some(
+            (event) =>
+              event.itemId === id &&
+              event.operation === operation &&
+              event.outcome === "completed" &&
+              event.durationMs >= 0,
+          ),
+        );
+      assert.ok(
+        timeline.some(
+          (event) =>
+            event.itemId === id &&
+            event.operation === "acceptance-review" &&
+            event.outcome === "completed" &&
+            event.durationMs >= 0,
+        ),
+      );
+    }
+    assert.ok(
+      timeline.some(
+        (event) =>
+          event.operation === "objective-finalization" &&
+          event.outcome === "completed",
+      ),
+    );
+    assert.ok(
+      timeline.some(
+        (event) =>
+          event.operation === "objective-validation" &&
+          event.outcome === "completed" &&
+          event.durationMs >= 0,
+      ),
+    );
   });
 });
 
@@ -286,6 +396,23 @@ test("application lifecycle reattaches once, cancels owned work, and retries onl
       ).length,
       1,
     );
+    const restartTimeline = readDiagnostics(
+      descriptor.config.repository,
+      objective,
+    );
+    assert.ok(
+      restartTimeline.filter(
+        (event) =>
+          event.operation === "objective-run" && event.outcome === "started",
+      ).length >= 2,
+    );
+    assert.ok(
+      restartTimeline.some(
+        (event) =>
+          event.operation === "harness" &&
+          event.attemptId === resumed.work.restart.attempt,
+      ),
+    );
   });
 
   await fixture("lifecycle-cancel", async (root) => {
@@ -330,6 +457,11 @@ test("application lifecycle reattaches once, cancels owned work, and retries onl
     );
     const cancelled = readState(descriptor.config.repository, objective);
     assert.equal(cancelled.work.retry.status, "cancelled");
+    assert.ok(
+      readDiagnostics(descriptor.config.repository, objective).some(
+        (event) => event.itemId === "retry" && event.outcome === "failed",
+      ),
+    );
     application.retryWorkItem(objective, "retry");
     assert.equal(
       readEvents(eventsPath).filter((event) => event.type === "start").length,
@@ -342,6 +474,18 @@ test("application lifecycle reattaches once, cancels owned work, and retries onl
     assert.equal(
       readEvents(eventsPath).filter((event) => event.type === "start").length,
       2,
+    );
+    const retryTimeline = readDiagnostics(
+      descriptor.config.repository,
+      objective,
+    );
+    assert.ok(retryTimeline.some((event) => event.operation === "work-retry"));
+    assert.ok(
+      retryTimeline.some(
+        (event) =>
+          event.operation === "objective-finalization" &&
+          event.outcome === "completed",
+      ),
     );
   });
 });
@@ -445,6 +589,24 @@ test("native application path runs a linear stack beside an independent replayed
     assert.equal(
       remote.pullRequests[stackPulls[1]].base,
       "factory/objective-1/stack-a",
+    );
+    const timeline = readDiagnostics(descriptor.config.repository, objective);
+    assert.ok(
+      timeline.some(
+        (event) =>
+          event.operation === "github-stack" &&
+          event.outcome === "completed" &&
+          event.durationMs >= 0,
+      ),
+    );
+    assert.ok(
+      timeline.some(
+        (event) =>
+          event.operation === "github-stack-merge" &&
+          event.outcome === "completed" &&
+          event.durationMs >= 0 &&
+          event.metadata?.integratedSha === stackEvent.integratedSha,
+      ),
     );
   });
 });
@@ -589,6 +751,19 @@ test("native execution failure is terminal until an explicit safe retry", async 
     assert.equal(failed.work.retry.status, "failed");
     assert.match(failed.work.retry.error, /Scripted failure for retry/);
     assert.equal(failed.work.retry.pullRequest, undefined);
+    const failureTimeline = readDiagnostics(
+      descriptor.config.repository,
+      objective,
+    );
+    assert.ok(
+      failureTimeline.some(
+        (event) =>
+          event.itemId === "retry" &&
+          event.attemptId === failed.work.retry.attempt &&
+          event.outcome === "failed" &&
+          /Scripted failure/.test(event.detail),
+      ),
+    );
     await assert.rejects(application.runObjective(objective), /explicit retry/);
     application.retryWorkItem(objective, "retry");
     const done = await application.runObjective(objective);
@@ -598,6 +773,19 @@ test("native execution failure is terminal until an explicit safe retry", async 
         (event) => event.type === "start" && event.item === "retry",
       ).length,
       2,
+    );
+    const retryTimeline = readDiagnostics(
+      descriptor.config.repository,
+      objective,
+    );
+    assert.ok(retryTimeline.some((event) => event.operation === "work-retry"));
+    assert.ok(
+      retryTimeline.some(
+        (event) =>
+          event.itemId === "retry" &&
+          event.attemptId === done.work.retry.attempt &&
+          event.outcome === "completed",
+      ),
     );
   });
 });
@@ -794,6 +982,35 @@ test("asset selection preserves a complete multi-file set and hydrates target-ow
     assert.deepEqual(completed.work.media.selection.downstreamItems, [
       "consumer",
     ]);
+    const mediaTimeline = readDiagnostics(
+      descriptor.config.repository,
+      objective,
+    );
+    assert.ok(
+      mediaTimeline.some(
+        (event) =>
+          event.itemId === "media" &&
+          event.operation === "media-review-export" &&
+          event.outcome === "completed",
+      ),
+    );
+    assert.ok(
+      mediaTimeline.some(
+        (event) =>
+          event.itemId === "media" &&
+          event.operation === "media-selection" &&
+          event.metadata?.setId === "candidate-b",
+      ),
+    );
+    assert.ok(
+      mediaTimeline.some(
+        (event) =>
+          event.itemId === "media" &&
+          event.operation === "media-materialization" &&
+          event.outcome === "completed" &&
+          event.durationMs >= 0,
+      ),
+    );
     assert.deepEqual(
       completed.work.media.selection.destinations.map((entry) => entry.role),
       ["model", "metadata"],
@@ -862,6 +1079,15 @@ test("partial projection reuses issues and dependency relationships", async () =
     await assert.rejects(
       application.runObjective(objective),
       /partial projection/,
+    );
+    assert.ok(
+      readDiagnostics(descriptor.config.repository, objective).some(
+        (event) =>
+          event.operation === "github-projection" &&
+          event.outcome === "failed" &&
+          event.durationMs >= 0 &&
+          /partial projection/.test(event.detail),
+      ),
     );
     const firstIssue = github.state().issues.first;
     assert.equal(github.state().issues.second, undefined);
@@ -932,8 +1158,22 @@ test("close failures replay after merge and final validation without worker or P
     assert.equal(afterValidation.finalValidation.passed, true);
     assert.equal(afterValidation.work.result.githubClosure, "complete");
     assert.equal(afterValidation.objectiveClosure, "pending");
+    assert.equal(
+      readDiagnostics(descriptor.config.repository, objective).filter(
+        (event) => event.operation === "objective-finalization",
+      ).length,
+      0,
+    );
     const completed = await application.runObjective(objective);
     assert.equal(completed.objectiveClosure, "complete");
+    assert.equal(
+      readDiagnostics(descriptor.config.repository, objective).filter(
+        (event) =>
+          event.operation === "objective-finalization" &&
+          event.outcome === "completed",
+      ).length,
+      1,
+    );
     assert.deepEqual(counts(), beforeReplay);
     assert.equal(github.state().issueComments[100].length, 1);
     assert.equal(github.state().issueComments[objective].length, 1);

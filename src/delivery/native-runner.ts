@@ -23,6 +23,7 @@ import { materializeAssetSet, selectedInputsForItem } from "../media.js";
 import { itemsConflict } from "../scheduler.js";
 import { transplantIndependentChange } from "./transplant.js";
 import { closeWorkItem } from "../completion.js";
+import type { DiagnosticEmitter } from "../diagnostics.js";
 
 export async function runNativeGraph(args: {
   config: FactoryConfig;
@@ -38,6 +39,7 @@ export async function runNativeGraph(args: {
   save: () => void;
   active: Map<string, Promise<void>>;
   cancelled: () => boolean;
+  diagnostics?: DiagnosticEmitter;
 }): Promise<void> {
   const {
     config,
@@ -195,14 +197,31 @@ export async function runNativeGraph(args: {
           );
           if (!selected || !work.changeRef)
             throw new Error("Selected AssetSet or captured change is missing");
-          const applied = await materializeAssetSet({
-            checkout: config.checkout,
-            workRoot: join(root, "asset-materialization"),
-            baseCommit: work.changeRef,
-            item,
-            set: selected,
-            store: contentStore,
-          });
+          const materialize = () =>
+            materializeAssetSet({
+              checkout: config.checkout,
+              workRoot: join(root, "asset-materialization"),
+              baseCommit: work.changeRef!,
+              item,
+              set: selected,
+              store: contentStore,
+            });
+          const applied = args.diagnostics
+            ? await args.diagnostics.span(
+                {
+                  runId: state.runId,
+                  itemId: item.id,
+                  attemptId: work.attempt,
+                  operation: "media-materialization",
+                  metadata: { setId: selected.id },
+                },
+                materialize,
+                (result) => ({
+                  treeSha: result.treeSha,
+                  headSha: result.changeRef,
+                }),
+              )
+            : await materialize();
           work.changeRef = applied.changeRef;
           work.treeSha = applied.treeSha;
         } else if (work.step === "execute") {
@@ -256,47 +275,111 @@ export async function runNativeGraph(args: {
         }
         work.step = "validate";
         save();
-        work.validation = validateWorkItem(
+        work.validation = await validateWorkItem(
           config.checkout,
           join(root, "validation"),
           item,
           work.changeRef!,
           work.treeSha!,
           state.baseSha,
-        );
-        work.validation = await reviewAcceptance({
-          model: args.planningModel,
-          checkout: config.checkout,
-          baseSha: itemBase,
-          commit: work.changeRef!,
-          evidence: work.validation,
-          criteria: item.acceptance,
-          sources: planningSources(
-            args.objectiveBody,
-            state.baseSha,
-            config.checkout,
-          ),
-          decisions: work.acceptanceDecisions,
-          observations: JSON.stringify({
-            selectedAsset: work.assets?.find(
-              (set) => set.id === work.selectedAssetSet,
+          (entry) =>
+            args.diagnostics?.emit({
+              runId: state.runId,
+              itemId: item.id,
+              attemptId: work.attempt,
+              operation: "validation-command",
+              outcome: entry.passed ? "completed" : "failed",
+              durationMs: entry.durationMs,
+              metadata: {
+                commandIndex: entry.index,
+                exitCode: entry.exitCode,
+                treeSha: work.treeSha!,
+              },
+              detail: entry.output,
+            }),
+          (entry) =>
+            args.diagnostics?.emitStream(
+              {
+                runId: state.runId,
+                itemId: item.id,
+                attemptId: work.attempt,
+                operation: "validation-output",
+                outcome: "observed",
+                metadata: { commandIndex: entry.index, stream: entry.stream },
+              },
+              entry.output,
+              entry.final,
             ),
-          }),
-        });
+        );
+        const reviewResult = () =>
+          reviewAcceptance({
+            model: args.planningModel,
+            checkout: config.checkout,
+            baseSha: itemBase,
+            commit: work.changeRef!,
+            evidence: work.validation!,
+            criteria: item.acceptance,
+            sources: planningSources(
+              args.objectiveBody,
+              state.baseSha,
+              config.checkout,
+            ),
+            decisions: work.acceptanceDecisions,
+            observations: JSON.stringify({
+              selectedAsset: work.assets?.find(
+                (set) => set.id === work.selectedAssetSet,
+              ),
+            }),
+          });
+        work.validation = args.diagnostics
+          ? await args.diagnostics.span(
+              {
+                runId: state.runId,
+                itemId: item.id,
+                attemptId: work.attempt,
+                operation: "acceptance-review",
+                metadata: { treeSha: work.treeSha! },
+              },
+              reviewResult,
+              (result) => ({ criteria: result.criteria?.length ?? 0 }),
+              (error) =>
+                error instanceof AcceptanceDecisionRequired
+                  ? "waiting"
+                  : "failed",
+            )
+          : await reviewResult();
         delete work.acceptancePending;
         work.step = "deliver";
         save();
-        const published = await delivery.publish({
-          item,
-          baseSha: itemBase,
-          treeSha: work.treeSha!,
-          changeRef: work.changeRef!,
-          branch: branchFor(item.id),
-          lfs: Boolean(work.selectedAssetSet),
-          baseBranch: previous
-            ? branchFor(unit.items[index - 1]!.id)
-            : defaultBranch,
-        });
+        const publish = () =>
+          delivery.publish({
+            item,
+            baseSha: itemBase,
+            treeSha: work.treeSha!,
+            changeRef: work.changeRef!,
+            branch: branchFor(item.id),
+            lfs: Boolean(work.selectedAssetSet),
+            baseBranch: previous
+              ? branchFor(unit.items[index - 1]!.id)
+              : defaultBranch,
+          });
+        const published = args.diagnostics
+          ? await args.diagnostics.span(
+              {
+                runId: state.runId,
+                itemId: item.id,
+                attemptId: work.attempt,
+                operation: "github-publication",
+                metadata: {
+                  baseSha: itemBase,
+                  treeSha: work.treeSha!,
+                  headSha: work.changeRef!,
+                },
+              },
+              publish,
+              (result) => ({ pullRequest: result.pullRequest }),
+            )
+          : await publish();
         work.pullRequest = published.pullRequest;
         work.status = "published";
         delete work.step;
@@ -362,23 +445,49 @@ export async function runNativeGraph(args: {
           );
     }
     let integratedSha: string;
+    const mergeOperation = {
+      runId: state.runId,
+      operation: layers.length === 1 ? "github-merge" : "github-stack-merge",
+      metadata: {
+        unit: unit.id,
+        topPullRequest: layers.at(-1)!.pullRequest,
+        headSha: layers.at(-1)!.headSha,
+      },
+    };
     if (layers.length === 1) {
       const layer = layers[0]!;
-      integratedSha = (
-        await github.merge(
-          {
-            number: layer.pullRequest,
-            branch: layer.branch,
-            headSha: layer.headSha,
-          },
-          layer.headSha,
-        )
-      ).integratedSha;
+      const merge = async () =>
+        (
+          await github.merge(
+            {
+              number: layer.pullRequest,
+              branch: layer.branch,
+              headSha: layer.headSha,
+            },
+            layer.headSha,
+          )
+        ).integratedSha;
+      integratedSha = args.diagnostics
+        ? await args.diagnostics.span(mergeOperation, merge, (headSha) => ({
+            integratedSha: headSha,
+          }))
+        : await merge();
     } else {
       state.stackNumbers ??= {};
+      const ensureStack = () => github.ensureNativeStack(layers, defaultBranch);
       const stackNumber =
         state.stackNumbers[unit.id] ??
-        (await github.ensureNativeStack(layers, defaultBranch));
+        (args.diagnostics
+          ? await args.diagnostics.span(
+              {
+                runId: state.runId,
+                operation: "github-stack",
+                metadata: { unit: unit.id, layerCount: layers.length },
+              },
+              ensureStack,
+              (number) => ({ stack: number }),
+            )
+          : await ensureStack());
       if (
         state.stackNumbers[unit.id] &&
         state.stackNumbers[unit.id] !== stackNumber
@@ -397,11 +506,8 @@ export async function runNativeGraph(args: {
         throw new Error(
           "Pending native merge identity changed; operator direction required",
         );
-      integratedSha = await github.mergeNativeStack(
-        layers,
-        defaultBranch,
-        stackNumber,
-        {
+      const mergeStack = () =>
+        github.mergeNativeStack(layers, defaultBranch, stackNumber, {
           resumeUuid: pending?.uuid,
           onPending: (uuid) => {
             state.stackMerges ??= {};
@@ -413,8 +519,14 @@ export async function runNativeGraph(args: {
             save();
           },
           cancelled: args.cancelled,
-        },
-      );
+        });
+      integratedSha = args.diagnostics
+        ? await args.diagnostics.span(
+            mergeOperation,
+            mergeStack,
+            (headSha) => ({ integratedSha: headSha }),
+          )
+        : await mergeStack();
     }
     git(config.checkout, "fetch", "origin", defaultBranch);
     const observedAfter = git(config.checkout, "rev-parse", "FETCH_HEAD");

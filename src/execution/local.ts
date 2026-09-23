@@ -70,7 +70,7 @@ export class CodexHarness implements AgentHarness {
     const logPath = join(root, `${identity}.log`);
     writeFileSync(
       requestPath,
-      `${JSON.stringify({ request, network: this.network })}\n`,
+      `${JSON.stringify({ request, network: this.network, redactionValues: this.allowedSecretNames.map((name) => process.env[name]).filter((value): value is string => Boolean(value)) })}\n`,
       { flag: "wx", mode: 0o600 },
     );
     const log = openSync(logPath, "a", 0o600);

@@ -14,6 +14,7 @@ import { materializeAssetSet, selectedInputsForItem } from "../media.js";
 import { closeWorkItem } from "../completion.js";
 import { git } from "../process.js";
 import { readyItems } from "../scheduler.js";
+import type { DiagnosticEmitter } from "../diagnostics.js";
 import {
   AcceptanceDecisionRequired,
   reviewAcceptance,
@@ -35,6 +36,7 @@ export async function runRegularGraph(args: {
   save: () => void;
   active: Map<string, Promise<void>>;
   cancelled: () => boolean;
+  diagnostics?: DiagnosticEmitter;
 }): Promise<boolean> {
   const {
     config,
@@ -64,14 +66,31 @@ export async function runRegularGraph(args: {
         );
         if (!selected || !work.changeRef)
           throw new Error("Selected AssetSet or captured change is missing");
-        const applied = await materializeAssetSet({
-          checkout: config.checkout,
-          workRoot: join(root, "asset-materialization"),
-          baseCommit: work.changeRef,
-          item,
-          set: selected,
-          store: contentStore,
-        });
+        const materialize = () =>
+          materializeAssetSet({
+            checkout: config.checkout,
+            workRoot: join(root, "asset-materialization"),
+            baseCommit: work.changeRef!,
+            item,
+            set: selected,
+            store: contentStore,
+          });
+        const applied = args.diagnostics
+          ? await args.diagnostics.span(
+              {
+                runId: state.runId,
+                itemId: item.id,
+                attemptId: work.attempt,
+                operation: "media-materialization",
+                metadata: { setId: selected.id },
+              },
+              materialize,
+              (result) => ({
+                treeSha: result.treeSha,
+                headSha: result.changeRef,
+              }),
+            )
+          : await materialize();
         work.changeRef = applied.changeRef;
         work.treeSha = applied.treeSha;
       } else if (work.step !== "validate") {
@@ -106,56 +125,139 @@ export async function runRegularGraph(args: {
       }
       work.step = "validate";
       save();
-      work.validation = validateWorkItem(
+      work.validation = await validateWorkItem(
         config.checkout,
         join(root, "validation"),
         item,
         work.changeRef!,
         work.treeSha!,
         state.baseSha,
-      );
-      work.validation = await reviewAcceptance({
-        model: args.planningModel,
-        checkout: config.checkout,
-        baseSha: itemBase,
-        commit: work.changeRef!,
-        evidence: work.validation,
-        criteria: item.acceptance,
-        sources: planningSources(
-          args.objectiveBody,
-          state.baseSha,
-          config.checkout,
-        ),
-        decisions: work.acceptanceDecisions,
-        observations: JSON.stringify({
-          selectedAsset: work.assets?.find(
-            (set) => set.id === work.selectedAssetSet,
+        (entry) =>
+          args.diagnostics?.emit({
+            runId: state.runId,
+            itemId: item.id,
+            attemptId: work.attempt,
+            operation: "validation-command",
+            outcome: entry.passed ? "completed" : "failed",
+            durationMs: entry.durationMs,
+            metadata: {
+              commandIndex: entry.index,
+              exitCode: entry.exitCode,
+              treeSha: work.treeSha!,
+            },
+            detail: entry.output,
+          }),
+        (entry) =>
+          args.diagnostics?.emitStream(
+            {
+              runId: state.runId,
+              itemId: item.id,
+              attemptId: work.attempt,
+              operation: "validation-output",
+              outcome: "observed",
+              metadata: { commandIndex: entry.index, stream: entry.stream },
+            },
+            entry.output,
+            entry.final,
           ),
-        }),
-      });
+      );
+      const reviewResult = () =>
+        reviewAcceptance({
+          model: args.planningModel,
+          checkout: config.checkout,
+          baseSha: itemBase,
+          commit: work.changeRef!,
+          evidence: work.validation!,
+          criteria: item.acceptance,
+          sources: planningSources(
+            args.objectiveBody,
+            state.baseSha,
+            config.checkout,
+          ),
+          decisions: work.acceptanceDecisions,
+          observations: JSON.stringify({
+            selectedAsset: work.assets?.find(
+              (set) => set.id === work.selectedAssetSet,
+            ),
+          }),
+        });
+      work.validation = args.diagnostics
+        ? await args.diagnostics.span(
+            {
+              runId: state.runId,
+              itemId: item.id,
+              attemptId: work.attempt,
+              operation: "acceptance-review",
+              metadata: { treeSha: work.treeSha! },
+            },
+            reviewResult,
+            (result) => ({ criteria: result.criteria?.length ?? 0 }),
+            (error) =>
+              error instanceof AcceptanceDecisionRequired
+                ? "waiting"
+                : "failed",
+          )
+        : await reviewResult();
       delete work.acceptancePending;
       work.step = "deliver";
       save();
       const branch = `factory/objective-${objective}/${item.id}`;
-      const published = await delivery.publish({
-        item,
-        baseSha: itemBase,
-        treeSha: work.treeSha!,
-        changeRef: work.changeRef!,
-        branch,
-        lfs: Boolean(work.selectedAssetSet),
-      });
+      const publish = () =>
+        delivery.publish({
+          item,
+          baseSha: itemBase,
+          treeSha: work.treeSha!,
+          changeRef: work.changeRef!,
+          branch,
+          lfs: Boolean(work.selectedAssetSet),
+        });
+      const published = args.diagnostics
+        ? await args.diagnostics.span(
+            {
+              runId: state.runId,
+              itemId: item.id,
+              attemptId: work.attempt,
+              operation: "github-publication",
+              metadata: {
+                baseSha: itemBase,
+                treeSha: work.treeSha!,
+                headSha: work.changeRef!,
+              },
+            },
+            publish,
+            (result) => ({ pullRequest: result.pullRequest }),
+          )
+        : await publish();
       work.pullRequest = published.pullRequest;
       save();
       const integrate = mergeTail.then(async () => {
-        const merged = await delivery.merge(published);
-        git(config.checkout, "fetch", "origin", github.defaultBranch());
-        const observedHead = git(config.checkout, "rev-parse", "FETCH_HEAD");
-        if (observedHead !== merged.integratedSha) {
-          throw new Error(
-            `Default branch moved after PR #${published.pullRequest} merged; expected ${merged.integratedSha}, observed ${observedHead}`,
-          );
-        }
+        const merge = async () => {
+          const merged = await delivery.merge(published);
+          git(config.checkout, "fetch", "origin", github.defaultBranch());
+          const observedHead = git(config.checkout, "rev-parse", "FETCH_HEAD");
+          if (observedHead !== merged.integratedSha) {
+            throw new Error(
+              `Default branch moved after PR #${published.pullRequest} merged; expected ${merged.integratedSha}, observed ${observedHead}`,
+            );
+          }
+          return observedHead;
+        };
+        const observedHead = args.diagnostics
+          ? await args.diagnostics.span(
+              {
+                runId: state.runId,
+                itemId: item.id,
+                attemptId: work.attempt,
+                operation: "github-merge",
+                metadata: {
+                  pullRequest: published.pullRequest,
+                  headSha: work.changeRef!,
+                },
+              },
+              merge,
+              (headSha) => ({ integratedSha: headSha }),
+            )
+          : await merge();
         state.integratedSha = observedHead;
         work.integratedSha = observedHead;
         work.status = "done";

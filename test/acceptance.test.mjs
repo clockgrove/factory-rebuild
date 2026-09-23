@@ -231,8 +231,8 @@ test("changed npm and pnpm lifecycle hooks stop validation before any result she
         );
         const commit = git(target.checkout, "rev-parse", "HEAD");
         const treeSha = git(target.checkout, "rev-parse", "HEAD^{tree}");
-        assert.throws(
-          () =>
+        await assert.rejects(
+          async () =>
             validateWorkItem(
               target.checkout,
               join(root, "validation"),
@@ -292,7 +292,7 @@ test("benign package metadata and dependency edits retain selected npm and pnpm 
           "pnpm check",
         ]),
       );
-      const evidence = validateWorkItem(
+      const evidence = await validateWorkItem(
         target.checkout,
         join(root, "validation"),
         item(target.baseSha, [
@@ -461,7 +461,7 @@ test("result review auto-accepts sourced evidence, otherwise asks one exact-tree
     );
     const commit = git(target.checkout, "rev-parse", "HEAD");
     const treeSha = git(target.checkout, "rev-parse", "HEAD^{tree}");
-    const evidence = validateTree(
+    const evidence = await validateTree(
       target.checkout,
       join(root, "validation"),
       commit,
@@ -582,7 +582,7 @@ test("large binary results reach independent review as descriptors, and reviewer
       checkout: target.checkout,
       baseSha: target.baseSha,
       commit,
-      evidence: validateTree(
+      evidence: await validateTree(
         target.checkout,
         join(root, "validation"),
         commit,
@@ -649,7 +649,7 @@ test("a reviewer pass cannot auto-accept truncated result text", async () => {
           checkout: target.checkout,
           baseSha: target.baseSha,
           commit,
-          evidence: validateTree(
+          evidence: await validateTree(
             target.checkout,
             join(root, "validation"),
             commit,
@@ -706,7 +706,7 @@ test("a reviewer pass cannot auto-accept truncated result text", async () => {
         checkout: target.checkout,
         baseSha: target.baseSha,
         commit,
-        evidence: validateTree(
+        evidence: await validateTree(
           target.checkout,
           join(root, "validation-again"),
           commit,

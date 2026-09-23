@@ -25,7 +25,7 @@ export function statePath(repository: string, objective: number): string {
 }
 
 export function saveState(path: string, state: FactoryState): void {
-  mkdirSync(dirname(path), { recursive: true });
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
   const temporary = `${path}.${randomUUID()}.tmp`;
   const fd = openSync(temporary, "wx", 0o600);
   try {

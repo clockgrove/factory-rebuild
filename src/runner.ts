@@ -38,6 +38,7 @@ import {
   reviewAcceptance,
   validateTree,
 } from "./validation.js";
+import { DiagnosticEmitter, StateDiagnostics } from "./diagnostics.js";
 import {
   acquireControllerLock,
   readControllerOwner,
@@ -62,15 +63,39 @@ export async function planObjective(
   services: Pick<ApplicationServices, "planningModel" | "github">,
 ): Promise<PlanCandidate> {
   validateTarget(config.repository, config.checkout);
-  const issue = await services.github.objective(objective);
-  const baseSha = git(config.checkout, "rev-parse", "HEAD");
-  return compilePlan(
-    objective,
-    issue.body,
-    baseSha,
-    config.checkout,
-    services.planningModel,
-  );
+  const diagnostics = new DiagnosticEmitter(config.repository, objective);
+  const started = Date.now();
+  diagnostics.emit({ operation: "planning-preview", outcome: "started" });
+  try {
+    const issue = await services.github.objective(objective);
+    const baseSha = git(config.checkout, "rev-parse", "HEAD");
+    const result = await compilePlan(
+      objective,
+      issue.body,
+      baseSha,
+      config.checkout,
+      services.planningModel,
+    );
+    diagnostics.emit({
+      operation: "planning-preview",
+      outcome: "completed",
+      durationMs: Date.now() - started,
+      metadata: {
+        baseSha,
+        review: result.review.status,
+        itemCount: result.graph.items.length,
+      },
+    });
+    return result;
+  } catch (error) {
+    diagnostics.emit({
+      operation: "planning-preview",
+      outcome: "failed",
+      durationMs: Date.now() - started,
+      detail: error instanceof Error ? error.message : String(error),
+    });
+    throw error;
+  }
 }
 
 export async function decidePlan(
@@ -86,17 +111,37 @@ export async function decidePlan(
   },
 ): Promise<PlanCandidate> {
   validateTarget(config.repository, config.checkout);
-  const issue = await services.github.objective(objective);
-  const baseSha = git(config.checkout, "rev-parse", "HEAD");
-  return resolvePlan(
-    candidate,
-    objective,
-    issue.body,
-    baseSha,
-    config.checkout,
-    services.planningModel,
-    input,
-  );
+  const diagnostics = new DiagnosticEmitter(config.repository, objective);
+  const started = Date.now();
+  diagnostics.emit({ operation: "planning-decision", outcome: "started" });
+  try {
+    const issue = await services.github.objective(objective);
+    const baseSha = git(config.checkout, "rev-parse", "HEAD");
+    const result = await resolvePlan(
+      candidate,
+      objective,
+      issue.body,
+      baseSha,
+      config.checkout,
+      services.planningModel,
+      input,
+    );
+    diagnostics.emit({
+      operation: "planning-decision",
+      outcome: "completed",
+      durationMs: Date.now() - started,
+      metadata: { review: result.review.status },
+    });
+    return result;
+  } catch (error) {
+    diagnostics.emit({
+      operation: "planning-decision",
+      outcome: "failed",
+      durationMs: Date.now() - started,
+      detail: error instanceof Error ? error.message : String(error),
+    });
+    throw error;
+  }
 }
 
 export async function runObjective(
@@ -109,10 +154,28 @@ export async function runObjective(
   if (config.execution.kind !== "local")
     throw new Error("Current trunk supports local execution only");
   const root = stateRoot(config.repository);
-  mkdirSync(root, { recursive: true });
+  mkdirSync(root, { recursive: true, mode: 0o700 });
   const lock = join(root, "controller.lock");
   const lockHandle = acquireControllerLock(lock, objective);
   const path = statePath(config.repository, objective);
+  const diagnostics = new DiagnosticEmitter(
+    config.repository,
+    objective,
+    config.policy.allowedSecretNames
+      .map((name) => process.env[name])
+      .filter((value): value is string => Boolean(value)),
+  );
+  let stateDiagnostics: StateDiagnostics | undefined;
+  const save = (state: FactoryState) => {
+    saveState(path, state);
+    try {
+      stateDiagnostics?.observe();
+    } catch (error) {
+      process.stderr.write(
+        `Factory diagnostics unavailable: ${error instanceof Error ? error.message : String(error)}\n`,
+      );
+    }
+  };
   const active = new Map<string, Promise<void>>();
   const { driver, github, delivery, contentStore, planningModel } = services;
   let stateForSignal: FactoryState | undefined;
@@ -121,7 +184,7 @@ export async function runObjective(
     cancellationRequested = true;
     if (stateForSignal) {
       stateForSignal.cancelRequested = true;
-      saveState(path, stateForSignal);
+      save(stateForSignal);
     }
     if (stateForSignal) {
       for (const id of active.keys()) {
@@ -132,6 +195,7 @@ export async function runObjective(
   };
   process.on("SIGUSR1", onCancel);
   try {
+    diagnostics.emit({ operation: "objective-run", outcome: "started" });
     const issue = await github.objective(objective);
     const configDigest = createHash("sha256")
       .update(JSON.stringify(config))
@@ -172,18 +236,24 @@ export async function runObjective(
         throw new Error(
           "Objective issue body changed; operator direction required",
         );
-      const save = () => saveState(path, state!);
+      stateDiagnostics = new StateDiagnostics(
+        diagnostics,
+        state,
+        config.delivery.kind,
+        config.execution.concurrency,
+      );
+      const saveCurrent = () => save(state!);
       for (const item of state.graph.items)
         if (state.work[item.id]?.status === "done")
           await closeWorkItem(
             state,
             item.id,
             github,
-            save,
+            saveCurrent,
             config.delivery.kind === "native-stack",
           );
       if (state.finalValidation?.passed) {
-        await closeObjectiveIssue(state, issue.body, github, save);
+        await closeObjectiveIssue(state, issue.body, github, saveCurrent);
         return state;
       }
       if (state.cancelRequested || state.cancelledAt)
@@ -203,39 +273,49 @@ export async function runObjective(
         }
       }
       const baseSha = git(config.checkout, "rev-parse", "HEAD");
-      const plan =
-        acceptedPlan ??
-        (await compilePlan(
-          objective,
-          issue.body,
-          baseSha,
-          config.checkout,
-          planningModel,
-        ));
-      verifyPlanCandidate(
-        plan,
-        objective,
-        issue.body,
-        baseSha,
-        config.checkout,
-      );
-      if (acceptedPlan) {
-        const freshReview = await planningModel.reviewGraph({
-          objective: issue.body,
-          baseSha,
-          sources: plan.sources,
-          graph: plan.graph,
-        });
-        if (freshReview.findings.length)
-          throw new Error(
-            `Accepted plan no longer passes independent review: ${freshReview.findings[0]!.question}`,
+      const plan = await diagnostics.span(
+        { operation: "planning", metadata: { baseSha } },
+        async () => {
+          const candidate =
+            acceptedPlan ??
+            (await compilePlan(
+              objective,
+              issue.body,
+              baseSha,
+              config.checkout,
+              planningModel,
+            ));
+          verifyPlanCandidate(
+            candidate,
+            objective,
+            issue.body,
+            baseSha,
+            config.checkout,
           );
-      }
+          if (acceptedPlan) {
+            const freshReview = await planningModel.reviewGraph({
+              objective: issue.body,
+              baseSha,
+              sources: candidate.sources,
+              graph: candidate.graph,
+            });
+            if (freshReview.findings.length)
+              throw new Error(
+                `Accepted plan no longer passes independent review: ${freshReview.findings[0]!.question}`,
+              );
+          }
+          return candidate;
+        },
+        (candidate) => ({ itemCount: candidate.graph.items.length }),
+      );
       const graph = plan.graph;
-      const projected = await github.projectGraph({
-        graph,
-        objectiveIssue: objective,
-      });
+      const projected = await diagnostics.span(
+        {
+          operation: "github-projection",
+          metadata: { itemCount: graph.items.length },
+        },
+        () => github.projectGraph({ graph, objectiveIssue: objective }),
+      );
       state = {
         schemaVersion: 1,
         repository: config.repository,
@@ -253,6 +333,12 @@ export async function runObjective(
           graph.items.map((item) => [item.id, { status: "pending" }]),
         ),
       };
+      stateDiagnostics = new StateDiagnostics(
+        diagnostics,
+        state,
+        config.delivery.kind,
+        config.execution.concurrency,
+      );
     }
     const graph = state.graph;
     validateCommandProvenance(
@@ -261,7 +347,7 @@ export async function runObjective(
       config.checkout,
     );
     stateForSignal = state;
-    saveState(path, state);
+    save(state);
     if (config.delivery.kind === "native-stack") {
       await runNativeGraph({
         config,
@@ -274,9 +360,10 @@ export async function runObjective(
         contentStore,
         github,
         planningModel,
-        save: () => saveState(path, state),
+        save: () => save(state),
         active,
         cancelled: () => cancellationRequested,
+        diagnostics,
       });
       if (graph.items.some((item) => state.work[item.id]?.status === "waiting"))
         return state;
@@ -292,9 +379,10 @@ export async function runObjective(
         contentStore,
         github,
         planningModel,
-        save: () => saveState(path, state),
+        save: () => save(state),
         active,
         cancelled: () => cancellationRequested,
+        diagnostics,
       });
       if (awaitingSelection) return state;
     }
@@ -310,55 +398,102 @@ export async function runObjective(
       "rev-parse",
       `${integratedSha}^{tree}`,
     );
+    const finalValidationStarted = Date.now();
+    diagnostics.emit({
+      runId: state.runId,
+      operation: "objective-validation",
+      outcome: "started",
+      metadata: { integratedSha, treeSha: finalTree },
+    });
     assertPinnedNpmScripts(
       config.checkout,
       state.baseSha,
       integratedSha,
       state.objectiveCommands ?? finalObjectiveCommands(issue.body),
     );
-    const commandEvidence = validateTree(
+    const commandEvidence = await validateTree(
       config.checkout,
       join(root, "final-validation"),
       integratedSha,
       finalTree,
       state.objectiveCommands ?? finalObjectiveCommands(issue.body),
+      (entry) =>
+        diagnostics.emit({
+          runId: state.runId,
+          operation: "objective-validation-command",
+          outcome: entry.passed ? "completed" : "failed",
+          durationMs: entry.durationMs,
+          metadata: { commandIndex: entry.index, exitCode: entry.exitCode },
+          detail: entry.output,
+        }),
+      (entry) =>
+        diagnostics.emitStream(
+          {
+            runId: state.runId,
+            operation: "objective-validation-output",
+            outcome: "observed",
+            metadata: { commandIndex: entry.index, stream: entry.stream },
+          },
+          entry.output,
+          entry.final,
+        ),
     );
     let finalEvidence;
     try {
-      finalEvidence = await reviewAcceptance({
-        model: planningModel,
-        checkout: config.checkout,
-        baseSha: state.baseSha,
-        commit: integratedSha,
-        evidence: commandEvidence,
-        criteria: objectiveCriteria(issue.body),
-        sources: planningSources(issue.body, state.baseSha, config.checkout),
-        decisions: state.finalAcceptanceDecisions,
-        observations: JSON.stringify({
-          integratedSha,
-          work: graph.items.map((item) => {
-            const work = state.work[item.id]!;
-            return {
-              id: item.id,
-              status: work.status,
-              treeSha: work.treeSha,
-              validation: work.validation,
-              pullRequest: work.pullRequest,
-              integratedSha: work.integratedSha,
-              selectedAssetSet: work.selectedAssetSet,
-              selectedAsset: work.assets?.find(
-                (set) => set.id === work.selectedAssetSet,
-              ),
-              selection: work.selection,
-            };
+      const reviewFinal = () =>
+        reviewAcceptance({
+          model: planningModel,
+          checkout: config.checkout,
+          baseSha: state.baseSha,
+          commit: integratedSha,
+          evidence: commandEvidence,
+          criteria: objectiveCriteria(issue.body),
+          sources: planningSources(issue.body, state.baseSha, config.checkout),
+          decisions: state.finalAcceptanceDecisions,
+          observations: JSON.stringify({
+            integratedSha,
+            work: graph.items.map((item) => {
+              const work = state.work[item.id]!;
+              return {
+                id: item.id,
+                status: work.status,
+                treeSha: work.treeSha,
+                validation: work.validation,
+                pullRequest: work.pullRequest,
+                integratedSha: work.integratedSha,
+                selectedAssetSet: work.selectedAssetSet,
+                selectedAsset: work.assets?.find(
+                  (set) => set.id === work.selectedAssetSet,
+                ),
+                selection: work.selection,
+              };
+            }),
           }),
-        }),
-      });
+        });
+      finalEvidence = await diagnostics.span(
+        {
+          runId: state.runId,
+          operation: "objective-acceptance-review",
+          metadata: { treeSha: finalTree, integratedSha },
+        },
+        reviewFinal,
+        (result) => ({ criteria: result.criteria?.length ?? 0 }),
+        (error) =>
+          error instanceof AcceptanceDecisionRequired ? "waiting" : "failed",
+      );
       delete state.finalAcceptancePending;
     } catch (error) {
       if (error instanceof AcceptanceDecisionRequired) {
         state.finalAcceptancePending = error.pending;
-        saveState(path, state);
+        save(state);
+        diagnostics.emit({
+          runId: state.runId,
+          operation: "objective-validation",
+          outcome: "waiting",
+          durationMs: Date.now() - finalValidationStarted,
+          metadata: { treeSha: finalTree },
+          detail: error.pending.question,
+        });
         return state;
       }
       throw error;
@@ -375,12 +510,23 @@ export async function runObjective(
       }),
     });
     state.finalValidation = { ...finalEvidence, passed: true };
-    saveState(path, state);
-    await closeObjectiveIssue(state, issue.body, github, () =>
-      saveState(path, state),
-    );
+    diagnostics.emit({
+      runId: state.runId,
+      operation: "objective-validation",
+      outcome: "completed",
+      durationMs: Date.now() - finalValidationStarted,
+      metadata: { treeSha: finalTree, integratedSha },
+    });
+    save(state);
+    await closeObjectiveIssue(state, issue.body, github, () => save(state));
     return state;
   } catch (error) {
+    diagnostics.emit({
+      runId: stateForSignal?.runId,
+      operation: "objective-run",
+      outcome: "failed",
+      detail: error instanceof Error ? error.message : String(error),
+    });
     for (const item of active.keys()) {
       const handle = readState(config.repository, objective)?.work[item]
         ?.execution;
@@ -400,7 +546,7 @@ export async function runObjective(
       } else {
         state.error = error instanceof Error ? error.message : String(error);
       }
-      saveState(path, state);
+      save(state);
     }
     throw error;
   } finally {
@@ -447,6 +593,11 @@ export async function cancelObjective(
     state.cancelRequested = true;
     state.cancelledAt = new Date().toISOString();
     saveState(statePath(config.repository, objective), state);
+    new DiagnosticEmitter(config.repository, objective).emit({
+      runId: state.runId,
+      operation: "objective-cancel",
+      outcome: "completed",
+    });
     return "cancelled";
   } finally {
     releaseControllerLock(lock, lockHandle);
@@ -491,6 +642,12 @@ export function retryWorkItem(
     delete state.cancelledAt;
     delete state.error;
     saveState(statePath(config.repository, objective), state);
+    new DiagnosticEmitter(config.repository, objective).emit({
+      runId: state.runId,
+      itemId,
+      operation: "work-retry",
+      outcome: "completed",
+    });
   } finally {
     releaseControllerLock(lock, lockHandle);
   }
@@ -575,6 +732,17 @@ export function decideResult(
         state.error = `Final acceptance refused: ${pending.criterion}`;
     }
     saveState(path, state);
+    new DiagnosticEmitter(config.repository, objective).emit({
+      runId: state.runId,
+      itemId: input.item,
+      attemptId: work?.attempt,
+      operation: input.item
+        ? "acceptance-decision"
+        : "objective-acceptance-decision",
+      outcome: input.outcome === "accept" ? "completed" : "failed",
+      metadata: { treeSha: pending.treeSha },
+      detail: input.reason,
+    });
   } finally {
     releaseControllerLock(join(root, "controller.lock"), lockHandle);
   }
@@ -628,6 +796,14 @@ export async function selectAssetSet(
     };
     work.status = "running";
     saveState(statePath(config.repository, objective), state);
+    new DiagnosticEmitter(config.repository, objective).emit({
+      runId: state.runId,
+      itemId,
+      attemptId: work.attempt,
+      operation: "media-selection",
+      outcome: "completed",
+      metadata: { setId, downstreamCount: downstreamItems.length },
+    });
   } finally {
     releaseControllerLock(lock, lockHandle);
   }
@@ -661,4 +837,12 @@ export async function exportAssetSetForReview(
       member.ref,
       join(output, `${member.role}-${basename(member.destination)}`),
     );
+  new DiagnosticEmitter(config.repository, objective).emit({
+    runId: state!.runId,
+    itemId,
+    attemptId: work.attempt,
+    operation: "media-review-export",
+    outcome: "completed",
+    metadata: { setId, memberCount: set.members.length },
+  });
 }

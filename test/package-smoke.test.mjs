@@ -159,6 +159,21 @@ test("fresh packed artifact installs and exposes documented install/status/plan 
       ),
       false,
     );
+    const json = JSON.parse(
+      execFileSync(
+        cli,
+        ["status", "--objective", "1", "--json", "--config", config],
+        { encoding: "utf8", env: environment },
+      ),
+    );
+    assert.equal(json.state, "not-started");
+    assert.deepEqual(json.work, []);
+    const timeline = execFileSync(
+      cli,
+      ["diagnostics", "--objective", "1", "--config", config],
+      { encoding: "utf8", env: environment },
+    );
+    assert.equal(timeline, "");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

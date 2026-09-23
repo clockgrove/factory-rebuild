@@ -2,10 +2,10 @@ import { mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+import { StringDecoder } from "node:string_decoder";
 import type { PlanningModel, WorkItem } from "./contracts.js";
 import {
-  command,
   pinnedGit,
   pinnedGitRaw,
   pinnedGitEnvironment,
@@ -282,13 +282,30 @@ export async function reviewAcceptance(args: {
   return { ...evidence, criteria: proven };
 }
 
-export function validateTree(
+export interface ValidationObservation {
+  index: number;
+  passed: boolean;
+  exitCode: number;
+  durationMs: number;
+  output: string;
+}
+
+export interface ValidationOutputObservation {
+  index: number;
+  stream: "stdout" | "stderr";
+  output: string;
+  final: boolean;
+}
+
+export async function validateTree(
   checkout: string,
   root: string,
   commit: string,
   expectedTree: string,
   commands: string[],
-): ValidationEvidence {
+  observe?: (entry: ValidationObservation) => void,
+  observeOutput?: (entry: ValidationOutputObservation) => void,
+): Promise<ValidationEvidence> {
   mkdirSync(root, { recursive: true });
   const emptyCredentials = join(root, "empty-gh-config");
   mkdirSync(emptyCredentials, { recursive: true, mode: 0o700 });
@@ -301,13 +318,59 @@ export function validateTree(
         `Validation tree mismatch: expected ${expectedTree}, got ${treeSha}`,
       );
     const evidence: ValidationEvidence = { treeSha, commands: [] };
-    for (const check of commands) {
-      command(
-        "sh",
-        ["-lc", check],
-        worktree,
-        sanitizedWorkerEnvironment(emptyCredentials),
-      );
+    for (const [index, check] of commands.entries()) {
+      const started = Date.now();
+      const child = spawn("sh", ["-lc", check], {
+        cwd: worktree,
+        env: sanitizedWorkerEnvironment(emptyCredentials),
+      });
+      let stdout = "";
+      let stderr = "";
+      const watch = (stream: "stdout" | "stderr") => {
+        const decoder = new StringDecoder("utf8");
+        child[stream].on("data", (chunk: Buffer) => {
+          const text = decoder.write(chunk);
+          if (stream === "stdout") stdout += text;
+          else stderr += text;
+          if (text)
+            observeOutput?.({ index, stream, output: text, final: false });
+        });
+        return () => {
+          const trailing = decoder.end();
+          if (stream === "stdout") stdout += trailing;
+          else stderr += trailing;
+          observeOutput?.({ index, stream, output: trailing, final: true });
+        };
+      };
+      const flushStdout = watch("stdout");
+      const flushStderr = watch("stderr");
+      const result = await new Promise<{
+        status: number | null;
+        error?: Error;
+      }>((resolve) => {
+        let error: Error | undefined;
+        child.on("error", (cause: Error) => {
+          error = cause;
+        });
+        child.on("close", (status: number | null) =>
+          resolve({ status, error }),
+        );
+      });
+      flushStdout();
+      flushStderr();
+      const output = `${stdout}${stderr}`;
+      observe?.({
+        index,
+        passed: !result.error && result.status === 0,
+        exitCode: result.status ?? -1,
+        durationMs: Date.now() - started,
+        output,
+      });
+      if (result.error) throw result.error;
+      if (result.status !== 0)
+        throw new Error(
+          `Validation command failed (${result.status}): ${check}: ${output}`,
+        );
       evidence.commands.push({ command: check, passed: true });
     }
     if (pinnedGit(worktree, "status", "--porcelain"))
@@ -488,14 +551,16 @@ export function packageScriptInvocation(
   return { manager, name };
 }
 
-export function validateWorkItem(
+export async function validateWorkItem(
   checkout: string,
   root: string,
   item: WorkItem,
   commit: string,
   treeSha: string,
   acceptedBaseSha: string,
-): ValidationEvidence {
+  observe?: (entry: ValidationObservation) => void,
+  observeOutput?: (entry: ValidationOutputObservation) => void,
+): Promise<ValidationEvidence> {
   assertPinnedNpmScripts(
     checkout,
     acceptedBaseSha,
@@ -508,5 +573,7 @@ export function validateWorkItem(
     commit,
     treeSha,
     item.validation.map((v) => v.command),
+    observe,
+    observeOutput,
   );
 }
