@@ -822,7 +822,7 @@ test("partial projection reuses issues and dependency relationships", async () =
           item("second", { path: "second.txt", dependencies: ["first"] }),
         ],
       },
-      objectiveBody: body([command]),
+      objectiveBody: body([command, "test -s first.txt", "test -s second.txt"]),
       fakeRoot: join(root, "fake"),
       actions: {
         first: { files: [{ path: "first.txt", text: "first\n" }] },

@@ -335,7 +335,9 @@ function pinnedText(checkout: string, baseSha: string, path: string): string {
   try {
     return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
   } catch {
-    throw new Error(`Planning source ${path} is not UTF-8 text at base ${baseSha}`);
+    throw new Error(
+      `Planning source ${path} is not UTF-8 text at base ${baseSha}`,
+    );
   }
 }
 
