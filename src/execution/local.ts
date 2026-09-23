@@ -1,7 +1,17 @@
-import { Codex } from "@openai/codex-sdk";
+import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdirSync, readdirSync, rmSync } from "node:fs";
-import { join } from "node:path";
+import {
+  closeSync,
+  existsSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import type {
   AgentHarness,
   ExecutionDriver,
@@ -14,7 +24,12 @@ import type {
   HarnessRequest,
   HarnessResult,
 } from "../contracts.js";
-import { pinnedGit, sanitizedWorkerEnvironment } from "../process.js";
+import {
+  linuxProcessIdentity,
+  pinnedGit,
+  processGroupExists,
+  sanitizedWorkerEnvironment,
+} from "../process.js";
 
 type Active = {
   request: ExecutionRequest;
@@ -23,76 +38,119 @@ type Active = {
   failure?: string;
 };
 
-export class CodexHarness implements AgentHarness {
-  private active = new Map<
-    string,
-    {
-      signal: AbortController;
-      promise: Promise<HarnessResult>;
-      state: HarnessObservation;
-    }
-  >();
+interface WorkerHandleData {
+  pid: number;
+  startTime: string;
+  requestPath: string;
+  resultPath: string;
+  logPath: string;
+}
 
+export class CodexHarness implements AgentHarness {
   constructor(
     private credentialDirectory: string,
     private network: "host" | "off",
   ) {}
 
   async start(request: HarnessRequest): Promise<HarnessHandle> {
-    const identity = randomUUID();
-    const signal = new AbortController();
-    const state: HarnessObservation = { state: "running" };
-    const codex = new Codex({
-      env: sanitizedWorkerEnvironment(this.credentialDirectory),
-    });
-    const thread = codex.startThread({
-      workingDirectory: request.worktree,
-      sandboxMode: "workspace-write",
-      approvalPolicy: "never",
-      networkAccessEnabled: this.network === "host",
-    });
-    const prompt = `Implement this Work Item in the current repository checkout. Change only the owned paths. Do not commit, push, create issues, create pull requests, or access GitHub credentials. Stop and report if acceptance is impossible.\n\nTitle: ${request.item.title}\nGoal: ${request.item.goal}\nAcceptance:\n${request.item.acceptance.join("\n")}\nOwned paths:\n${request.item.ownedPaths.join("\n")}\nBrief:\n${request.item.brief}`;
-    const promise = thread
-      .run(prompt, { signal: signal.signal })
-      .then((result) => {
-        state.state = "complete";
-        return {
-          evidence: {
-            finalResponse: result.finalResponse,
-            threadId: thread.id,
-            usage: result.usage,
-          },
-        };
-      })
-      .catch((error: unknown) => {
-        state.state = signal.signal.aborted ? "cancelled" : "failed";
-        state.detail = error instanceof Error ? error.message : String(error);
-        throw error;
+    const identity = request.attemptId ?? randomUUID();
+    const root = join(dirname(this.credentialDirectory), "harness");
+    mkdirSync(root, { recursive: true, mode: 0o700 });
+    const requestPath = join(root, `${identity}.request.json`);
+    const resultPath = join(root, `${identity}.result.json`);
+    const logPath = join(root, `${identity}.log`);
+    writeFileSync(
+      requestPath,
+      `${JSON.stringify({ request, network: this.network })}\n`,
+      { flag: "wx", mode: 0o600 },
+    );
+    const log = openSync(logPath, "a", 0o600);
+    let pid: number;
+    try {
+      const worker = fileURLToPath(new URL("./worker.js", import.meta.url));
+      const child = spawn(process.execPath, [worker, requestPath, resultPath], {
+        detached: true,
+        stdio: ["ignore", log, log],
+        env: sanitizedWorkerEnvironment(this.credentialDirectory),
       });
-    void promise.catch(() => undefined);
-    this.active.set(identity, { signal, promise, state });
-    return { identity };
+      if (!child.pid) throw new Error("Failed to launch Codex harness worker");
+      pid = child.pid;
+      child.unref();
+    } finally {
+      closeSync(log);
+    }
+    const identityOnHost = linuxProcessIdentity(pid);
+    if (!identityOnHost || identityOnHost.group !== pid) {
+      throw new Error(
+        "Codex harness worker did not start in its own process group",
+      );
+    }
+    return {
+      identity,
+      data: {
+        pid,
+        startTime: identityOnHost.startTime,
+        requestPath,
+        resultPath,
+        logPath,
+      } satisfies WorkerHandleData,
+    };
   }
 
   async observe(handle: HarnessHandle): Promise<HarnessObservation> {
-    const active = this.active.get(handle.identity);
-    if (!active) throw new Error("Unknown harness handle");
-    return { ...active.state };
+    const data = handle.data as WorkerHandleData;
+    if (existsSync(data.resultPath)) {
+      const result = JSON.parse(readFileSync(data.resultPath, "utf8")) as {
+        state: "complete" | "failed";
+        error?: string;
+      };
+      return result.state === "complete"
+        ? { state: "complete" }
+        : { state: "failed", detail: result.error };
+    }
+    const current = linuxProcessIdentity(data.pid);
+    return current?.startTime === data.startTime &&
+      current.group === data.pid &&
+      current.state !== "Z"
+      ? { state: "running" }
+      : {
+          state: "failed",
+          detail:
+            "Worker exited without a durable result; operator direction required",
+        };
   }
 
   async cancel(handle: HarnessHandle): Promise<void> {
-    const active = this.active.get(handle.identity);
-    if (!active) throw new Error("Unknown harness handle");
-    active.signal.abort();
+    const data = handle.data as WorkerHandleData;
+    const current = linuxProcessIdentity(data.pid);
+    if (current?.startTime !== data.startTime || current.group !== data.pid) {
+      if (!existsSync(data.resultPath))
+        throw new Error("Worker identity changed before cancellation");
+      return;
+    }
+    try {
+      process.kill(-data.pid, "SIGKILL");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+    }
+    while (processGroupExists(data.pid))
+      await new Promise<void>((resolve) => setTimeout(resolve, 20));
   }
 
   async collect(handle: HarnessHandle): Promise<HarnessResult> {
-    const active = this.active.get(handle.identity);
-    if (!active) throw new Error("Unknown harness handle");
-    try {
-      return await active.promise;
-    } finally {
-      this.active.delete(handle.identity);
+    const data = handle.data as WorkerHandleData;
+    for (;;) {
+      const observed = await this.observe(handle);
+      if (observed.state === "running") {
+        await new Promise<void>((resolve) => setTimeout(resolve, 100));
+        continue;
+      }
+      if (observed.state !== "complete")
+        throw new Error(observed.detail ?? "Codex harness worker failed");
+      const result = JSON.parse(readFileSync(data.resultPath, "utf8")) as {
+        evidence?: unknown;
+      };
+      return { evidence: result.evidence };
     }
   }
 }
@@ -106,6 +164,14 @@ function owns(path: string, owned: string[]): boolean {
 export class LocalExecutionDriver implements ExecutionDriver {
   private active = new Map<string, Active>();
 
+  private require(handle: ExecutionHandle): Active {
+    const active =
+      this.active.get(handle.identity) ?? (handle.data as Active | undefined);
+    if (!active || handle.provider !== "local")
+      throw new Error("Unknown local execution handle");
+    return active;
+  }
+
   constructor(
     private checkout: string,
     private workRoot: string,
@@ -118,7 +184,7 @@ export class LocalExecutionDriver implements ExecutionDriver {
   }
 
   async start(request: ExecutionRequest): Promise<ExecutionHandle> {
-    const identity = randomUUID();
+    const identity = request.attemptId ?? randomUUID();
     const worktree = join(this.workRoot, identity);
     mkdirSync(this.workRoot, { recursive: true });
     const verified = pinnedGit(
@@ -141,10 +207,12 @@ export class LocalExecutionDriver implements ExecutionDriver {
       const handle = await this.harness.start({
         item: request.item,
         worktree,
+        attemptId: identity,
         sourceAssets: request.sourceAssets,
       });
-      this.active.set(identity, { request, worktree, handle });
-      return { provider: "local", identity };
+      const active = { request, worktree, handle };
+      this.active.set(identity, active);
+      return { provider: "local", identity, data: active };
     } catch (error) {
       pinnedGit(this.checkout, "worktree", "remove", "--force", worktree);
       throw error;
@@ -152,20 +220,17 @@ export class LocalExecutionDriver implements ExecutionDriver {
   }
 
   async observe(handle: ExecutionHandle): Promise<ExecutionObservation> {
-    const active = this.active.get(handle.identity);
-    if (!active) throw new Error("Unknown local execution handle");
+    const active = this.require(handle);
     return this.harness.observe(active.handle);
   }
 
   async cancel(handle: ExecutionHandle): Promise<void> {
-    const active = this.active.get(handle.identity);
-    if (!active) throw new Error("Unknown local execution handle");
+    const active = this.require(handle);
     await this.harness.cancel(active.handle);
   }
 
   async collect(handle: ExecutionHandle): Promise<ExecutionResult> {
-    const active = this.active.get(handle.identity);
-    if (!active) throw new Error("Unknown local execution handle");
+    const active = this.require(handle);
     try {
       const result = await this.harness.collect(active.handle);
       if (

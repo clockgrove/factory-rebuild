@@ -26,7 +26,7 @@
     "lint": "eslint src",
     "format:check": "prettier --check .",
     "format": "prettier --write .",
-    "test": "node --test",
+    "test": "npm run build && node --test test/*.test.mjs",
     "package": "npm pack --dry-run"
   },
   "devDependencies": {

@@ -78,7 +78,7 @@ export class RealGitHubGateway implements GitHubGateway {
         issueByItemId[item.id] = found.number;
         continue;
       }
-      const body = `${marker}\n\n## Goal\n${item.goal}\n\n## Acceptance\n${item.acceptance.map((a) => `- ${a}`).join("\n")}\n\n## Sources\n${item.citations.map((c) => `- ${c.path}${c.heading ? ` — ${c.heading}` : ""}`).join("\n")}\n\n## Owned paths\n${item.ownedPaths.map((p) => `- ${p}`).join("\n")}\n\n${item.brief}`;
+      const body = `${marker}\n\n## Goal\n${item.goal}\n\n## Acceptance\n${item.acceptance.map((a) => `- ${a}`).join("\n")}\n\n## Non-goals\n${item.nonGoals.map((a) => `- ${a}`).join("\n")}\n\n## Dependencies\n${item.dependencies.length ? item.dependencies.map((id) => `- ${id}`).join("\n") : "- None"}\n\n## Sources\n${item.citations.map((c) => `- ${c.path}${c.heading ? ` — ${c.heading}` : ""}`).join("\n")}\n\n## Owned paths\n${item.ownedPaths.map((p) => `- ${p}`).join("\n")}\n\n## Validation\n${item.validation.map((check) => `- \`${check.command}\` (${check.provenance}${check.source ? `: ${check.source}` : ""})`).join("\n")}\n\n## Brief\n${item.brief}`;
       const url = command("gh", [
         "issue",
         "create",
@@ -93,6 +93,36 @@ export class RealGitHubGateway implements GitHubGateway {
       if (!number)
         throw new Error(`Cannot parse created Work Item issue: ${url}`);
       issueByItemId[item.id] = number;
+    }
+    for (const item of request.graph.items) {
+      if (!item.dependencies.length) continue;
+      const number = issueByItemId[item.id]!;
+      const existing = new Set(
+        command("gh", [
+          "api",
+          "--paginate",
+          `repos/${this.repository}/issues/${number}/dependencies/blocked_by`,
+          "--jq",
+          ".[].number",
+        ])
+          .split("\n")
+          .filter(Boolean)
+          .map(Number),
+      );
+      for (const dependency of item.dependencies) {
+        const blocker = issueByItemId[dependency]!;
+        if (!existing.has(blocker)) {
+          command("gh", [
+            "issue",
+            "edit",
+            String(number),
+            "-R",
+            this.repository,
+            "--add-blocked-by",
+            String(blocker),
+          ]);
+        }
+      }
     }
     return { issueByItemId };
   }

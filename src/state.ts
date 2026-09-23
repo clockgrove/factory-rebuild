@@ -11,10 +11,14 @@ export interface WorkState {
   attempt?: string;
   waitingReason?: string;
   execution?: ExecutionHandle;
+  baseSha?: string;
+  changeRef?: string;
   treeSha?: string;
   validation?: ValidationEvidence;
   pullRequest?: number;
   error?: string;
+  startedAt?: string;
+  completedAt?: string;
 }
 
 export interface FactoryState {
@@ -25,9 +29,12 @@ export interface FactoryState {
   configDigest: string;
   baseSha: string;
   graph: WorkGraph;
+  objectiveCommands?: string[];
   issueByItemId: Record<string, number>;
   work: Record<string, WorkState>;
   integratedSha?: string;
   finalValidation?: ValidationEvidence & { passed: boolean; detail?: string };
+  cancelRequested?: boolean;
+  cancelledAt?: string;
   error?: string;
 }
