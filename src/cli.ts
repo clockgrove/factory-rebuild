@@ -166,6 +166,7 @@ async function main(): Promise<void> {
             config.policy.allowedSecretNames
               .map((name) => process.env[name])
               .filter((value): value is string => Boolean(value)),
+            config.execution.concurrency,
           ),
         ),
       );

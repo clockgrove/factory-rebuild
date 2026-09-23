@@ -275,7 +275,7 @@ export async function runNativeGraph(args: {
         }
         work.step = "validate";
         save();
-        work.validation = validateWorkItem(
+        work.validation = await validateWorkItem(
           config.checkout,
           join(root, "validation"),
           item,
@@ -295,6 +295,16 @@ export async function runNativeGraph(args: {
                 exitCode: entry.exitCode,
                 treeSha: work.treeSha!,
               },
+              detail: entry.output,
+            }),
+          (entry) =>
+            args.diagnostics?.emit({
+              runId: state.runId,
+              itemId: item.id,
+              attemptId: work.attempt,
+              operation: "validation-output",
+              outcome: "observed",
+              metadata: { commandIndex: entry.index, stream: entry.stream },
               detail: entry.output,
             }),
         );

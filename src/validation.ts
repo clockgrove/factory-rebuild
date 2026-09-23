@@ -1,7 +1,8 @@
 import { mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
-import { spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
+import { StringDecoder } from "node:string_decoder";
 import type { PlanningModel, WorkItem } from "./contracts.js";
 import { pinnedGit, sanitizedWorkerEnvironment } from "./process.js";
 
@@ -168,14 +169,21 @@ export interface ValidationObservation {
   output: string;
 }
 
-export function validateTree(
+export interface ValidationOutputObservation {
+  index: number;
+  stream: "stdout" | "stderr";
+  output: string;
+}
+
+export async function validateTree(
   checkout: string,
   root: string,
   commit: string,
   expectedTree: string,
   commands: string[],
   observe?: (entry: ValidationObservation) => void,
-): ValidationEvidence {
+  observeOutput?: (entry: ValidationOutputObservation) => void,
+): Promise<ValidationEvidence> {
   mkdirSync(root, { recursive: true });
   const emptyCredentials = join(root, "empty-gh-config");
   mkdirSync(emptyCredentials, { recursive: true, mode: 0o700 });
@@ -190,13 +198,52 @@ export function validateTree(
     const evidence: ValidationEvidence = { treeSha, commands: [] };
     for (const [index, check] of commands.entries()) {
       const started = Date.now();
-      const result = spawnSync("sh", ["-lc", check], {
+      const child = spawn("sh", ["-lc", check], {
         cwd: worktree,
         env: sanitizedWorkerEnvironment(emptyCredentials),
-        encoding: "utf8",
-        maxBuffer: Number.MAX_SAFE_INTEGER,
       });
-      const output = `${result.stdout ?? ""}${result.stderr ?? ""}`;
+      let stdout = "";
+      let stderr = "";
+      const watch = (stream: "stdout" | "stderr") => {
+        const decoder = new StringDecoder("utf8");
+        let pending = "";
+        child[stream].on("data", (chunk: Buffer) => {
+          const text = decoder.write(chunk);
+          if (stream === "stdout") stdout += text;
+          else stderr += text;
+          pending += text;
+          let newline: number;
+          while ((newline = pending.indexOf("\n")) >= 0) {
+            const line = pending.slice(0, newline + 1);
+            pending = pending.slice(newline + 1);
+            observeOutput?.({ index, stream, output: line });
+          }
+        });
+        return () => {
+          const trailing = decoder.end();
+          if (stream === "stdout") stdout += trailing;
+          else stderr += trailing;
+          pending += trailing;
+          if (pending) observeOutput?.({ index, stream, output: pending });
+        };
+      };
+      const flushStdout = watch("stdout");
+      const flushStderr = watch("stderr");
+      const result = await new Promise<{
+        status: number | null;
+        error?: Error;
+      }>((resolve) => {
+        let error: Error | undefined;
+        child.on("error", (cause: Error) => {
+          error = cause;
+        });
+        child.on("close", (status: number | null) =>
+          resolve({ status, error }),
+        );
+      });
+      flushStdout();
+      flushStderr();
+      const output = `${stdout}${stderr}`;
       observe?.({
         index,
         passed: !result.error && result.status === 0,
@@ -258,7 +305,7 @@ export function assertPinnedNpmScripts(
   }
 }
 
-export function validateWorkItem(
+export async function validateWorkItem(
   checkout: string,
   root: string,
   item: WorkItem,
@@ -266,7 +313,8 @@ export function validateWorkItem(
   treeSha: string,
   acceptedBaseSha: string,
   observe?: (entry: ValidationObservation) => void,
-): ValidationEvidence {
+  observeOutput?: (entry: ValidationOutputObservation) => void,
+): Promise<ValidationEvidence> {
   assertPinnedNpmScripts(
     checkout,
     acceptedBaseSha,
@@ -280,5 +328,6 @@ export function validateWorkItem(
     treeSha,
     item.validation.map((v) => v.command),
     observe,
+    observeOutput,
   );
 }

@@ -209,8 +209,8 @@ test("changed npm lifecycle hooks stop validation before any result shell runs",
       );
       const commit = git(target.checkout, "rev-parse", "HEAD");
       const treeSha = git(target.checkout, "rev-parse", "HEAD^{tree}");
-      assert.throws(
-        () =>
+      await assert.rejects(
+        async () =>
           validateWorkItem(
             target.checkout,
             join(root, "validation"),
@@ -248,7 +248,7 @@ test("result review auto-accepts sourced evidence, otherwise asks one exact-tree
     );
     const commit = git(target.checkout, "rev-parse", "HEAD");
     const treeSha = git(target.checkout, "rev-parse", "HEAD^{tree}");
-    const evidence = validateTree(
+    const evidence = await validateTree(
       target.checkout,
       join(root, "validation"),
       commit,

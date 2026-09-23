@@ -170,6 +170,24 @@ test("regular application path runs a source-grounded concurrent DAG with stable
       snapshot.work.find((work) => work.id === "alpha").providerProgress,
       "unavailable",
     );
+    const capacityState = structuredClone(inProgress);
+    capacityState.graph.items.find((item) => item.id === "conflict").resources =
+      [];
+    const capacitySnapshot = statusDocument(
+      capacityState,
+      descriptor.config.repository,
+      objective,
+      "regular",
+      [],
+      2,
+    );
+    const capacityWork = capacitySnapshot.work.find(
+      (work) => work.id === "conflict",
+    );
+    assert.equal(capacityWork.eligible, true);
+    assert.equal(capacityWork.ready, false);
+    assert.equal(capacityWork.blockedReason, "capacity");
+    assert.equal(capacitySnapshot.configuredSlots, 0);
     mkdirSync(join(root, "barriers"), { recursive: true });
     writeFileSync(barrier, "go\n");
     const state = await running;

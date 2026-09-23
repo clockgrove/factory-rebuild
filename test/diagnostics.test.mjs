@@ -22,7 +22,7 @@ import { validateTree } from "../dist/validation.js";
 import { stateRoot } from "../dist/config.js";
 import { createTarget } from "./support/integration-fixture.mjs";
 
-test("private diagnostics redact secrets and validation preserves command output", () => {
+test("private diagnostics redact secrets and validation streams command output", async () => {
   const root = mkdtempSync(join(tmpdir(), "factory-diagnostics-"));
   const previous = process.env.XDG_STATE_HOME;
   process.env.XDG_STATE_HOME = join(root, "state");
@@ -31,18 +31,19 @@ test("private diagnostics redact secrets and validation preserves command output
     const emitter = new DiagnosticEmitter("example/diagnostics", 1, [
       "private-credential",
       "xy",
+      "multi\nline",
     ]);
     emitter.emit({
       operation: "test",
       outcome: "failed",
       detail:
-        "Authorization: Bearer abc123 private-credential xy ghp_abcdefghijklmnopqrstuvwxyz",
+        "Authorization: Bearer abc123 private-credential xy multi\nline ghp_abcdefghijklmnopqrstuvwxyz",
     });
     const entries = readDiagnostics("example/diagnostics", 1);
     assert.equal(entries.length, 1);
     assert.doesNotMatch(
       JSON.stringify(entries),
-      /private-credential|abc123|xy|ghp_abcdefghijklmnopqrstuvwxyz/,
+      /private-credential|abc123|xy|multi|line|ghp_abcdefghijklmnopqrstuvwxyz/,
     );
     assert.match(entries[0].detail, /REDACTED/);
     emitter.emit({ operation: "duplicate", outcome: "observed" });
@@ -61,14 +62,40 @@ test("private diagnostics redact secrets and validation preserves command output
       { encoding: "utf8" },
     ).trim();
     const observed = [];
-    validateTree(
+    let firstOutput;
+    const firstOutputSeen = new Promise((resolve) => {
+      firstOutput = resolve;
+    });
+    let finished = false;
+    const validation = validateTree(
       target.checkout,
       join(root, "validation"),
       target.baseSha,
       tree,
-      ["printf 'visible output\\n'"],
+      ["printf 'visible output\\n'; sleep 0.2; printf 'later output\\n'"],
       (entry) => observed.push(entry),
+      (entry) => {
+        emitter.emit({
+          operation: "validation-output",
+          outcome: "observed",
+          detail: entry.output,
+        });
+        firstOutput();
+      },
     );
+    void validation.finally(() => {
+      finished = true;
+    });
+    await firstOutputSeen;
+    assert.equal(finished, false);
+    assert.ok(
+      readDiagnostics("example/diagnostics", 1).some(
+        (event) =>
+          event.operation === "validation-output" &&
+          /visible output/.test(event.detail),
+      ),
+    );
+    await validation;
     assert.equal(observed.length, 1);
     assert.equal(observed[0].passed, true);
     assert.match(observed[0].output, /visible output/);

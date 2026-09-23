@@ -240,6 +240,7 @@ export async function runObjective(
         diagnostics,
         state,
         config.delivery.kind,
+        config.execution.concurrency,
       );
       const saveCurrent = () => save(state!);
       for (const item of state.graph.items)
@@ -336,6 +337,7 @@ export async function runObjective(
         diagnostics,
         state,
         config.delivery.kind,
+        config.execution.concurrency,
       );
     }
     const graph = state.graph;
@@ -409,7 +411,7 @@ export async function runObjective(
       integratedSha,
       state.objectiveCommands ?? finalObjectiveCommands(issue.body),
     );
-    const commandEvidence = validateTree(
+    const commandEvidence = await validateTree(
       config.checkout,
       join(root, "final-validation"),
       integratedSha,
@@ -422,6 +424,14 @@ export async function runObjective(
           outcome: entry.passed ? "completed" : "failed",
           durationMs: entry.durationMs,
           metadata: { commandIndex: entry.index, exitCode: entry.exitCode },
+          detail: entry.output,
+        }),
+      (entry) =>
+        diagnostics.emit({
+          runId: state.runId,
+          operation: "objective-validation-output",
+          outcome: "observed",
+          metadata: { commandIndex: entry.index, stream: entry.stream },
           detail: entry.output,
         }),
     );

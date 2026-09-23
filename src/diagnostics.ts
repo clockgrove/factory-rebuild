@@ -44,7 +44,8 @@ export function redactDiagnosticDetail(
     )
     .replace(/(Authorization:\s*Bearer\s+)\S+/gi, "$1[REDACTED]");
   for (const secret of secrets)
-    if (secret.length) result = result.split(secret).join("[REDACTED]");
+    for (const line of secret.split(/\r?\n/))
+      if (line.length) result = result.split(line).join("[REDACTED]");
   return result;
 }
 
@@ -254,6 +255,7 @@ export function statusDocument(
   objective: number,
   delivery: "regular" | "native-stack",
   secrets: string[] = [],
+  concurrency?: number,
 ) {
   if (!state)
     return { repository, objective, state: "not-started" as const, work: [] };
@@ -272,9 +274,17 @@ export function statusDocument(
           detail: redactDiagnosticDetail(pending.detail, secrets),
         }
       : null;
+  const activeCount = Object.values(state.work).filter(
+    (item) => item.status === "running",
+  ).length;
+  const configuredSlots =
+    concurrency === undefined
+      ? undefined
+      : Math.max(0, concurrency - activeCount);
   const work = state.graph.items.map((item) => {
     const current = state.work[item.id]!;
     let blockedReason: string | undefined;
+    let eligible = false;
     if (current.status === "pending") {
       const dependency = item.dependencies.find(
         (id) =>
@@ -290,11 +300,14 @@ export function statusDocument(
           state.work[candidate.id]?.status === "running" &&
           itemsConflict(item, candidate),
       );
+      eligible = !dependency && !conflict;
       blockedReason = dependency
         ? `dependency:${dependency}`
         : conflict
           ? `resource:${conflict.id}`
-          : undefined;
+          : configuredSlots === 0
+            ? "capacity"
+            : undefined;
     } else if (current.status === "waiting")
       blockedReason =
         current.step === "approve-result"
@@ -305,7 +318,9 @@ export function statusDocument(
       issue: state.issueByItemId[item.id],
       status: current.status,
       step: current.step ?? null,
-      ready: current.status === "pending" && !blockedReason,
+      eligible,
+      // Provider capacity is not persisted in the state snapshot.
+      ready: current.status === "pending" && !blockedReason ? null : false,
       blockedReason: blockedReason ?? null,
       attemptId: current.attempt ?? null,
       providerProgress:
@@ -345,6 +360,7 @@ export function statusDocument(
             ? ("complete" as const)
             : ("active" as const),
     runId: state.runId,
+    configuredSlots: configuredSlots ?? null,
     baseSha: state.baseSha,
     integratedSha: state.integratedSha ?? null,
     finalValidation: state.finalValidation?.passed ?? false,
@@ -373,6 +389,7 @@ export class StateDiagnostics {
     private emitter: DiagnosticEmitter,
     private state: FactoryState,
     private delivery: "regular" | "native-stack",
+    private concurrency: number,
   ) {}
 
   observe(): void {
@@ -486,11 +503,13 @@ export class StateDiagnostics {
       this.state.repository,
       this.state.objective,
       this.delivery,
+      [],
+      this.concurrency,
     );
     for (const item of view.work) {
       const reason =
         item.status === "pending"
-          ? (item.blockedReason ?? "ready")
+          ? (item.blockedReason ?? "eligible-provider-unknown")
           : "inactive";
       if (
         reason !== this.previousReadiness.get(item.id) &&
