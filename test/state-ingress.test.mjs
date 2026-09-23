@@ -95,6 +95,36 @@ test("schemaVersion 1 state accepts legacy source paths and explicit source bind
   );
 });
 
+test("completed replayed item can retain its original worker base in legacy state", () => {
+  const completed = state();
+  completed.work.asset = {
+    status: "done",
+    baseSha: "c".repeat(40),
+    execution: {
+      provider: "local",
+      identity: "attempt-1",
+      data: {
+        request: { item: { id: "asset" }, baseSha: sha },
+        handle: {
+          identity: "worker-1",
+          data: { pid: 123, startTime: "1", resultPath: "/tmp/result" },
+        },
+        worktree: "/tmp/worktree",
+      },
+    },
+  };
+  assert.equal(
+    parseFactoryState(completed, repository, objective).work.asset.status,
+    "done",
+  );
+  completed.work.asset.status = "running";
+  completed.work.asset.step = "validate";
+  assert.throws(
+    () => parseFactoryState(completed, repository, objective),
+    /active attempt handle is invalid/,
+  );
+});
+
 test("persisted asset and active process identities fail closed", () => {
   const waiting = state();
   waiting.work.asset = {

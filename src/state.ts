@@ -339,7 +339,9 @@ export function parseFactoryState(
       if (
         typeof active.worktree !== "string" ||
         attemptedItem.id !== id ||
-        request.baseSha !== item.baseSha ||
+        (request.baseSha !== item.baseSha &&
+          item.status !== "done" &&
+          item.status !== "published") ||
         typeof handle.identity !== "string" ||
         !Number.isSafeInteger(host.pid) ||
         typeof host.startTime !== "string" ||

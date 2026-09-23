@@ -82,6 +82,7 @@ export async function runNativeGraph(args: {
           );
         work.changeRef = result.changeRef;
         work.treeSha = result.treeSha;
+        delete work.execution;
         work.step = "validate";
         save();
       });
@@ -180,6 +181,7 @@ export async function runNativeGraph(args: {
           if (args.cancelled()) throw new Error("Objective cancelled");
           work.changeRef = result.changeRef;
           work.treeSha = result.treeSha;
+          delete work.execution;
           if (result.assets?.length) {
             work.assets = result.assets;
             work.status = "waiting";
