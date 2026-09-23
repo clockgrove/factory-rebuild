@@ -6,6 +6,7 @@ import {
   closeSync,
   existsSync,
   fsyncSync,
+  fstatSync,
   lstatSync,
   openSync,
   readFileSync,
@@ -34,6 +35,8 @@ function privateProgress(path: string, event: unknown): void {
     0o600,
   );
   try {
+    if (!fstatSync(fd).isFile() || (fstatSync(fd).mode & 0o077) !== 0)
+      throw new Error("Worker progress file is not a restricted regular file");
     appendFileSync(fd, `${JSON.stringify(event)}\n`);
   } finally {
     closeSync(fd);
@@ -54,6 +57,7 @@ function progressEvent(
   event: ThreadEvent,
   attemptId: string,
   secrets: string[],
+  commandOffsets: Map<string, number>,
 ): Record<string, unknown> {
   const base: Record<string, unknown> = {
     at: new Date().toISOString(),
@@ -74,7 +78,15 @@ function progressEvent(
     if (event.item.type === "command_execution") {
       base.exitCode = event.item.exit_code;
       base.status = event.item.status;
-      base.detail = redact(event.item.aggregated_output, secrets);
+      const output = event.item.aggregated_output;
+      const previous = commandOffsets.get(event.item.id) ?? 0;
+      const complete =
+        event.type === "item.completed"
+          ? output.length
+          : output.lastIndexOf("\n") + 1;
+      if (complete > previous)
+        base.detail = redact(output.slice(previous, complete), secrets);
+      commandOffsets.set(event.item.id, Math.max(previous, complete));
     } else if (event.item.type === "mcp_tool_call") {
       base.tool = `${event.item.server}/${event.item.tool}`;
       base.status = event.item.status;
@@ -147,11 +159,24 @@ async function main(): Promise<void> {
     const streamed = await thread.runStreamed(prompt);
     let finalResponse = "";
     let usage: unknown = null;
+    const commandOffsets = new Map<string, number>();
+    let progressLost = false;
     for await (const event of streamed.events) {
-      privateProgress(
-        progressPath,
-        progressEvent(event, request.attemptId ?? "", redactionValues),
+      const observation = progressEvent(
+        event,
+        request.attemptId ?? "",
+        redactionValues,
+        commandOffsets,
       );
+      if (!progressLost)
+        try {
+          privateProgress(progressPath, observation);
+        } catch (error) {
+          progressLost = true;
+          process.stderr.write(
+            `Factory worker progress unavailable: ${error instanceof Error ? error.message : String(error)}\n`,
+          );
+        }
       if (
         event.type === "item.completed" &&
         event.item.type === "agent_message"

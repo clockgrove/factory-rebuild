@@ -54,15 +54,39 @@ export async function planObjective(
   services: Pick<ApplicationServices, "planningModel" | "github">,
 ): Promise<PlanCandidate> {
   validateTarget(config.repository, config.checkout);
-  const issue = await services.github.objective(objective);
-  const baseSha = git(config.checkout, "rev-parse", "HEAD");
-  return compilePlan(
-    objective,
-    issue.body,
-    baseSha,
-    config.checkout,
-    services.planningModel,
-  );
+  const diagnostics = new DiagnosticEmitter(config.repository, objective);
+  const started = Date.now();
+  diagnostics.emit({ operation: "planning-preview", outcome: "started" });
+  try {
+    const issue = await services.github.objective(objective);
+    const baseSha = git(config.checkout, "rev-parse", "HEAD");
+    const result = await compilePlan(
+      objective,
+      issue.body,
+      baseSha,
+      config.checkout,
+      services.planningModel,
+    );
+    diagnostics.emit({
+      operation: "planning-preview",
+      outcome: "completed",
+      durationMs: Date.now() - started,
+      metadata: {
+        baseSha,
+        review: result.review.status,
+        itemCount: result.graph.items.length,
+      },
+    });
+    return result;
+  } catch (error) {
+    diagnostics.emit({
+      operation: "planning-preview",
+      outcome: "failed",
+      durationMs: Date.now() - started,
+      detail: error instanceof Error ? error.message : String(error),
+    });
+    throw error;
+  }
 }
 
 export async function decidePlan(
@@ -78,17 +102,37 @@ export async function decidePlan(
   },
 ): Promise<PlanCandidate> {
   validateTarget(config.repository, config.checkout);
-  const issue = await services.github.objective(objective);
-  const baseSha = git(config.checkout, "rev-parse", "HEAD");
-  return resolvePlan(
-    candidate,
-    objective,
-    issue.body,
-    baseSha,
-    config.checkout,
-    services.planningModel,
-    input,
-  );
+  const diagnostics = new DiagnosticEmitter(config.repository, objective);
+  const started = Date.now();
+  diagnostics.emit({ operation: "planning-decision", outcome: "started" });
+  try {
+    const issue = await services.github.objective(objective);
+    const baseSha = git(config.checkout, "rev-parse", "HEAD");
+    const result = await resolvePlan(
+      candidate,
+      objective,
+      issue.body,
+      baseSha,
+      config.checkout,
+      services.planningModel,
+      input,
+    );
+    diagnostics.emit({
+      operation: "planning-decision",
+      outcome: "completed",
+      durationMs: Date.now() - started,
+      metadata: { review: result.review.status },
+    });
+    return result;
+  } catch (error) {
+    diagnostics.emit({
+      operation: "planning-decision",
+      outcome: "failed",
+      durationMs: Date.now() - started,
+      detail: error instanceof Error ? error.message : String(error),
+    });
+    throw error;
+  }
 }
 
 function objectiveCommands(
@@ -124,7 +168,7 @@ export async function runObjective(
   if (config.execution.kind !== "local")
     throw new Error("Current trunk supports local execution only");
   const root = stateRoot(config.repository);
-  mkdirSync(root, { recursive: true });
+  mkdirSync(root, { recursive: true, mode: 0o700 });
   const lock = join(root, "controller.lock");
   const lockHandle = acquireControllerLock(lock, objective);
   const path = statePath(config.repository, objective);
@@ -200,7 +244,11 @@ export async function runObjective(
         throw new Error(
           "Objective issue body changed; operator direction required",
         );
-      stateDiagnostics = new StateDiagnostics(diagnostics, state);
+      stateDiagnostics = new StateDiagnostics(
+        diagnostics,
+        state,
+        config.delivery.kind,
+      );
       const saveCurrent = () => save(state!);
       for (const item of state.graph.items)
         if (state.work[item.id]?.status === "done")
@@ -233,7 +281,11 @@ export async function runObjective(
       }
       const baseSha = git(config.checkout, "rev-parse", "HEAD");
       const planningStarted = Date.now();
-      diagnostics.emit({ operation: "planning", outcome: "started", metadata: { baseSha } });
+      diagnostics.emit({
+        operation: "planning",
+        outcome: "started",
+        metadata: { baseSha },
+      });
       const plan =
         acceptedPlan ??
         (await compilePlan(
@@ -298,7 +350,11 @@ export async function runObjective(
           graph.items.map((item) => [item.id, { status: "pending" }]),
         ),
       };
-      stateDiagnostics = new StateDiagnostics(diagnostics, state);
+      stateDiagnostics = new StateDiagnostics(
+        diagnostics,
+        state,
+        config.delivery.kind,
+      );
     }
     const graph = state.graph;
     stateForSignal = state;
@@ -461,6 +517,11 @@ export async function cancelObjective(
     state.cancelRequested = true;
     state.cancelledAt = new Date().toISOString();
     saveState(statePath(config.repository, objective), state);
+    new DiagnosticEmitter(config.repository, objective).emit({
+      runId: state.runId,
+      operation: "objective-cancel",
+      outcome: "completed",
+    });
     return "cancelled";
   } finally {
     releaseControllerLock(lock, lockHandle);
@@ -505,6 +566,12 @@ export function retryWorkItem(
     delete state.cancelledAt;
     delete state.error;
     saveState(statePath(config.repository, objective), state);
+    new DiagnosticEmitter(config.repository, objective).emit({
+      runId: state.runId,
+      itemId,
+      operation: "work-retry",
+      outcome: "completed",
+    });
   } finally {
     releaseControllerLock(lock, lockHandle);
   }
@@ -558,6 +625,14 @@ export async function selectAssetSet(
     };
     work.status = "running";
     saveState(statePath(config.repository, objective), state);
+    new DiagnosticEmitter(config.repository, objective).emit({
+      runId: state.runId,
+      itemId,
+      attemptId: work.attempt,
+      operation: "media-selection",
+      outcome: "completed",
+      metadata: { setId, downstreamCount: downstreamItems.length },
+    });
   } finally {
     releaseControllerLock(lock, lockHandle);
   }
@@ -591,4 +666,12 @@ export async function exportAssetSetForReview(
       member.ref,
       join(output, `${member.role}-${basename(member.destination)}`),
     );
+  new DiagnosticEmitter(config.repository, objective).emit({
+    runId: state!.runId,
+    itemId,
+    attemptId: work.attempt,
+    operation: "media-review-export",
+    outcome: "completed",
+    metadata: { setId, memberCount: set.members.length },
+  });
 }

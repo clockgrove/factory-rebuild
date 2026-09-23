@@ -7,7 +7,12 @@ import { compose, composePlanning } from "./index.js";
 import { readState } from "./state-store.js";
 import { itemsConflict } from "./scheduler.js";
 import { linearDeliveryUnits } from "./delivery/plan.js";
-import { readAgentTimeline, statusDocument } from "./diagnostics.js";
+import {
+  readAgentTimeline,
+  readWorkerOutput,
+  redactDiagnosticDetail,
+  statusDocument,
+} from "./diagnostics.js";
 
 function option(args: string[], name: string): string | undefined {
   const index = args.indexOf(`--${name}`);
@@ -22,7 +27,7 @@ function options(args: string[], name: string): string[] {
 
 function help(): void {
   console.log(
-    `Factory CLI\n\nCommands:\n  install --repository OWNER/REPO --checkout ABSOLUTE_PATH --concurrency N [--delivery regular|native-stack] [--network host|off] [--config PATH]\n  plan --objective N [--output ABSOLUTE_NEW_FILE] [--config PATH]\n  decide --objective N --plan PLAN_FILE --outcome accept|refuse --actor NAME --reason TEXT [--answer TEXT] --output ABSOLUTE_NEW_FILE [--config PATH]\n  run --objective N [--plan PLAN_FILE] [--config PATH]\n  status --objective N [--json] [--config PATH]\n  diagnostics --objective N [--follow] [--config PATH]\n  review --objective N --item ID --set SET_ID --output ABSOLUTE_NEW_DIRECTORY [--config PATH]\n  select --objective N --item ID --set SET_ID [--actor NAME] [--reason TEXT] [--bind DEPENDENT_ITEM ...] [--config PATH]\n  cancel --objective N [--config PATH]\n  retry --objective N --item ID [--config PATH]`,
+    `Factory CLI\n\nCommands:\n  install --repository OWNER/REPO --checkout ABSOLUTE_PATH --concurrency N [--delivery regular|native-stack] [--network host|off] [--config PATH]\n  plan --objective N [--output ABSOLUTE_NEW_FILE] [--config PATH]\n  decide --objective N --plan PLAN_FILE --outcome accept|refuse --actor NAME --reason TEXT [--answer TEXT] --output ABSOLUTE_NEW_FILE [--config PATH]\n  run --objective N [--plan PLAN_FILE] [--config PATH]\n  status --objective N [--json] [--config PATH]\n  diagnostics --objective N [--follow] [--config PATH]\n  logs --objective N --item ID [--follow] [--config PATH]\n  review --objective N --item ID --set SET_ID --output ABSOLUTE_NEW_DIRECTORY [--config PATH]\n  select --objective N --item ID --set SET_ID [--actor NAME] [--reason TEXT] [--bind DEPENDENT_ITEM ...] [--config PATH]\n  cancel --objective N [--config PATH]\n  retry --objective N --item ID [--config PATH]`,
   );
 }
 
@@ -73,6 +78,7 @@ async function main(): Promise<void> {
       "run",
       "status",
       "diagnostics",
+      "logs",
       "review",
       "select",
       "cancel",
@@ -210,17 +216,18 @@ async function main(): Promise<void> {
       }
     }
   } else if (command === "diagnostics") {
-    let printed = 0;
+    const seen = new Set<string>();
     const printNew = () => {
       const timeline = readAgentTimeline(
         config.repository,
         objective,
         readState(config.repository, objective),
       );
-      if (timeline.length < printed) printed = 0;
-      for (const event of timeline.slice(printed))
-        console.log(JSON.stringify(event));
-      printed = timeline.length;
+      for (const event of timeline) {
+        const json = JSON.stringify(event);
+        if (!seen.has(json)) console.log(json);
+        seen.add(json);
+      }
     };
     printNew();
     if (args.includes("--follow")) {
@@ -234,6 +241,38 @@ async function main(): Promise<void> {
         process.once("SIGTERM", stop);
       });
     }
+  } else if (command === "logs") {
+    const item = option(args, "item");
+    const state = readState(config.repository, objective);
+    const attempt = item && state?.work[item]?.attempt;
+    if (!attempt)
+      throw new Error("logs requires a Work Item with a recorded attempt");
+    let lines = 0;
+    const show = () => {
+      const complete = readWorkerOutput(config.repository, attempt).split("\n");
+      complete.pop();
+      for (const line of complete.slice(lines))
+        console.log(
+          redactDiagnosticDetail(
+            line,
+            config.policy.allowedSecretNames
+              .map((name) => process.env[name])
+              .filter((value): value is string => Boolean(value)),
+          ),
+        );
+      lines = complete.length;
+    };
+    show();
+    if (args.includes("--follow"))
+      await new Promise<void>((resolve) => {
+        const interval = setInterval(show, 250);
+        const stop = () => {
+          clearInterval(interval);
+          resolve();
+        };
+        process.once("SIGINT", stop);
+        process.once("SIGTERM", stop);
+      });
   } else if (command === "cancel") {
     const result = await application.cancelObjective(objective);
     console.log(`Objective #${objective} cancellation ${result}`);

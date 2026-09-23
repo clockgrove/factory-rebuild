@@ -6,7 +6,7 @@ import {
   readFileSync,
   closeSync,
   constants,
-  statSync,
+  fstatSync,
   readdirSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
@@ -86,7 +86,7 @@ export class DiagnosticEmitter {
         0o600,
       );
       try {
-        if ((statSync(path).mode & 0o077) !== 0)
+        if ((fstatSync(fd).mode & 0o077) !== 0)
           throw new Error("diagnostic log permissions are too broad");
         appendFileSync(fd, `${JSON.stringify(value)}\n`);
       } finally {
@@ -106,12 +106,43 @@ export function readDiagnostics(
 ): DiagnosticEvent[] {
   const path = diagnosticPath(repository, objective);
   if (!existsSync(path)) return [];
-  if ((statSync(path).mode & 0o077) !== 0)
-    throw new Error("Diagnostic log permissions are too broad");
-  return readFileSync(path, "utf8")
-    .split("\n")
-    .filter(Boolean)
-    .map((line) => JSON.parse(line) as DiagnosticEvent);
+  return completeLines(readPrivateFile(path)).map(
+    (line) => JSON.parse(line) as DiagnosticEvent,
+  );
+}
+
+function completeLines(value: string): string[] {
+  const lines = value.split("\n");
+  if (lines.at(-1) !== "") lines.pop();
+  return lines.filter(Boolean);
+}
+
+function readPrivateFile(path: string): string {
+  const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+  try {
+    const stat = fstatSync(fd);
+    if (!stat.isFile() || (stat.mode & 0o077) !== 0)
+      throw new Error(
+        "Private diagnostic file is not a restricted regular file",
+      );
+    return readFileSync(fd, "utf8");
+  } finally {
+    closeSync(fd);
+  }
+}
+
+export function readWorkerOutput(
+  repository: string,
+  attemptId: string,
+): string {
+  if (
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(
+      attemptId,
+    )
+  )
+    throw new Error("Invalid worker attempt ID");
+  const path = join(stateRoot(repository), "harness", `${attemptId}.log`);
+  return existsSync(path) ? readPrivateFile(path) : "";
 }
 
 export function readAgentTimeline(
@@ -140,11 +171,7 @@ export function readAgentTimeline(
       /^[0-9a-f-]{36}\.progress\.ndjson$/.test(name),
     )) {
       const path = join(root, name);
-      if ((statSync(path).mode & 0o077) !== 0)
-        throw new Error("Worker progress permissions are too broad");
-      for (const line of readFileSync(path, "utf8")
-        .split("\n")
-        .filter(Boolean)) {
+      for (const line of completeLines(readPrivateFile(path))) {
         const event = JSON.parse(line) as Record<string, unknown>;
         const attemptId = name.slice(0, 36);
         if (!itemByAttempt.has(attemptId)) continue;
@@ -212,10 +239,9 @@ export function statusDocument(
       treeSha: current.treeSha ?? null,
       headSha: current.changeRef ?? null,
       pullRequest: current.pullRequest ?? null,
-      stack:
-        Object.entries(state.stackNumbers ?? {}).find(
-          ([key]) => key === item.id,
-        )?.[1] ?? null,
+      stack: state.stackNumbers?.[unitByItem.get(item.id) ?? ""] ?? null,
+      candidateAssetSets: current.assets?.map((set) => set.id) ?? [],
+      selectedAssetSet: current.selectedAssetSet ?? null,
       lastError: current.error
         ? redactDiagnosticDetail(current.error, secrets)
         : null,
@@ -250,16 +276,37 @@ export function statusDocument(
 /** Observe snapshot changes after saving; the snapshot alone controls continuation. */
 export class StateDiagnostics {
   private previous = new Map<string, WorkState>();
+  private previousReadiness = new Map<string, string>();
+  private previousStacks = new Map<string, number>();
   private previousFinal = false;
   private previousIntegrated?: string;
   constructor(
     private emitter: DiagnosticEmitter,
     private state: FactoryState,
+    private delivery: "regular" | "native-stack",
   ) {}
 
   observe(): void {
     for (const [id, work] of Object.entries(this.state.work)) {
       const before = this.previous.get(id);
+      if (
+        before?.execution?.identity !== work.execution?.identity &&
+        (before?.execution || work.execution)
+      ) {
+        this.emitter.emit({
+          runId: this.state.runId,
+          itemId: id,
+          attemptId: work.attempt,
+          operation: "harness",
+          outcome: work.execution ? "started" : "completed",
+          metadata: {
+            provider:
+              work.execution?.provider ??
+              before?.execution?.provider ??
+              "unknown",
+          },
+        });
+      }
       if (
         !before ||
         before.status !== work.status ||
@@ -312,6 +359,40 @@ export class StateDiagnostics {
       }
       this.previous.set(id, { ...work });
     }
+    const view = statusDocument(
+      this.state,
+      this.state.repository,
+      this.state.objective,
+      this.delivery,
+    );
+    for (const item of view.work) {
+      const reason =
+        item.status === "pending"
+          ? (item.blockedReason ?? "ready")
+          : "inactive";
+      if (
+        reason !== this.previousReadiness.get(item.id) &&
+        item.status === "pending"
+      )
+        this.emitter.emit({
+          runId: this.state.runId,
+          itemId: item.id,
+          operation: "scheduling",
+          outcome: item.blockedReason ? "waiting" : "observed",
+          metadata: { reason },
+        });
+      this.previousReadiness.set(item.id, reason);
+    }
+    for (const [unit, number] of Object.entries(this.state.stackNumbers ?? {}))
+      if (this.previousStacks.get(unit) !== number) {
+        this.emitter.emit({
+          runId: this.state.runId,
+          operation: "github-stack",
+          outcome: "completed",
+          metadata: { unit, stack: number },
+        });
+        this.previousStacks.set(unit, number);
+      }
     if (
       this.state.integratedSha !== this.previousIntegrated &&
       this.state.integratedSha

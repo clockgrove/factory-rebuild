@@ -347,6 +347,23 @@ test("application lifecycle reattaches once, cancels owned work, and retries onl
       ).length,
       1,
     );
+    const restartTimeline = readDiagnostics(
+      descriptor.config.repository,
+      objective,
+    );
+    assert.ok(
+      restartTimeline.filter(
+        (event) =>
+          event.operation === "objective-run" && event.outcome === "started",
+      ).length >= 2,
+    );
+    assert.ok(
+      restartTimeline.some(
+        (event) =>
+          event.operation === "harness" &&
+          event.attemptId === resumed.work.restart.attempt,
+      ),
+    );
   });
 
   await fixture("lifecycle-cancel", async (root) => {
@@ -391,6 +408,11 @@ test("application lifecycle reattaches once, cancels owned work, and retries onl
     );
     const cancelled = readState(descriptor.config.repository, objective);
     assert.equal(cancelled.work.retry.status, "cancelled");
+    assert.ok(
+      readDiagnostics(descriptor.config.repository, objective).some(
+        (event) => event.itemId === "retry" && event.outcome === "failed",
+      ),
+    );
     application.retryWorkItem(objective, "retry");
     assert.equal(
       readEvents(eventsPath).filter((event) => event.type === "start").length,
@@ -403,6 +425,18 @@ test("application lifecycle reattaches once, cancels owned work, and retries onl
     assert.equal(
       readEvents(eventsPath).filter((event) => event.type === "start").length,
       2,
+    );
+    const retryTimeline = readDiagnostics(
+      descriptor.config.repository,
+      objective,
+    );
+    assert.ok(retryTimeline.some((event) => event.operation === "work-retry"));
+    assert.ok(
+      retryTimeline.some(
+        (event) =>
+          event.operation === "objective-finalization" &&
+          event.outcome === "completed",
+      ),
     );
   });
 });
