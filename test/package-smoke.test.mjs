@@ -49,7 +49,6 @@ test("fresh packed artifact installs and exposes documented install/status comma
         "--prefix",
         prefix,
         "--ignore-scripts",
-        "--offline",
         "--omit=optional",
         join(pack, packageName),
         join(pack, sdkPackage),
