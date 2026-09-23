@@ -127,6 +127,11 @@ export async function runRegularGraph(args: {
           config.checkout,
         ),
         decisions: work.acceptanceDecisions,
+        observations: JSON.stringify({
+          selectedAsset: work.assets?.find(
+            (set) => set.id === work.selectedAssetSet,
+          ),
+        }),
       });
       delete work.acceptancePending;
       work.step = "deliver";

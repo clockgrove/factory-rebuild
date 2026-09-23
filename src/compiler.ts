@@ -4,6 +4,11 @@ import { isAbsolute } from "node:path";
 import { recognizedObjectiveAttachment } from "./media.js";
 import { validateAndOrderGraph } from "./scheduler.js";
 import { pinnedGit, pinnedGitRaw } from "./process.js";
+import {
+  assertPinnedNpmScripts,
+  packageScriptInvocation,
+  PINNED_PNPM_BOOTSTRAP,
+} from "./validation.js";
 import type { PlanningModel, PlanningRequest, WorkGraph } from "./contracts.js";
 
 export const graphSchema = {
@@ -110,7 +115,7 @@ export class CodexPlanningModel implements PlanningModel {
       sandboxMode: "read-only",
       approvalPolicy: "never",
     });
-    const prompt = `Compile this human Objective into the smallest complete dependency-aware Work Item graph. Use parallel lanes only when ownership and resources allow them. Return the requested JSON only. Use exact supplied base SHA and Objective number. Cite only supplied source paths. Give each item explicit non-goals. Choose observable acceptance and owned paths. For every validation command, set provenance to base-observed or source-declared and name its exact source path. A source-declared command must be an exact command line in a supplied source (OBJECTIVE or a pinned source). A base-observed command must identify a tracked file in the exact base containing that command as an exact line, or a package.json script invoked by npm run NAME/npm test. Do not invent commands or use a vague source. For each source asset, bind its path, role, media type, visibility, and kind: repository for a pinned checkout path, local for an explicitly approved absolute private file, or github-attachment for a recognized URL literally present in the Objective. Use an explicitly declared media type when available, otherwise application/octet-stream; never infer format from an extension. List expected output roles for media work; use empty arrays for ordinary work. Set minimumAssetSets from the Objective candidate count, or 1 for unspecified media and 0 for ordinary work. List requiredLfsRoles only when a supplied source requires them; the target repository .gitattributes is authoritative. Do not add deployment, paid services, providers, recovery, or later scope.\n\nObjective:\n${request.objective}\n\nBase: ${request.baseSha}\n\nSources:\n${request.sources.map((s) => `--- ${s.path} ---\n${s.content}`).join("\n")}`;
+    const prompt = `Compile this human Objective into the smallest complete dependency-aware Work Item graph. Use parallel lanes only when ownership and resources allow them. Return the requested JSON only. Use exact supplied base SHA and Objective number. Cite only supplied source paths. Give each item explicit non-goals. Choose observable acceptance and owned paths. For every validation command, set provenance to base-observed or source-declared and name its exact source path. A source-declared command must be an exact command line in a supplied source (OBJECTIVE or a pinned source). A base-observed command must identify a tracked file in the exact base containing that command as an exact line, or a package.json script invoked by npm test/npm run NAME/pnpm test/pnpm check/pnpm run NAME. The exact source-declared command pnpm install --frozen-lockfile --ignore-scripts may precede pnpm checks in a fresh validation worktree when supplied; plain install is unsupported. Do not invent commands or use a vague source. For each source asset, bind its path, role, media type, visibility, and kind: repository for a pinned checkout path, local for an explicitly approved absolute private file, or github-attachment for a recognized URL literally present in the Objective. Use an explicitly declared media type when available, otherwise application/octet-stream; never infer format from an extension. List expected output roles for media work; use empty arrays for ordinary work. Set minimumAssetSets from the Objective candidate count, or 1 for unspecified media and 0 for ordinary work. List requiredLfsRoles only when a supplied source requires them; the target repository .gitattributes is authoritative. Do not add deployment, paid services, providers, recovery, or later scope.\n\nObjective:\n${request.objective}\n\nBase: ${request.baseSha}\n\nSources:\n${request.sources.map((s) => `--- ${s.path} ---\n${s.content}`).join("\n")}`;
     const result = await thread.run(prompt, { outputSchema: request.schema });
     return JSON.parse(result.finalResponse) as T;
   }
@@ -186,7 +191,7 @@ export class CodexPlanningModel implements PlanningModel {
       approvalPolicy: "never",
     });
     const result = await thread.run(
-      `Independently review the exact result of a Factory Objective. Decide each criterion only from the supplied pinned source, command pass evidence, delivery observations when supplied, and exact Git change. A shell exit code alone proves only that command's assertion. Return one finding per criterion in the given order. Pass only when the evidence proves that criterion; otherwise needs-human with one specific question. Use refuse for a directly disproved criterion. Quote an exact source fragment for every finding. Never edit or run commands.\n\nBase: ${request.baseSha}\nResult tree: ${request.treeSha}\nCriteria: ${JSON.stringify(request.criteria)}\nCommands: ${JSON.stringify(request.commands)}\nDelivery observations: ${request.observations ?? "none"}\nSources: ${request.sources.map((s) => `--- ${s.path} ---\n${s.content}`).join("\n")}\nChange:\n${request.change}`,
+      `Independently review the exact result of a Factory Objective. Decide each criterion only from the supplied pinned source, command pass evidence, delivery observations when supplied, and exact Git change packet. The packet has text changes and blob identities/sizes; identity alone does not prove opaque content semantics. A shell exit code alone proves only that command's assertion. Return one finding per criterion in the given order. Pass only when the evidence proves that criterion; otherwise needs-human with one specific question. Use refuse for a directly disproved criterion. Quote an exact source fragment for every finding. Never edit or run commands.\n\nBase: ${request.baseSha}\nResult tree: ${request.treeSha}\nCriteria: ${JSON.stringify(request.criteria)}\nCommands: ${JSON.stringify(request.commands)}\nDelivery observations: ${request.observations ?? "none"}\nSources: ${request.sources.map((s) => `--- ${s.path} ---\n${s.content}`).join("\n")}\nChange packet:\n${request.change}`,
       {
         outputSchema: {
           type: "object",
@@ -339,14 +344,26 @@ function commandAuthorizations(
   const objective = sources.find((source) => source.path === "OBJECTIVE");
   return [
     ...workCommands,
-    ...finalObjectiveCommands(objective?.content ?? "").map((command) => ({
-      itemId: "OBJECTIVE",
-      command,
-      provenance: "source-declared" as const,
-      source: "OBJECTIVE",
-      hostExecution: "authorized" as const,
-      reason: "Exact final command line in pinned Objective",
-    })),
+    ...finalObjectiveCommands(objective?.content ?? "").map((command) => {
+      const authorized = authorizedCommand(
+        { command, provenance: "source-declared", source: "OBJECTIVE" },
+        graph.baseSha,
+        sources,
+        checkout,
+      );
+      return {
+        itemId: "OBJECTIVE",
+        command,
+        provenance: "source-declared" as const,
+        source: "OBJECTIVE",
+        hostExecution: authorized
+          ? ("authorized" as const)
+          : ("blocked" as const),
+        reason: authorized
+          ? "Exact final command line in pinned Objective"
+          : "Final command has no executable authority at the accepted base",
+      };
+    }),
   ];
 }
 
@@ -417,6 +434,39 @@ function authorizedCommand(
   checkout: string,
 ): boolean {
   if (!check.command.trim() || !check.source) return false;
+  const packageCommand = /\b(?:npm|pnpm)\b/.test(check.command);
+  const bootstrap = check.command.trim() === PINNED_PNPM_BOOTSTRAP;
+  const invocation =
+    packageCommand && !bootstrap
+      ? packageScriptInvocation(check.command)
+      : undefined;
+  if (packageCommand) {
+    if (bootstrap) {
+      if (check.provenance !== "source-declared") return false;
+      try {
+        pinnedGit(checkout, "cat-file", "-e", `${baseSha}:pnpm-lock.yaml`);
+      } catch {
+        return false;
+      }
+    } else {
+      if (!invocation) return false;
+      try {
+        const pkg = JSON.parse(
+          pinnedGitRaw(checkout, "show", `${baseSha}:package.json`).toString(
+            "utf8",
+          ),
+        );
+        if (typeof pkg?.scripts?.[invocation.name] !== "string") return false;
+      } catch {
+        return false;
+      }
+    }
+    try {
+      assertPinnedNpmScripts(checkout, baseSha, baseSha, [check.command]);
+    } catch {
+      return false;
+    }
+  }
   if (
     check.provenance === "source-declared" &&
     check.source !== "OPERATOR_DECISION"
@@ -444,17 +494,7 @@ function authorizedCommand(
   }
   if (exactLine(content, check.command)) return true;
   if (check.source !== "package.json") return false;
-  try {
-    const scripts = JSON.parse(content).scripts as
-      Record<string, unknown> | undefined;
-    const name =
-      check.command === "npm test"
-        ? "test"
-        : check.command.match(/^npm run ([A-Za-z0-9:_-]+)$/)?.[1];
-    return Boolean(name && typeof scripts?.[name] === "string");
-  } catch {
-    return false;
-  }
+  return Boolean(invocation);
 }
 
 function planningFailure(error: unknown): never {
