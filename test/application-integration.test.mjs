@@ -943,6 +943,35 @@ test("asset selection preserves a complete multi-file set and hydrates target-ow
     assert.deepEqual(completed.work.media.selection.downstreamItems, [
       "consumer",
     ]);
+    const mediaTimeline = readDiagnostics(
+      descriptor.config.repository,
+      objective,
+    );
+    assert.ok(
+      mediaTimeline.some(
+        (event) =>
+          event.itemId === "media" &&
+          event.operation === "media-review-export" &&
+          event.outcome === "completed",
+      ),
+    );
+    assert.ok(
+      mediaTimeline.some(
+        (event) =>
+          event.itemId === "media" &&
+          event.operation === "media-selection" &&
+          event.metadata?.setId === "candidate-b",
+      ),
+    );
+    assert.ok(
+      mediaTimeline.some(
+        (event) =>
+          event.itemId === "media" &&
+          event.operation === "media-materialization" &&
+          event.outcome === "completed" &&
+          event.durationMs >= 0,
+      ),
+    );
     assert.deepEqual(
       completed.work.media.selection.destinations.map((entry) => entry.role),
       ["model", "metadata"],

@@ -190,14 +190,31 @@ export async function runNativeGraph(args: {
           );
           if (!selected || !work.changeRef)
             throw new Error("Selected AssetSet or captured change is missing");
-          const applied = await materializeAssetSet({
-            checkout: config.checkout,
-            workRoot: join(root, "asset-materialization"),
-            baseCommit: work.changeRef,
-            item,
-            set: selected,
-            store: contentStore,
-          });
+          const materialize = () =>
+            materializeAssetSet({
+              checkout: config.checkout,
+              workRoot: join(root, "asset-materialization"),
+              baseCommit: work.changeRef!,
+              item,
+              set: selected,
+              store: contentStore,
+            });
+          const applied = args.diagnostics
+            ? await args.diagnostics.span(
+                {
+                  runId: state.runId,
+                  itemId: item.id,
+                  attemptId: work.attempt,
+                  operation: "media-materialization",
+                  metadata: { setId: selected.id },
+                },
+                materialize,
+                (result) => ({
+                  treeSha: result.treeSha,
+                  headSha: result.changeRef,
+                }),
+              )
+            : await materialize();
           work.changeRef = applied.changeRef;
           work.treeSha = applied.treeSha;
         } else if (work.step === "execute") {

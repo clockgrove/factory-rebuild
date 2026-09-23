@@ -350,7 +350,15 @@ export class StateDiagnostics {
           itemId: id,
           attemptId: work.attempt,
           operation: "harness",
-          outcome: work.execution ? "started" : "completed",
+          outcome: !before
+            ? "observed"
+            : work.execution
+              ? "started"
+              : "completed",
+          durationMs:
+            before?.execution && !work.execution && work.startedAt
+              ? Math.max(0, Date.now() - Date.parse(work.startedAt))
+              : undefined,
           metadata: {
             provider:
               work.execution?.provider ??
