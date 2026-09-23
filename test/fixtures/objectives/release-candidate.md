@@ -2,7 +2,7 @@
 
 ## Goal
 
-Prove one immutable installed Factory package on one public disposable Objective that combines concurrent independent local work, native stack delivery, a harness-declared multi-file AssetSet, human selection, target-owned Git LFS, and exact final-head validation. The target fixture supplies `assets/source.png`; every other requirement is in this issue. Keep the seven Work Items and their dependencies exactly as listed.
+Use one disposable Objective and this public fixture to prove an immutable installed Factory package across concurrent independent local work, native stack delivery, a harness-declared multi-file AssetSet, human selection, target-owned Git LFS, and exact final-head validation. The target fixture supplies `assets/source.png`; every other requirement is in this issue. Keep the seven Work Items and their dependencies exactly as listed.
 
 ## Work Items
 

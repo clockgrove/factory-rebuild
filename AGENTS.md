@@ -6,7 +6,7 @@ Read [the public implementation plan](docs/IMPLEMENTATION-PLAN.md), [current bui
 
 ## Priority
 
-Ship the trunk through one path: Objective → Work Item DAG → local execution → exact validation → GitHub delivery → Objective final validation. Trunk includes native linear PR stacks, media assets, large content, Git LFS, restart/cancel/status, and packaging. Private adopter pilots follow the public disposable release gate and use the public plugin surface exactly as a third party would.
+Ship the trunk through one path: Objective → Work Item DAG → local execution → exact validation → GitHub delivery → Objective final validation. Trunk includes native linear PR stacks, media assets, large content, Git LFS, restart/cancel/status, and packaging. Private adopter pilots follow the disposable release gate built from public fixtures and use the public plugin surface exactly as a third party would.
 
 After the trunk, add the managed cloud agent driver, then the sandbox driver and BYO harness, then Daytona. Bursting, mixed modes, live migration, adaptive pressure, distributed controllers, and compounded fault matrices are leaves.
 
