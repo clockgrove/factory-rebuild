@@ -4,7 +4,7 @@
 
 Factory turns a repository development Objective into source-grounded Work Items, runs bounded coding attempts, validates their exact result trees, and delivers the changes through GitHub. It is an open-source Clockgrove plugin installed for one target repository at a time.
 
-**Status:** public release candidate in progress. The installed local Codex SDK path, dependency DAG, lifecycle, regular pull requests, native linear stacks, human-selected AssetSets, and Git LFS have passed disposable gates using public fixture inputs. One pinned installed package has now passed the combined Objective in a private target repository; see [current build status](https://github.com/clockgrove/factory-rebuild/blob/main/docs/BUILD-STATUS.md) for the exact artifact and final head. The current package remains a development candidate while the separate trunk-gap review and required public-artifact adopter pilot are pending.
+**Status:** `v0.1.0` release candidate. Trunk issues #19–#24 and #28 have merged; package and public-artifact issue #25 is in final review. The installed local Codex SDK path, dependency DAG, lifecycle, regular pull requests, native linear stacks, human-selected AssetSets, and Git LFS have passed disposable gates using public fixture inputs. The public tag, release asset, fresh third-party Objective, and later adopter smoke remain pending; see [current build status](https://github.com/clockgrove/factory-rebuild/blob/main/docs/BUILD-STATUS.md) for accepted evidence.
 
 ## How it works
 
@@ -17,7 +17,7 @@ The target repository owns its product and runtime truth. Factory state and cred
 
 ## Install the public release
 
-The first public `v0.1.0` release is pending. Once its [release page](https://github.com/clockgrove/factory-rebuild/releases/tag/v0.1.0) and independent digest in [build status](https://github.com/clockgrove/factory-rebuild/blob/main/docs/BUILD-STATUS.md) are available, install its plugin and bundled CLI on Linux x64 with Node.js 22 or later:
+The `v0.1.0` release candidate has not yet been published. Once its [release page](https://github.com/clockgrove/factory-rebuild/releases/tag/v0.1.0) and independent digest in [build status](https://github.com/clockgrove/factory-rebuild/blob/main/docs/BUILD-STATUS.md) are available, install its plugin and bundled CLI on Linux x64 with Node.js 22 or later:
 
 ```sh
 codex plugin marketplace add clockgrove/factory-rebuild --ref v0.1.0
