@@ -2,7 +2,7 @@
 
 Factory is an open-source plugin installed for one target repository. It compiles a human Objective into a dependency-aware Work Item graph, executes through a configured harness, validates exact results, and delivers them through GitHub.
 
-This repository is a fresh implementation. The current Slice 0 package establishes installation, schema v1, commands, and contracts. Objective execution is added in the walking-skeleton slice.
+This repository is a fresh implementation. The Slice 1 package supports one local Work Item per Objective, independent exact-tree validation, one regular GitHub PR, and final validation. Concurrency, restart, native stacks, media, and LFS follow in later slices.
 
 ## Development
 
@@ -20,7 +20,8 @@ Install the packed artifact in a clean environment, then bind it to a target che
 
 ```sh
 factory install --repository OWNER/REPO --checkout /absolute/path --concurrency 1
-factory status
+factory run --objective ISSUE_NUMBER
+factory status --objective ISSUE_NUMBER
 ```
 
 The installation writes private configuration under `$XDG_CONFIG_HOME/clockgrove-factory` or `~/.config/clockgrove-factory`. State is reserved under `$XDG_STATE_HOME/clockgrove-factory` or `~/.local/state/clockgrove-factory`. Neither belongs in the target repository. Managed-agent and sandbox modes are reserved schema shapes and fail preflight until implemented.

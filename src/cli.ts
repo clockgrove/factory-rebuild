@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { configPath, readConfig, stateRoot, validateConfig } from "./config.js";
 import { compose } from "./index.js";
+import { readState, runObjective } from "./runner.js";
 
 function option(args: string[], name: string): string | undefined {
   const index = args.indexOf(`--${name}`);
@@ -11,11 +12,11 @@ function option(args: string[], name: string): string | undefined {
 
 function help(): void {
   console.log(
-    `Factory CLI\n\nCommands:\n  install --repository OWNER/REPO --checkout ABSOLUTE_PATH --concurrency N [--delivery regular|native-stack] [--network host|off] [--config PATH]\n  run [--config PATH]\n  status [--config PATH]\n  cancel [--config PATH]`,
+    `Factory CLI\n\nCommands:\n  install --repository OWNER/REPO --checkout ABSOLUTE_PATH --concurrency N [--delivery regular|native-stack] [--network host|off] [--config PATH]\n  run --objective N [--config PATH]\n  status --objective N [--config PATH]\n  cancel [--config PATH]`,
   );
 }
 
-function main(): void {
+async function main(): Promise<void> {
   const [, , command, ...args] = process.argv;
   if (!command || command === "help" || command === "--help") return help();
   const path = option(args, "config") ?? configPath();
@@ -60,21 +61,39 @@ function main(): void {
   const config = readConfig(path);
   compose(config);
   if (command === "status") {
-    console.log(`Factory for ${config.repository}: no active Objective`);
+    const objective = Number(option(args, "objective"));
+    const state = objective
+      ? readState(config.repository, objective)
+      : undefined;
+    if (!state)
+      console.log(`Factory for ${config.repository}: no active Objective`);
+    else
+      console.log(
+        `Objective #${objective}: ${Object.entries(state.work)
+          .map(
+            ([id, work]) =>
+              `${id} ${work.status}${work.step ? ` (${work.step})` : ""}`,
+          )
+          .join(
+            ", ",
+          )}; final validation ${state.finalValidation?.passed ? "passed" : state.error ? "failed" : "pending"}${state.error ? `; error: ${state.error}` : ""}`,
+      );
   } else if (command === "cancel") {
     console.log("No active Objective to cancel");
   } else {
-    throw new Error(
-      "The Objective execution path is not available until Slice 1",
+    const objective = Number(option(args, "objective"));
+    if (!Number.isSafeInteger(objective) || objective <= 0)
+      throw new Error("run requires --objective N");
+    const state = await runObjective(config, objective);
+    console.log(
+      `Objective #${objective} completed at ${state.integratedSha}; final validation passed`,
     );
   }
 }
 
-try {
-  main();
-} catch (error) {
+main().catch((error: unknown) => {
   console.error(
     `Factory: ${error instanceof Error ? error.message : String(error)}`,
   );
   process.exitCode = 1;
-}
+});

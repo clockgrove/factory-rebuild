@@ -1,4 +1,5 @@
 import type { ExecutionHandle, WorkGraph } from "./contracts.js";
+import type { ValidationEvidence } from "./validation.js";
 
 export type WorkStatus =
   "pending" | "running" | "waiting" | "done" | "failed" | "cancelled";
@@ -11,6 +12,7 @@ export interface WorkState {
   waitingReason?: string;
   execution?: ExecutionHandle;
   treeSha?: string;
+  validation?: ValidationEvidence;
   pullRequest?: number;
   error?: string;
 }
@@ -26,5 +28,6 @@ export interface FactoryState {
   issueByItemId: Record<string, number>;
   work: Record<string, WorkState>;
   integratedSha?: string;
-  finalValidation?: { treeSha: string; passed: boolean; detail?: string };
+  finalValidation?: ValidationEvidence & { passed: boolean; detail?: string };
+  error?: string;
 }
