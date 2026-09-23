@@ -320,3 +320,95 @@ test("unresolved review asks one human question and records a specific decision"
     verifyPlanCandidate(decided, 1, body, target.baseSha, target.checkout);
   });
 });
+
+test("malformed graph review pauses on the pinned graph and an explicit decision does not re-review", async () => {
+  await fixture("malformed-review", async (root) => {
+    const target = createTarget(root, {
+      "docs/plan.md": "# Plan\n\n## Wave 0\nCanonical obligation\n",
+    });
+    let generationCount = 0;
+    let reviewCount = 0;
+    const model = {
+      async generateStructured() {
+        generationCount += 1;
+        return graph(target.baseSha);
+      },
+      async reviewGraph() {
+        reviewCount += 1;
+        return {
+          findings: [
+            {
+              source: "not a supplied source",
+              quote: "invented quote",
+              detail: "Unsupported finding",
+              question: "Approve this?",
+            },
+          ],
+        };
+      },
+    };
+    const candidate = await compilePlan(
+      1,
+      body,
+      target.baseSha,
+      target.checkout,
+      model,
+    );
+    assert.equal(candidate.review.status, "needs-human");
+    assert.equal(candidate.review.findings.length, 0);
+    assert.match(candidate.review.failure.detail, /supplied source/);
+    assert.match(candidate.review.failure.question, /pinned Work Item graph/);
+    assert.match(
+      candidate.review.failure.question,
+      new RegExp(candidate.graphDigest),
+    );
+    assert.equal(generationCount, 1);
+    assert.equal(reviewCount, 1);
+    assert.throws(
+      () =>
+        verifyPlanCandidate(
+          candidate,
+          1,
+          body,
+          target.baseSha,
+          target.checkout,
+        ),
+      /specific human source decision/,
+    );
+    const decided = await resolvePlan(
+      candidate,
+      1,
+      body,
+      target.baseSha,
+      target.checkout,
+      model,
+      {
+        actor: "test operator",
+        outcome: "accept",
+        answer:
+          "I inspected the exact graph and accept these obligations and edges",
+        reason: "Manual comparison with the pinned Objective",
+      },
+    );
+    assert.equal(decided.review.status, "human-accepted");
+    assert.equal(decided.graphDigest, candidate.graphDigest);
+    assert.equal(decided.humanDecision.graphDigest, candidate.graphDigest);
+    assert.equal(generationCount, 1);
+    assert.equal(reviewCount, 1);
+    verifyPlanCandidate(decided, 1, body, target.baseSha, target.checkout);
+    assert.throws(
+      () =>
+        verifyPlanCandidate(
+          {
+            ...decided,
+            humanDecision: { ...decided.humanDecision, graphDigest: "wrong" },
+          },
+          1,
+          body,
+          target.baseSha,
+          target.checkout,
+        ),
+      /differs|specific human source decision/,
+    );
+  });
+});

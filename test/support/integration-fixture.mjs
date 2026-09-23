@@ -610,10 +610,12 @@ export function makeApplication(descriptor) {
   );
   return {
     application: createApplication(descriptor.config, {
-      planningModel: new ScriptedPlanningModel(
-        descriptor.graph,
-        join(descriptor.fakeRoot, "planning.ndjson"),
-      ),
+      planningModel:
+        descriptor.planningModel ??
+        new ScriptedPlanningModel(
+          descriptor.graph,
+          join(descriptor.fakeRoot, "planning.ndjson"),
+        ),
       driver,
       github,
       delivery: new RegularDelivery(descriptor.config.checkout, github),

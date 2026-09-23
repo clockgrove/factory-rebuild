@@ -2,6 +2,12 @@
 
 This file records public releases of Factory. See [BUILD-STATUS.md](docs/BUILD-STATUS.md) for development acceptance evidence.
 
+## 0.1.3 — 2026-09-23
+
+- Turn an invalid independent graph-review response into an explicit planning decision on the pinned graph, never a clean automated pass.
+- Let a recorded human acceptance of that exact graph proceed without repeating the malformed review; refusal still stops activation.
+- Add temporary-Git planning and application regressions for the paused and accepted paths.
+
 ## 0.1.2 — 2026-09-23
 
 - Keep result-review findings independent per acceptance criterion, so one malformed citation cannot erase separate valid proofs.

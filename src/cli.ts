@@ -113,7 +113,9 @@ async function main(): Promise<void> {
       console.log(
         `Plan for Objective #${objective}: ${candidate.review.status}; saved ${output}`,
       );
-      if (candidate.review.findings.length)
+      if (candidate.review.failure)
+        console.log(candidate.review.failure.question);
+      else if (candidate.review.findings.length)
         console.log(candidate.review.findings[0]!.question);
     } else console.log(json.trimEnd());
     return;

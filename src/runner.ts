@@ -292,7 +292,7 @@ export async function runObjective(
             baseSha,
             config.checkout,
           );
-          if (acceptedPlan) {
+          if (acceptedPlan && candidate.review.status === "clean") {
             const freshReview = await planningModel.reviewGraph({
               objective: issue.body,
               baseSha,
