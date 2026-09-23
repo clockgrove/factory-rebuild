@@ -271,6 +271,71 @@ test("opaque 3D source and multi-file output retain bindings, relationships, met
   }
 });
 
+test("selected LFS media is scanned before its materialization commit", async () => {
+  const root = mkdtempSync(join(tmpdir(), "factory-selected-secret-"));
+  const secret = "ghp_abcdefghijklmnopqrstuvwxyz0123456789";
+  try {
+    const checkout = join(root, "target");
+    mkdirSync(checkout);
+    git(checkout, "init", "-b", "main");
+    writeFileSync(
+      join(checkout, ".gitattributes"),
+      "media/*.bin filter=lfs diff=lfs merge=lfs -text\n",
+    );
+    git(checkout, "add", ".gitattributes");
+    git(
+      checkout,
+      "-c",
+      "user.name=Test",
+      "-c",
+      "user.email=test@example.com",
+      "commit",
+      "-m",
+      "policy",
+    );
+    const baseCommit = git(checkout, "rev-parse", "HEAD");
+    const store = new LocalContentStore(join(root, "content"));
+    const bytes = Buffer.from(`GITHUB_TOKEN=${secret}\n`);
+    const ref = await store.put(
+      new ReadableStream({
+        start(controller) {
+          controller.enqueue(bytes);
+          controller.close();
+        },
+      }),
+      { mediaType: "application/octet-stream" },
+    );
+    await assert.rejects(
+      materializeAssetSet({
+        checkout,
+        workRoot: join(root, "worktrees"),
+        baseCommit,
+        item: {
+          id: "media",
+          ownedPaths: ["media/selected.bin"],
+          requiredLfsRoles: ["model"],
+        },
+        set: {
+          id: "candidate",
+          members: [{ role: "model", ref, destination: "media/selected.bin" }],
+        },
+        store,
+      }),
+      (error) => {
+        assert.match(
+          error.message,
+          /Secretlint found suspected secret in "media\/selected.bin"/,
+        );
+        assert.equal(error.message.includes(secret), false);
+        return true;
+      },
+    );
+    assert.equal(git(checkout, "rev-parse", "HEAD"), baseCommit);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 function git(path, ...args) {
   return execFileSync("git", ["-C", path, ...args], {
     encoding: "utf8",

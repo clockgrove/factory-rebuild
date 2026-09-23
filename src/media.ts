@@ -25,6 +25,7 @@ import type {
 } from "./contracts.js";
 import type { FactoryState } from "./state.js";
 import { command, pinnedGit } from "./process.js";
+import { checkStagedCandidate } from "./execution/staged-candidate.js";
 
 export function recognizedObjectiveAttachment(value: string): boolean {
   try {
@@ -440,6 +441,18 @@ export async function materializeAssetSet(args: {
         );
     }
     pinnedGit(worktree, "add", "--", ...[...destinations]);
+    const staged = checkStagedCandidate(
+      worktree,
+      args.checkout,
+      args.item.ownedPaths,
+    );
+    if (
+      staged.length !== destinations.size ||
+      staged.some((path) => !destinations.has(path))
+    )
+      throw new Error(
+        "Selected AssetSet staged paths differ from approved destinations",
+      );
     pinnedGit(
       worktree,
       "-c",
