@@ -6,7 +6,6 @@ import {
   mkdirSync,
   openSync,
   readFileSync,
-  readdirSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -27,6 +26,7 @@ import type {
 } from "../contracts.js";
 import { captureAssetSets, importSourceAssets } from "../media.js";
 import { parseProducedAssetSets } from "../media.js";
+import { checkStagedCandidate } from "./staged-candidate.js";
 import {
   linuxProcessIdentity,
   pinnedGit,
@@ -53,6 +53,7 @@ export class CodexHarness implements AgentHarness {
   constructor(
     private credentialDirectory: string,
     private network: "host" | "off",
+    private allowedSecretNames: string[] = [],
   ) {}
 
   async start(request: HarnessRequest): Promise<HarnessHandle> {
@@ -74,7 +75,10 @@ export class CodexHarness implements AgentHarness {
       const child = spawn(process.execPath, [worker, requestPath, resultPath], {
         detached: true,
         stdio: ["ignore", log, log],
-        env: sanitizedWorkerEnvironment(this.credentialDirectory),
+        env: sanitizedWorkerEnvironment(
+          this.credentialDirectory,
+          this.allowedSecretNames,
+        ),
       });
       if (!child.pid) throw new Error("Failed to launch Codex harness worker");
       pid = child.pid;
@@ -168,12 +172,6 @@ export class CodexHarness implements AgentHarness {
       return { evidence: value.evidence, assets };
     }
   }
-}
-
-function owns(path: string, owned: string[]): boolean {
-  return owned.some((scope) =>
-    scope.endsWith("/") ? path.startsWith(scope) : path === scope,
-  );
 }
 
 export class LocalExecutionDriver implements ExecutionDriver {
@@ -288,33 +286,13 @@ export class LocalExecutionDriver implements ExecutionDriver {
           "Media Work Item did not produce the requested AssetSets",
         );
       pinnedGit(active.worktree, "add", "-A");
-      const paths = pinnedGit(
+      const paths = checkStagedCandidate(
         active.worktree,
-        "diff",
-        "--cached",
-        "--name-only",
-      )
-        .split("\n")
-        .filter(Boolean);
+        this.checkout,
+        active.request.item.ownedPaths,
+      );
       if (!paths.length && !assets.length)
         throw new Error("Worker produced no repository change");
-      if (!paths.every((path) => owns(path, active.request.item.ownedPaths))) {
-        throw new Error(
-          `Worker changed paths outside ownership: ${paths.filter((path) => !owns(path, active.request.item.ownedPaths)).join(", ")}`,
-        );
-      }
-      const staged = pinnedGit(active.worktree, "ls-files", "--stage");
-      if (
-        staged
-          .split("\n")
-          .some(
-            (line) => line.startsWith("120000 ") || line.startsWith("160000 "),
-          )
-      ) {
-        throw new Error("Worker result contains a symlink or submodule");
-      }
-      if (readdirSync(active.worktree).includes(".gitmodules"))
-        throw new Error("Worker result contains submodules");
       if (paths.length)
         pinnedGit(
           active.worktree,

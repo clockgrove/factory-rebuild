@@ -77,7 +77,11 @@ export function compose(config: FactoryConfig): FactoryApplication {
   const driver = new LocalExecutionDriver(
     config.checkout,
     join(root, "worktrees"),
-    new CodexHarness(credentials, config.policy.network),
+    new CodexHarness(
+      credentials,
+      config.policy.network,
+      config.policy.allowedSecretNames,
+    ),
     config.execution.concurrency,
     contentStore,
   );

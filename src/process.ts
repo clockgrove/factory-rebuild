@@ -30,6 +30,26 @@ export function git(checkout: string, ...args: string[]): string {
 
 /** Keep inherited Git overrides from redirecting a pinned local tree operation. */
 export function pinnedGit(checkout: string, ...args: string[]): string {
+  return pinnedGitRaw(checkout, ...args)
+    .toString("utf8")
+    .trim();
+}
+
+/** Preserve NUL-delimited paths and binary staged blobs without trimming output. */
+export function pinnedGitRaw(checkout: string, ...args: string[]): Buffer {
+  const result = spawnSync("git", ["-C", checkout, ...args], {
+    env: pinnedGitEnvironment(),
+    maxBuffer: Number.MAX_SAFE_INTEGER,
+  });
+  if (result.error) throw result.error;
+  if (result.status !== 0)
+    throw new Error(
+      `git ${args.join(" ")} failed (${result.status}): ${result.stderr.toString("utf8")}`,
+    );
+  return result.stdout;
+}
+
+export function pinnedGitEnvironment(): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...process.env };
   for (const key of Object.keys(env))
     if (key.startsWith("GIT_")) delete env[key];
@@ -44,26 +64,39 @@ export function pinnedGit(checkout: string, ...args: string[]): string {
     GIT_LFS_SKIP_SMUDGE: "1",
     GIT_LITERAL_PATHSPECS: "1",
   });
-  return command("git", ["-C", checkout, ...args], undefined, env);
+  return env;
 }
 
 /** Give workers and validators only the ambient variables needed for local work. */
 export function sanitizedWorkerEnvironment(
   credentialDirectory: string,
+  allowedSecretNames: string[] = [],
 ): Record<string, string> {
   const env: Record<string, string> = {};
-  const deniedNames =
-    /(?:^|_)(?:TOKEN|SECRET|PASSWORD|PRIVATE_KEY|API_KEY|ACCESS_KEY|CREDENTIALS?)(?:$|_)/i;
+  const allowedNames = new Set([
+    "PATH",
+    "HOME",
+    "USER",
+    "LOGNAME",
+    "LANG",
+    "TERM",
+    "TMPDIR",
+    "TMP",
+    "TEMP",
+    "XDG_CONFIG_HOME",
+    "XDG_DATA_HOME",
+    "XDG_RUNTIME_DIR",
+    "CODEX_HOME",
+  ]);
   for (const [key, value] of Object.entries(process.env)) {
+    const declared =
+      allowedSecretNames.includes(key) &&
+      !/^(GH_|GITHUB_|GIT_|SSH_)/i.test(key);
     if (
-      !value ||
-      /^(GH_|GITHUB_)/i.test(key) ||
-      key.startsWith("GIT_") ||
-      ["SSH_AUTH_SOCK", "SSH_ASKPASS"].includes(key) ||
-      deniedNames.test(key)
+      value &&
+      (allowedNames.has(key) || /^LC_[A-Z_]+$/.test(key) || declared)
     )
-      continue;
-    env[key] = value;
+      env[key] = value;
   }
   Object.assign(env, {
     GH_CONFIG_DIR: credentialDirectory,

@@ -49,16 +49,12 @@ test("fresh packed artifact installs and exposes documented install/status comma
         "--prefix",
         prefix,
         "--ignore-scripts",
-        "--offline",
         "--omit=optional",
         join(pack, packageName),
         join(pack, sdkPackage),
         join(pack, codexPackage),
       ],
-      {
-        stdio: "ignore",
-        env: { ...process.env, npm_config_cache: join(root, "empty-cache") },
-      },
+      { stdio: "ignore" },
     );
     const cli = join(prefix, "node_modules", ".bin", "factory");
     const environment = {
