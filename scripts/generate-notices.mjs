@@ -69,12 +69,12 @@ function noticesFor(entry) {
           .trimEnd(),
       },
     ];
-  if (entry.name === "@azu/format-text")
+  if (entry.name === "@azu/format-text" && entry.version === "1.0.2")
     return [
       {
         source:
-          "Published package metadata; no license file in package or upstream repository",
-        text: "Author: azu. Declared license: BSD-3-Clause. Upstream: https://github.com/azu/format-text. The package omits a license text; resolve this attribution gap before public release.",
+          "npm @azu/format-text@1.0.2 metadata and SPDX license-list-data v3.29.0",
+        text: `The published package declares BSD-3-Clause and lists azu as author. Its npm tarball and exact upstream gitHead 2f72a7bf808c0818a395c2323d77128352539297 contain no license file or copyright notice. The generic BSD-3-Clause text below is from https://github.com/spdx/license-list-data/blob/v3.29.0/text/BSD-3-Clause.txt (https://spdx.org/licenses/BSD-3-Clause.html). Its <year> and <owner> variables remain unfilled because the publisher supplied neither value; author metadata is not treated as a copyright notice. Upstream source: https://github.com/azu/format-text/tree/2f72a7bf808c0818a395c2323d77128352539297.\n\n${readFileSync(resolve(root, "licenses/BSD-3-Clause-SPDX.txt"), "utf8").replace(/\r\n?/g, "\n").trimEnd()}`,
       },
     ];
   throw new Error(`Missing license notice for ${entry.path}`);

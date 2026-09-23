@@ -4,7 +4,7 @@ Generated from the production dependencies in `package-lock.json` and their inst
 
 | Package | Version | Declared license | Notice source |
 | --- | --- | --- | --- |
-| `@azu/format-text` | 1.0.2 | BSD-3-Clause | `Published package metadata; no license file in package or upstream repository` |
+| `@azu/format-text` | 1.0.2 | BSD-3-Clause | `npm @azu/format-text@1.0.2 metadata and SPDX license-list-data v3.29.0` |
 | `@azu/style-format` | 1.0.1 | WTFPL | `node_modules/@azu/style-format/LICENSE` |
 | `@babel/code-frame` | 7.29.7 | MIT | `node_modules/@babel/code-frame/LICENSE` |
 | `@babel/helper-validator-identifier` | 7.29.7 | MIT | `node_modules/@babel/helper-validator-identifier/LICENSE` |
@@ -109,10 +109,22 @@ Generated from the production dependencies in `package-lock.json` and their inst
 
 ### @azu/format-text@1.0.2
 
-Source: `Published package metadata; no license file in package or upstream repository`
+Source: `npm @azu/format-text@1.0.2 metadata and SPDX license-list-data v3.29.0`
 
 ````text
-Author: azu. Declared license: BSD-3-Clause. Upstream: https://github.com/azu/format-text. The package omits a license text; resolve this attribution gap before public release.
+The published package declares BSD-3-Clause and lists azu as author. Its npm tarball and exact upstream gitHead 2f72a7bf808c0818a395c2323d77128352539297 contain no license file or copyright notice. The generic BSD-3-Clause text below is from https://github.com/spdx/license-list-data/blob/v3.29.0/text/BSD-3-Clause.txt (https://spdx.org/licenses/BSD-3-Clause.html). Its <year> and <owner> variables remain unfilled because the publisher supplied neither value; author metadata is not treated as a copyright notice. Upstream source: https://github.com/azu/format-text/tree/2f72a7bf808c0818a395c2323d77128352539297.
+
+Copyright (c) <year> <owner>.
+
+Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions are met:
+
+1. Redistributions of source code must retain the above copyright notice, this list of conditions and the following disclaimer.
+
+2. Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the following disclaimer in the documentation and/or other materials provided with the distribution.
+
+3. Neither the name of the copyright holder nor the names of its contributors may be used to endorse or promote products derived from this software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ````
 
 ### @azu/style-format@1.0.1
