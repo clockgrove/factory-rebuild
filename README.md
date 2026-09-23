@@ -2,7 +2,7 @@
 
 Factory turns a repository development Objective into source-grounded Work Items, runs bounded coding attempts, validates their exact result trees, and delivers the changes through GitHub. It is an open-source Clockgrove plugin installed for one target repository at a time.
 
-**Status:** public release candidate in progress. The installed local Codex SDK path, dependency DAG, lifecycle, regular pull requests, native linear stacks, human-selected AssetSets, and Git LFS have passed public disposable gates. One pinned installed package has now passed the combined public disposable Objective; see [current build status](docs/BUILD-STATUS.md) for the exact artifact and final head. The current package remains a development candidate while the separate trunk-gap review and required public-artifact adopter pilot are pending.
+**Status:** public release candidate in progress. The installed local Codex SDK path, dependency DAG, lifecycle, regular pull requests, native linear stacks, human-selected AssetSets, and Git LFS have passed disposable gates using public fixture inputs. One pinned installed package has now passed the combined Objective in a private target repository; see [current build status](docs/BUILD-STATUS.md) for the exact artifact and final head. The current package remains a development candidate while the separate trunk-gap review and required public-artifact adopter pilot are pending.
 
 ## How it works
 
@@ -41,7 +41,7 @@ Bind one target checkout and run a GitHub Objective with the installed CLI:
 
 Use `--delivery native-stack` at install time to deliver maximal linear chains through GitHub's native stacked pull requests. The default is regular PR delivery.
 
-To reproduce the combined release gate without any Clockgrove private material, start with [the public target fixture](test/fixtures/disposable-target/) in a new GitHub repository you control. Copy its files into an empty directory, initialize and push `main`, then create a GitHub issue from [the release-candidate Objective template](test/fixtures/objectives/release-candidate.md). Install this package with `--delivery native-stack --concurrency 2` and that target checkout, then run the new issue number. Use a fresh `XDG_CONFIG_HOME` and `XDG_STATE_HOME` for an isolated installation. The Objective owns its requirements; Factory derives the Work Item graph and validation commands from the issue and target checkout.
+The historical `clockgrove/objective-fixture` target is private, so its linked Issues and PRs are available only to maintainers. To reproduce the combined release gate without any Clockgrove private material, start with [the public target fixture](test/fixtures/disposable-target/) in a new GitHub repository you control. Copy its files into an empty directory, initialize and push `main`, then create a GitHub issue from [the release-candidate Objective template](test/fixtures/objectives/release-candidate.md). Install this package with `--delivery native-stack --concurrency 2` and that target checkout, then run the new issue number. Use a fresh `XDG_CONFIG_HOME` and `XDG_STATE_HOME` for an isolated installation. The Objective owns its requirements; Factory derives the Work Item graph and validation commands from the issue and target checkout.
 
 For a media Work Item, the harness returns complete candidate AssetSets and Factory stops for human review. `factory status --objective ISSUE_NUMBER` lists their IDs and digests. Export a candidate outside the target checkout, inspect its image and sidecar, then select the whole set and resume:
 
