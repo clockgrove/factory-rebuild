@@ -2,7 +2,7 @@
 
 Factory turns a repository development Objective into source-grounded Work Items, runs bounded coding attempts, validates their exact result trees, and delivers the changes through GitHub. It is an open-source Clockgrove plugin installed for one target repository at a time.
 
-**Status:** public release candidate in progress. The installed local Codex SDK path, dependency DAG, lifecycle, regular pull requests, native linear stacks, human-selected AssetSets, and Git LFS have passed public disposable gates. The remaining trunk gate combines them in one Objective; see [current build status](docs/BUILD-STATUS.md). The current package is a development candidate until that gate passes and a versioned artifact is published.
+**Status:** public release candidate in progress. The installed local Codex SDK path, dependency DAG, lifecycle, regular pull requests, native linear stacks, human-selected AssetSets, and Git LFS have passed public disposable gates. One pinned installed package has now passed the combined public disposable Objective; see [current build status](docs/BUILD-STATUS.md) for the exact artifact and final head. The current package remains a development candidate while the separate trunk-gap review and required public-artifact adopter pilot are pending.
 
 ## How it works
 
