@@ -72,3 +72,7 @@ Issue #21 extends the clean `src/delivery/native-runner.ts` using the existing `
 ## Pinned planning and graph review gap (#19)
 
 The audited archive commit's `src/application/plan.ts`, `src/application/compiler-preflight.ts`, and `src/compiler/judge-context.ts` were inspected for the read-only planning boundary, pinned Git authority, and complete independent review packet. The clean `src/compiler.ts`, `src/runner.ts`, and `src/cli.ts` implement only the required current path: exact named sources/headings from the pinned base, a zero-run-state preview, one independent source-backed graph review, at most one automatic revision, and a specific recorded human fallback. The archived policy matrix, repository inventory caps, compiler judge byte cap, obligation inventory, and recovery protocols were not copied.
+
+## Command trust and result acceptance (#20)
+
+The clean implementation extends `src/compiler.ts`, `src/validation.ts`, and the existing regular/native runners from the public #20 acceptance and current #19 planning contract. No additional archived source, test, state format, or validator protocol was inspected or copied. Command authority is checked against pinned source lines or a named tracked base file. Result review uses one bounded exact-tree packet and one specific human fallback, with decisions in the existing atomic snapshot. There is no judge loop or secondary validation ledger.

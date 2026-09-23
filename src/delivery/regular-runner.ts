@@ -7,13 +7,19 @@ import type {
   DeliveryStrategy,
   ExecutionDriver,
   GitHubGateway,
+  PlanningModel,
   WorkItem,
 } from "../contracts.js";
 import { materializeAssetSet, selectedInputsForItem } from "../media.js";
 import { closeWorkItem } from "../completion.js";
 import { git } from "../process.js";
 import { readyItems } from "../scheduler.js";
-import { validateWorkItem } from "../validation.js";
+import {
+  AcceptanceDecisionRequired,
+  reviewAcceptance,
+  validateWorkItem,
+} from "../validation.js";
+import { planningSources } from "../compiler.js";
 
 export async function runRegularGraph(args: {
   config: FactoryConfig;
@@ -25,6 +31,7 @@ export async function runRegularGraph(args: {
   delivery: DeliveryStrategy;
   contentStore: ContentStore;
   github: GitHubGateway;
+  planningModel: PlanningModel;
   save: () => void;
   active: Map<string, Promise<void>>;
   cancelled: () => boolean;
@@ -67,7 +74,7 @@ export async function runRegularGraph(args: {
         });
         work.changeRef = applied.changeRef;
         work.treeSha = applied.treeSha;
-      } else {
+      } else if (work.step !== "validate") {
         const handle =
           existingHandle ??
           (await driver.start({
@@ -106,6 +113,21 @@ export async function runRegularGraph(args: {
         work.changeRef!,
         work.treeSha!,
       );
+      work.validation = await reviewAcceptance({
+        model: args.planningModel,
+        checkout: config.checkout,
+        baseSha: itemBase,
+        commit: work.changeRef!,
+        evidence: work.validation,
+        criteria: item.acceptance,
+        sources: planningSources(
+          args.objectiveBody,
+          state.baseSha,
+          config.checkout,
+        ),
+        decisions: work.acceptanceDecisions,
+      });
+      delete work.acceptancePending;
       work.step = "deliver";
       save();
       const branch = `factory/objective-${objective}/${item.id}`;
@@ -142,6 +164,13 @@ export async function runRegularGraph(args: {
       await integrate;
       await closeWorkItem(state, item.id, github, save, false);
     } catch (error) {
+      if (error instanceof AcceptanceDecisionRequired) {
+        work.status = "waiting";
+        work.step = "approve-result";
+        work.acceptancePending = error.pending;
+        save();
+        return;
+      }
       if (work.status !== "done")
         work.status = args.cancelled() ? "cancelled" : "failed";
       work.error = error instanceof Error ? error.message : String(error);
@@ -152,6 +181,19 @@ export async function runRegularGraph(args: {
   for (const item of graph.items) {
     const work = state.work[item.id]!;
     if (work.status !== "running") continue;
+    if (
+      work.step === "validate" &&
+      work.baseSha &&
+      work.changeRef &&
+      work.treeSha
+    ) {
+      const promise = execute(item, work.baseSha).finally(() =>
+        active.delete(item.id),
+      );
+      void promise.catch(() => undefined);
+      active.set(item.id, promise);
+      continue;
+    }
     if (
       work.step === "approve-asset" &&
       work.selectedAssetSet &&

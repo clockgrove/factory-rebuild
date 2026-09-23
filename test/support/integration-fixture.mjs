@@ -180,6 +180,24 @@ class ScriptedPlanningModel {
   async reviewGraph() {
     return { findings: [] };
   }
+
+  async reviewResult(request) {
+    const source = request.sources.find((item) => item.path === "OBJECTIVE");
+    return {
+      findings: request.criteria.map((criterion) => ({
+        criterion,
+        verdict: "pass",
+        source: "OBJECTIVE",
+        quote:
+          source.content
+            .split("\n")
+            .find((line) => line.includes("test -s"))
+            ?.trim() ?? source.content.split("\n").find(Boolean),
+        detail: "Scripted integration fixture confirms its declared result",
+        question: "",
+      })),
+    };
+  }
 }
 
 class ScriptedHarness {

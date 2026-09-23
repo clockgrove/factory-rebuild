@@ -110,7 +110,7 @@ export class CodexPlanningModel implements PlanningModel {
       sandboxMode: "read-only",
       approvalPolicy: "never",
     });
-    const prompt = `Compile this human Objective into the smallest complete dependency-aware Work Item graph. Use parallel lanes only when ownership and resources allow them. Return the requested JSON only. Use exact supplied base SHA and Objective number. Cite only supplied source paths. Give each item explicit non-goals. Choose observable acceptance and owned paths. For every validation command, set provenance to base-observed or source-declared. If source-declared, set source to the exact supplied path that declares it, such as OBJECTIVE or AGENTS.md; if base-observed, set source to an empty string. For each source asset, bind its path, role, media type, visibility, and kind: repository for a pinned checkout path, local for an explicitly approved absolute private file, or github-attachment for a recognized URL literally present in the Objective. Use an explicitly declared media type when available, otherwise application/octet-stream; never infer format from an extension. List expected output roles for media work; use empty arrays for ordinary work. Set minimumAssetSets from the Objective candidate count, or 1 for unspecified media and 0 for ordinary work. List requiredLfsRoles only when a supplied source requires them; the target repository .gitattributes is authoritative. Do not add deployment, paid services, providers, recovery, or later scope.\n\nObjective:\n${request.objective}\n\nBase: ${request.baseSha}\n\nSources:\n${request.sources.map((s) => `--- ${s.path} ---\n${s.content}`).join("\n")}`;
+    const prompt = `Compile this human Objective into the smallest complete dependency-aware Work Item graph. Use parallel lanes only when ownership and resources allow them. Return the requested JSON only. Use exact supplied base SHA and Objective number. Cite only supplied source paths. Give each item explicit non-goals. Choose observable acceptance and owned paths. For every validation command, set provenance to base-observed or source-declared and name its exact source path. A source-declared command must be an exact command line in a supplied source (OBJECTIVE or a pinned source). A base-observed command must identify a tracked file in the exact base containing that command as an exact line, or a package.json script invoked by npm run NAME/npm test. Do not invent commands or use a vague source. For each source asset, bind its path, role, media type, visibility, and kind: repository for a pinned checkout path, local for an explicitly approved absolute private file, or github-attachment for a recognized URL literally present in the Objective. Use an explicitly declared media type when available, otherwise application/octet-stream; never infer format from an extension. List expected output roles for media work; use empty arrays for ordinary work. Set minimumAssetSets from the Objective candidate count, or 1 for unspecified media and 0 for ordinary work. List requiredLfsRoles only when a supplied source requires them; the target repository .gitattributes is authoritative. Do not add deployment, paid services, providers, recovery, or later scope.\n\nObjective:\n${request.objective}\n\nBase: ${request.baseSha}\n\nSources:\n${request.sources.map((s) => `--- ${s.path} ---\n${s.content}`).join("\n")}`;
     const result = await thread.run(prompt, { outputSchema: request.schema });
     return JSON.parse(result.finalResponse) as T;
   }
@@ -160,6 +160,71 @@ export class CodexPlanningModel implements PlanningModel {
     });
     return JSON.parse(result.finalResponse);
   }
+
+  async reviewResult(request: {
+    criteria: string[];
+    baseSha: string;
+    treeSha: string;
+    sources: { path: string; content: string }[];
+    change: string;
+    commands: { command: string; passed: true }[];
+    observations?: string;
+  }): Promise<{
+    findings: {
+      criterion: string;
+      verdict: "pass" | "needs-human" | "refuse";
+      source: string;
+      quote: string;
+      detail: string;
+      question: string;
+    }[];
+  }> {
+    const codex = new Codex();
+    const thread = codex.startThread({
+      workingDirectory: this.checkout,
+      sandboxMode: "read-only",
+      approvalPolicy: "never",
+    });
+    const result = await thread.run(
+      `Independently review the exact result of a Factory Objective. Decide each criterion only from the supplied pinned source, command pass evidence, delivery observations when supplied, and exact Git change. A shell exit code alone proves only that command's assertion. Return one finding per criterion in the given order. Pass only when the evidence proves that criterion; otherwise needs-human with one specific question. Use refuse for a directly disproved criterion. Quote an exact source fragment for every finding. Never edit or run commands.\n\nBase: ${request.baseSha}\nResult tree: ${request.treeSha}\nCriteria: ${JSON.stringify(request.criteria)}\nCommands: ${JSON.stringify(request.commands)}\nDelivery observations: ${request.observations ?? "none"}\nSources: ${request.sources.map((s) => `--- ${s.path} ---\n${s.content}`).join("\n")}\nChange:\n${request.change}`,
+      {
+        outputSchema: {
+          type: "object",
+          properties: {
+            findings: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: {
+                  criterion: { type: "string" },
+                  verdict: {
+                    type: "string",
+                    enum: ["pass", "needs-human", "refuse"],
+                  },
+                  source: { type: "string" },
+                  quote: { type: "string" },
+                  detail: { type: "string" },
+                  question: { type: "string" },
+                },
+                required: [
+                  "criterion",
+                  "verdict",
+                  "source",
+                  "quote",
+                  "detail",
+                  "question",
+                ],
+                additionalProperties: false,
+              },
+            },
+          },
+          required: ["findings"],
+          additionalProperties: false,
+        },
+      },
+    );
+    return JSON.parse(result.finalResponse);
+  }
 }
 
 export function validateGraph(
@@ -174,18 +239,13 @@ export function validateGraph(
 export function validateCommandProvenance(
   graph: WorkGraph,
   sources: { path: string; content: string }[],
+  checkout: string,
 ): void {
-  const byPath = new Map(
-    sources.map((source) => [source.path, source.content]),
-  );
   for (const item of graph.items) {
     for (const check of item.validation) {
-      if (
-        check.provenance === "source-declared" &&
-        !byPath.get(check.source ?? "")?.includes(check.command)
-      ) {
+      if (!authorizedCommand(check, graph.baseSha, sources, checkout)) {
         throw new Error(
-          `Work Item ${item.id} cites an undeclared validation command in ${check.source ?? "unknown source"}`,
+          `Work Item ${item.id} has no exact ${check.provenance} command authority in ${check.source ?? "unknown source"}: ${check.command}`,
         );
       }
     }
@@ -215,6 +275,7 @@ export interface PlanCandidate {
     hostExecution: "authorized" | "blocked";
     reason: string;
   }[];
+  finalCommands: string[];
   humanDecision?: {
     question: string;
     answer: string;
@@ -251,22 +312,16 @@ function digest(value: string): string {
 function commandAuthorizations(
   graph: WorkGraph,
   sources: PlanningSource[],
+  checkout: string,
 ): PlanCandidate["commands"] {
-  return graph.items.flatMap((item) =>
+  const workCommands = graph.items.flatMap((item) =>
     item.validation.map((check) => {
-      const declared =
-        check.provenance === "source-declared" &&
-        sources
-          .filter((source) => source.path === check.source)
-          .some((source) =>
-            source.content.split("\n").some((line) => {
-              const text = line
-                .trim()
-                .replace(/^[-*]\s+/, "")
-                .trim();
-              return text === check.command || text === `\`${check.command}\``;
-            }),
-          );
+      const declared = authorizedCommand(
+        check,
+        graph.baseSha,
+        sources,
+        checkout,
+      );
       return {
         itemId: item.id,
         command: check.command,
@@ -277,12 +332,105 @@ function commandAuthorizations(
           : ("blocked" as const),
         reason: declared
           ? "Exact command line in cited pinned source"
-          : check.provenance === "base-observed"
-            ? "Base-observed command requires exact-base verification (#20)"
-            : "No exact command declaration in cited source",
+          : "No exact command declaration in cited pinned source or base",
       };
     }),
   );
+  const objective = sources.find((source) => source.path === "OBJECTIVE");
+  return [
+    ...workCommands,
+    ...finalObjectiveCommands(objective?.content ?? "").map((command) => ({
+      itemId: "OBJECTIVE",
+      command,
+      provenance: "source-declared" as const,
+      source: "OBJECTIVE",
+      hostExecution: "authorized" as const,
+      reason: "Exact final command line in pinned Objective",
+    })),
+  ];
+}
+
+/** Final commands are accepted only as exact lines under the Objective heading. */
+export function finalObjectiveCommands(body: string): string[] {
+  const section =
+    body.match(
+      /^## Final validation\s*\n([\s\S]*?)(?=^## |$(?![\s\S]))/im,
+    )?.[1] ?? "";
+  return section.split("\n").flatMap((line) => {
+    const match = line.match(/^\s*-\s+(`[^`]+`|[^`]+?)\s*$/);
+    return match ? [match[1]!.replace(/^`|`$/g, "")] : [];
+  });
+}
+
+export function objectiveCriteria(body: string): string[] {
+  const acceptance =
+    body.match(/^## Acceptance\s*\n([\s\S]*?)(?=^## |$(?![\s\S]))/im)?.[1] ??
+    "";
+  const listed = acceptance.split("\n").flatMap((line) => {
+    const match = line.match(/^\s*-\s+(.+?)\s*$/);
+    return match ? [match[1]!] : [];
+  });
+  if (listed.length) return listed;
+  const goal =
+    body.match(/^## Goal\s*\n([\s\S]*?)(?=^## |$(?![\s\S]))/im)?.[1] ?? "";
+  return goal
+    .split(/\n\s*\n/)
+    .map((paragraph) => paragraph.trim())
+    .filter(Boolean);
+}
+
+function exactLine(content: string, command: string): boolean {
+  return content.split("\n").some((line) => {
+    const text = line
+      .trim()
+      .replace(/^[-*]\s+/, "")
+      .trim();
+    return text === command || text === `\`${command}\``;
+  });
+}
+
+function authorizedCommand(
+  check: WorkGraph["items"][number]["validation"][number],
+  baseSha: string,
+  sources: PlanningSource[],
+  checkout: string,
+): boolean {
+  if (!check.command.trim() || !check.source) return false;
+  if (check.provenance === "source-declared")
+    return sources.some(
+      (source) =>
+        source.path === check.source &&
+        exactLine(source.content, check.command),
+    );
+  if (
+    check.provenance !== "base-observed" ||
+    !/^[A-Za-z0-9_./-]+$/.test(check.source) ||
+    check.source.split("/").includes("..")
+  )
+    return false;
+  let content: string;
+  try {
+    content = pinnedGitRaw(
+      checkout,
+      "show",
+      `${baseSha}:${check.source}`,
+    ).toString("utf8");
+  } catch {
+    return false;
+  }
+  if (exactLine(content, check.command)) return true;
+  if (check.source !== "package.json") return false;
+  try {
+    const scripts = JSON.parse(content).scripts as
+      Record<string, unknown> | undefined;
+    const name =
+      check.command === "npm test"
+        ? "test"
+        : check.command.match(/^npm run ([A-Za-z0-9:_-]+)$/)?.[1];
+    return Boolean(name && typeof scripts?.[name] === "string");
+  } catch {
+    return false;
+  }
 }
 
 function planningFailure(error: unknown): never {
@@ -444,7 +592,6 @@ export async function compileObjective(
     .catch(planningFailure);
   validateGraph(graph, objective, baseSha, new Set(sources.map((s) => s.path)));
   validateCitations(graph, sources);
-  validateCommandProvenance(graph, sources);
   for (const item of graph.items) {
     if (
       new Set(item.expectedOutputRoles ?? []).size !==
@@ -607,7 +754,8 @@ export async function compilePlan(
     })),
     graph,
     graphDigest: digest(JSON.stringify(graph)),
-    commands: commandAuthorizations(graph, sources),
+    commands: commandAuthorizations(graph, sources, checkout),
+    finalCommands: finalObjectiveCommands(body),
     review: {
       status: findings.length ? "needs-human" : "clean",
       revisions,
@@ -636,7 +784,11 @@ export function verifyPlanCandidate(
     JSON.stringify(candidate.sources) !== JSON.stringify(expectedSources) ||
     candidate.graphDigest !== digest(JSON.stringify(candidate.graph)) ||
     JSON.stringify(candidate.commands) !==
-      JSON.stringify(commandAuthorizations(candidate.graph, expectedSources)) ||
+      JSON.stringify(
+        commandAuthorizations(candidate.graph, expectedSources, checkout),
+      ) ||
+    JSON.stringify(candidate.finalCommands) !==
+      JSON.stringify(finalObjectiveCommands(body)) ||
     JSON.stringify(candidate.sourceDigests) !==
       JSON.stringify(
         expectedSources.map(({ path, heading, content }) => ({
@@ -668,7 +820,7 @@ export function verifyPlanCandidate(
     new Set(candidate.sourceDigests.map((source) => source.path)),
   );
   validateCitations(candidate.graph, candidate.sources);
-  validateCommandProvenance(candidate.graph, candidate.sources);
+  validateCommandProvenance(candidate.graph, candidate.sources, checkout);
 }
 
 /** Record a specific human fallback and re-review the resulting graph. */
@@ -752,7 +904,8 @@ export async function resolvePlan(
     })),
     graph,
     graphDigest: digest(JSON.stringify(graph)),
-    commands: commandAuthorizations(graph, sources),
+    commands: commandAuthorizations(graph, sources, checkout),
+    finalCommands: finalObjectiveCommands(body),
     review: {
       status: findings.length ? "needs-human" : "clean",
       revisions: candidate.review.revisions,
