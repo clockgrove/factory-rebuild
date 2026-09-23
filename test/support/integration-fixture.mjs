@@ -331,6 +331,9 @@ export class StatefulGitHubFake {
         nextPullRequest: 200,
         nextStack: 300,
         issues: {},
+        issueComments: {},
+        closedIssues: {},
+        dependencies: {},
         projections: {},
         pullRequests: {},
         stacks: {},
@@ -358,27 +361,58 @@ export class StatefulGitHubFake {
     return "main";
   }
 
-  async closeIssue(number, comment) {
+  async closeIssue(number, comment, expected) {
     this.update((state) => {
+      if (expected.workItem) {
+        const { id } = expected.workItem;
+        if (state.issues[id] !== number)
+          throw new Error("Work Item issue identity changed");
+      } else if (number !== 1 || state.objectiveBody !== expected.body) {
+        throw new Error("Objective issue identity changed");
+      }
+      state.issueComments[number] ??= [];
+      if (!state.issueComments[number].includes(comment))
+        state.issueComments[number].push(comment);
+    });
+    if (this.failCloseAfterComment === number) {
+      this.failCloseAfterComment = undefined;
+      throw new Error("Injected close failure after comment");
+    }
+    this.update((state) => {
+      state.closedIssues[number] = true;
       state.events.push({ type: "close-issue", number, comment });
     });
   }
 
   async projectGraph(request) {
-    return this.update((state) => {
-      const issueByItemId = {};
-      for (const item of request.graph.items) {
+    const issueByItemId = {};
+    for (const item of request.graph.items) {
+      this.update((state) => {
         state.issues[item.id] ??= state.nextIssue++;
         state.projections[item.id] = structuredClone(item);
         issueByItemId[item.id] = state.issues[item.id];
+      });
+      if (this.failProjectionAfter === Object.keys(issueByItemId).length) {
+        this.failProjectionAfter = undefined;
+        throw new Error("Injected partial projection failure");
       }
+    }
+    for (const item of request.graph.items) {
+      this.update((state) => {
+        state.dependencies[item.id] ??= [];
+        for (const dependency of item.dependencies)
+          if (!state.dependencies[item.id].includes(dependency))
+            state.dependencies[item.id].push(dependency);
+      });
+    }
+    this.update((state) => {
       state.events.push({
         type: "project",
         objective: request.objectiveIssue,
         issueByItemId,
       });
-      return { issueByItemId };
     });
+    return { issueByItemId };
   }
 
   async findOpenPullRequest(branch, base, headSha) {

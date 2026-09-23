@@ -80,7 +80,7 @@ async function main(): Promise<void> {
       const describe = (id: string): string => {
         const work = state.work[id]!;
         if (work.status !== "pending")
-          return `${id} ${work.status}${work.step ? ` (${work.step})` : ""}`;
+          return `${id} ${work.status}${work.step ? ` (${work.step})` : ""}${work.status === "done" && work.githubClosure !== "complete" ? " (GitHub close pending)" : ""}`;
         const item = state.graph.items.find(
           (candidate) => candidate.id === id,
         )!;
@@ -104,7 +104,7 @@ async function main(): Promise<void> {
           : `${id} ready`;
       };
       console.log(
-        `Objective #${objective}: ${state.graph.items.map((item) => describe(item.id)).join(", ")}; final validation ${state.finalValidation?.passed ? "passed" : state.cancelledAt ? "cancelled" : state.error ? "failed" : "pending"}${state.error ? `; error: ${state.error}` : ""}`,
+        `Objective #${objective}: ${state.graph.items.map((item) => describe(item.id)).join(", ")}; final validation ${state.finalValidation?.passed ? "passed" : state.cancelledAt ? "cancelled" : state.error ? "failed" : "pending"}${state.finalValidation?.passed && state.objectiveClosure !== "complete" ? "; Objective GitHub close pending" : ""}${state.error ? `; error: ${state.error}` : ""}${state.githubClosureError ? `; GitHub: ${state.githubClosureError}` : ""}`,
       );
       for (const [id, work] of Object.entries(state.work)) {
         if (work.status !== "waiting" || work.step !== "approve-asset")

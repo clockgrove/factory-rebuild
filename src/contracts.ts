@@ -254,7 +254,11 @@ export interface NativeStackLayer {
 export interface GitHubGateway {
   objective(number: number): Promise<ObjectiveIssue>;
   defaultBranch(): string;
-  closeIssue(number: number, comment: string): Promise<void>;
+  closeIssue(
+    number: number,
+    comment: string,
+    expected: { body?: string; workItem?: { objective: number; id: string } },
+  ): Promise<void>;
   projectGraph(request: GraphProjection): Promise<ProjectedGraph>;
   findOpenPullRequest(
     branch: string,

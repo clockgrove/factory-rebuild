@@ -32,6 +32,8 @@ export interface WorkState {
   error?: string;
   startedAt?: string;
   completedAt?: string;
+  integratedSha?: string;
+  githubClosure?: "pending" | "complete";
 }
 
 export interface FactoryState {
@@ -52,6 +54,9 @@ export interface FactoryState {
   >;
   integratedSha?: string;
   finalValidation?: ValidationEvidence & { passed: boolean; detail?: string };
+  objectiveBodyDigest?: string;
+  objectiveClosure?: "pending" | "complete";
+  githubClosureError?: string;
   cancelRequested?: boolean;
   cancelledAt?: string;
   error?: string;
@@ -194,6 +199,8 @@ export function parseFactoryState(
   }
   const projected = record(state.issueByItemId, "issueByItemId");
   const work = record(state.work, "work");
+  if (new Set(Object.values(projected)).size !== ids.size)
+    throw new Error("Projected Work Item Issue identities are not unique");
   if (
     Object.keys(projected).length !== ids.size ||
     Object.keys(work).length !== ids.size
@@ -211,6 +218,8 @@ export function parseFactoryState(
       throw new Error(`Work Item ${id} has an invalid step`);
     for (const key of ["baseSha", "treeSha", "changeRef"])
       if (item[key] !== undefined) sha(item[key], `${id}.${key}`);
+    if (item.integratedSha !== undefined)
+      sha(item.integratedSha, `${id}.integratedSha`);
     if (item.status === "running" && (!item.step || !item.baseSha))
       throw new Error(`Running Work Item ${id} lacks step or base`);
     if (
@@ -231,6 +240,12 @@ export function parseFactoryState(
       (!Number.isSafeInteger(item.pullRequest) || Number(item.pullRequest) <= 0)
     )
       throw new Error(`Work Item ${id} PR identity is invalid`);
+    if (
+      item.githubClosure !== undefined &&
+      (item.status !== "done" ||
+        !["pending", "complete"].includes(String(item.githubClosure)))
+    )
+      throw new Error(`Work Item ${id} GitHub closure is invalid`);
     if (
       item.selectedAssetSet !== undefined &&
       (typeof item.selectedAssetSet !== "string" ||
@@ -393,6 +408,19 @@ export function parseFactoryState(
   }
   if (state.objectiveCommands !== undefined)
     strings(state.objectiveCommands, "objectiveCommands");
+  if (state.objectiveBodyDigest !== undefined)
+    sha(state.objectiveBodyDigest, "objectiveBodyDigest", 64);
+  if (
+    state.objectiveClosure !== undefined &&
+    (state.finalValidation === undefined ||
+      !["pending", "complete"].includes(String(state.objectiveClosure)))
+  )
+    throw new Error("Objective GitHub closure is invalid");
+  if (
+    state.githubClosureError !== undefined &&
+    typeof state.githubClosureError !== "string"
+  )
+    throw new Error("githubClosureError is invalid");
   if (state.error !== undefined && typeof state.error !== "string")
     throw new Error("state.error is invalid");
   return value as FactoryState;

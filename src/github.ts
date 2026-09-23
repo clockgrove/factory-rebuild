@@ -74,39 +74,82 @@ export class RealGitHubGateway implements GitHubGateway {
     ) as { body: string; title: string };
   }
 
-  async closeIssue(number: number, comment: string): Promise<void> {
-    command("gh", [
-      "issue",
-      "close",
-      String(number),
-      "-R",
-      this.repository,
-      "--reason",
-      "completed",
-      "--comment",
-      comment,
-    ]);
+  async closeIssue(
+    number: number,
+    comment: string,
+    expected: { body?: string; workItem?: { objective: number; id: string } },
+  ): Promise<void> {
+    const issue = JSON.parse(
+      command("gh", ["api", `repos/${this.repository}/issues/${number}`]),
+    ) as { body: string; state: string; pull_request?: unknown };
+    const marker = expected.workItem
+      ? `<!-- factory:objective=${expected.workItem.objective};item=${expected.workItem.id} -->`
+      : undefined;
+    if (
+      issue.pull_request ||
+      (marker && issue.body.split(marker).length !== 2) ||
+      (expected.body !== undefined && issue.body !== expected.body)
+    )
+      throw new Error(
+        `Issue #${number} identity changed; operator direction required`,
+      );
+    const pages = JSON.parse(
+      command("gh", [
+        "api",
+        "--paginate",
+        "--slurp",
+        `repos/${this.repository}/issues/${number}/comments?per_page=100`,
+      ]),
+    ) as { body: string }[][];
+    const commented = pages.flat().some((entry) => entry.body === comment);
+    if (!commented) {
+      if (issue.state !== "open")
+        throw new Error(
+          `Issue #${number} closed without Factory completion evidence; operator direction required`,
+        );
+      command("gh", [
+        "issue",
+        "comment",
+        String(number),
+        "-R",
+        this.repository,
+        "--body",
+        comment,
+      ]);
+    }
+    if (issue.state === "open")
+      command("gh", [
+        "issue",
+        "close",
+        String(number),
+        "-R",
+        this.repository,
+        "--reason",
+        "completed",
+      ]);
+    else if (issue.state !== "closed")
+      throw new Error(`Issue #${number} has unexpected state ${issue.state}`);
   }
 
   async projectGraph(request: GraphProjection): Promise<ProjectedGraph> {
     const issueByItemId: Record<string, number> = {};
+    const pages = JSON.parse(
+      command("gh", [
+        "api",
+        "--paginate",
+        "--slurp",
+        `repos/${this.repository}/issues?state=all&per_page=100`,
+      ]),
+    ) as { number: number; body: string | null; pull_request?: unknown }[][];
+    const existing = pages.flat().filter((issue) => !issue.pull_request);
     for (const item of request.graph.items) {
       const marker = `<!-- factory:objective=${request.objectiveIssue};item=${item.id} -->`;
-      const existing = JSON.parse(
-        command("gh", [
-          "issue",
-          "list",
-          "-R",
-          this.repository,
-          "--state",
-          "all",
-          "--search",
-          `"${marker}" in:body`,
-          "--json",
-          "number,body",
-        ]),
-      ) as { number: number; body: string }[];
-      const found = existing.find((issue) => issue.body.includes(marker));
+      const matches = existing.filter((issue) => issue.body?.includes(marker));
+      if (matches.length > 1)
+        throw new Error(
+          `Multiple Work Item issues for ${item.id}; operator direction required`,
+        );
+      const found = matches[0];
       if (found) {
         issueByItemId[item.id] = found.number;
         continue;
@@ -126,6 +169,7 @@ export class RealGitHubGateway implements GitHubGateway {
       if (!number)
         throw new Error(`Cannot parse created Work Item issue: ${url}`);
       issueByItemId[item.id] = number;
+      existing.push({ number, body });
     }
     for (const item of request.graph.items) {
       if (!item.dependencies.length) continue;
@@ -202,12 +246,21 @@ export class RealGitHubGateway implements GitHubGateway {
         "-R",
         this.repository,
         "--json",
-        "state,statusCheckRollup",
+        "state,statusCheckRollup,headRefOid,headRefName",
       ]),
     ) as {
       state: string;
+      headRefOid: string;
+      headRefName: string;
       statusCheckRollup: { conclusion?: string; status?: string }[];
     };
+    if (
+      detail.headRefOid !== identity.headSha ||
+      detail.headRefName !== identity.branch
+    )
+      throw new Error(
+        `PR #${identity.number} identity changed; operator direction required`,
+      );
     const checks = detail.statusCheckRollup ?? [];
     return {
       state:

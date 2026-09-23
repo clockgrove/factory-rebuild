@@ -54,3 +54,7 @@ The same audited commit supplied the media and LFS checklist. The clean implemen
 ## Deterministic integration suite
 
 The application integration tests were written from the current public acceptance criteria and controlling contracts. No archived test, fixture, helper, snapshot, transcript, or qualification protocol was inspected or copied for them. They use current public target inputs, temporary Git repositories and worktrees, a scripted planning/harness adapter, and a small domain-level GitHub fake.
+
+## GitHub projection and completion hardening
+
+Issue #22 reuses the existing clean GitHub projection and delivery code named above. No additional archived path, state format, test, or recovery protocol was consulted or copied. The completion changes follow the public issue acceptance: marker-based Work Item reconciliation, dependency checks, PR identity verification, and replayable issue/comment closure in the one atomic snapshot. New interruption tests use the current stateful GitHub fake at the application boundary.

@@ -16,6 +16,7 @@ import { linearDeliveryUnits } from "./plan.js";
 import { materializeAssetSet } from "../media.js";
 import { itemsConflict } from "../scheduler.js";
 import { transplantIndependentChange } from "./transplant.js";
+import { closeWorkItem } from "../completion.js";
 
 export async function runNativeGraph(args: {
   config: FactoryConfig;
@@ -356,13 +357,11 @@ export async function runNativeGraph(args: {
     for (const item of unit.items) {
       const work = state.work[item.id]!;
       work.status = "done";
+      work.integratedSha = observedAfter;
       work.completedAt = new Date().toISOString();
     }
     save();
     for (const item of unit.items)
-      await github.closeIssue(
-        state.issueByItemId[item.id]!,
-        `Completed by native delivery PR #${state.work[item.id]!.pullRequest}; integrated at ${observedAfter}.`,
-      );
+      await closeWorkItem(state, item.id, github, save, true);
   }
 }
