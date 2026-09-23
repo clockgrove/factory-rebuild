@@ -446,6 +446,212 @@ test("native application path runs a linear stack beside an independent replayed
   });
 });
 
+test("native delivery admits a later dependency wave while serializing a conflicting sibling", async () => {
+  await fixture("native-wave", async (root) => {
+    const target = createTarget(root);
+    const fakeRoot = join(root, "fake");
+    const barrier = join(root, "barriers", "children.go");
+    const ids = ["foundation", "left", "right", "conflict", "join"];
+    const commands = ids.map((id) => `test -s ${id}.txt`);
+    const descriptor = {
+      config: factoryConfig(
+        target.checkout,
+        "example/native-wave",
+        "native-stack",
+        3,
+      ),
+      graph: {
+        objective,
+        baseSha: target.baseSha,
+        items: [
+          item("foundation", { path: "foundation.txt", command: commands[0] }),
+          item("left", {
+            path: "left.txt",
+            command: commands[1],
+            dependencies: ["foundation"],
+            resources: ["shared"],
+          }),
+          item("right", {
+            path: "right.txt",
+            command: commands[2],
+            dependencies: ["foundation"],
+          }),
+          item("conflict", {
+            path: "conflict.txt",
+            command: commands[3],
+            dependencies: ["foundation"],
+            resources: ["shared"],
+          }),
+          item("join", {
+            path: "join.txt",
+            command: commands[4],
+            dependencies: ["left", "right"],
+          }),
+        ],
+      },
+      objectiveBody: body(commands),
+      fakeRoot,
+      actions: Object.fromEntries(
+        ids.map((id) => [
+          id,
+          {
+            ...(id === "left" || id === "right" ? { barrier } : {}),
+            files: [{ path: `${id}.txt`, text: `${id}\n` }],
+          },
+        ]),
+      ),
+    };
+    const { application, eventsPath } = makeApplication(descriptor);
+    const running = application.runObjective(objective);
+    await waitFor(
+      () => {
+        const starts = readEvents(eventsPath).filter(
+          (event) => event.type === "start",
+        );
+        return (
+          starts.some((event) => event.item === "left") &&
+          starts.some((event) => event.item === "right")
+        );
+      },
+      fakeRoot,
+      "concurrent post-foundation children",
+    );
+    const beforeRelease = readEvents(eventsPath);
+    assert.ok(
+      beforeRelease.some(
+        (event) => event.type === "complete" && event.item === "foundation",
+      ),
+    );
+    assert.ok(
+      !beforeRelease.some(
+        (event) => event.type === "start" && event.item === "conflict",
+      ),
+    );
+    assert.ok(
+      !beforeRelease.some(
+        (event) => event.type === "start" && event.item === "join",
+      ),
+    );
+    mkdirSync(dirnameFor(barrier), { recursive: true });
+    writeFileSync(barrier, "go\n");
+    const state = await running;
+    assert.equal(state.finalValidation.passed, true);
+    const events = readEvents(eventsPath);
+    const start = (id) =>
+      events.findIndex((event) => event.type === "start" && event.item === id);
+    const complete = (id) =>
+      events.findIndex(
+        (event) => event.type === "complete" && event.item === id,
+      );
+    assert.ok(start("left") > complete("foundation"));
+    assert.ok(start("right") > complete("foundation"));
+    assert.ok(start("conflict") > complete("left"));
+    assert.ok(start("join") > complete("left"));
+    assert.ok(start("join") > complete("right"));
+    assert.equal(state.work.right.validation.treeSha, state.work.right.treeSha);
+  });
+});
+
+test("native execution failure is terminal until an explicit safe retry", async () => {
+  await fixture("native-retry", async (root) => {
+    const target = createTarget(root);
+    const fakeRoot = join(root, "fake");
+    const command = "test -s retry.txt";
+    const descriptor = {
+      config: factoryConfig(
+        target.checkout,
+        "example/native-retry",
+        "native-stack",
+      ),
+      graph: {
+        objective,
+        baseSha: target.baseSha,
+        items: [item("retry", { path: "retry.txt", command })],
+      },
+      objectiveBody: body([command]),
+      fakeRoot,
+      actions: {
+        retry: {
+          failAttempts: 1,
+          files: [{ path: "retry.txt", text: "retried\n" }],
+        },
+      },
+    };
+    const { application, eventsPath } = makeApplication(descriptor);
+    await assert.rejects(
+      application.runObjective(objective),
+      /Scripted failure for retry/,
+    );
+    const failed = readState(descriptor.config.repository, objective);
+    assert.equal(failed.work.retry.status, "failed");
+    assert.match(failed.work.retry.error, /Scripted failure for retry/);
+    assert.equal(failed.work.retry.pullRequest, undefined);
+    await assert.rejects(application.runObjective(objective), /explicit retry/);
+    application.retryWorkItem(objective, "retry");
+    const done = await application.runObjective(objective);
+    assert.equal(done.finalValidation.passed, true);
+    assert.equal(
+      readEvents(eventsPath).filter(
+        (event) => event.type === "start" && event.item === "retry",
+      ).length,
+      2,
+    );
+  });
+});
+
+test("native retry stops when its stack already has a published layer", async () => {
+  await fixture("native-published-retry", async (root) => {
+    const target = createTarget(root);
+    const commands = ["test -s first.txt", "test -s second.txt"];
+    const descriptor = {
+      config: factoryConfig(
+        target.checkout,
+        "example/native-published-retry",
+        "native-stack",
+      ),
+      graph: {
+        objective,
+        baseSha: target.baseSha,
+        items: [
+          item("first", { path: "first.txt", command: commands[0] }),
+          item("second", {
+            path: "second.txt",
+            command: commands[1],
+            dependencies: ["first"],
+          }),
+        ],
+      },
+      objectiveBody: body(commands),
+      fakeRoot: join(root, "fake"),
+      actions: {
+        first: { files: [{ path: "first.txt", text: "first\n" }] },
+        second: {
+          failAttempts: 1,
+          files: [{ path: "second.txt", text: "second\n" }],
+        },
+      },
+    };
+    const { application, eventsPath } = makeApplication(descriptor);
+    await assert.rejects(
+      application.runObjective(objective),
+      /Scripted failure for second/,
+    );
+    const state = readState(descriptor.config.repository, objective);
+    assert.ok(state.work.first.pullRequest);
+    assert.equal(state.work.second.status, "failed");
+    assert.throws(
+      () => application.retryWorkItem(objective, "second"),
+      /Published PR requires operator direction/,
+    );
+    assert.equal(
+      readEvents(eventsPath).filter(
+        (event) => event.type === "start" && event.item === "second",
+      ).length,
+      1,
+    );
+  });
+});
+
 test("asset selection preserves a complete multi-file set and hydrates target-owned LFS bytes", async () => {
   await fixture("asset-integration", async (root) => {
     const selectedModel = Buffer.concat([

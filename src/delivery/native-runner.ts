@@ -46,22 +46,32 @@ export async function runNativeGraph(args: {
   const branchFor = (id: string) => `factory/objective-${objective}/${id}`;
   const defaultBranch = github.defaultBranch();
   const units = linearDeliveryUnits(state.graph);
-  // Prepare conflict-free roots of independent units at the same exact base.
-  // Publication still serializes, and each prepared tree is replayed and
-  // revalidated on the observed default-branch head before it is published.
-  if (Object.values(state.work).every((work) => work.status === "pending")) {
+  // Admit independent roots whenever their predecessor units have integrated.
+  // Publication stays ordered; a prepared change is replayed and validated
+  // again if an earlier unit advanced the integrated head.
+  const prepareReadyUnits = async (): Promise<void> => {
     const reported = await driver.availableSlots();
     const limit = Math.min(
       config.execution.concurrency,
       reported === "unknown" ? config.execution.concurrency : reported,
     );
     const prepared: typeof units = [];
+    const runningUnits = units.filter((unit) =>
+      unit.items.some((item) => state.work[item.id]?.status === "running"),
+    );
     for (const unit of units) {
       if (prepared.length >= limit) break;
       if (
-        unit.externalDependencies.length ||
+        state.work[unit.items[0]!.id]?.status !== "pending" ||
+        !unit.externalDependencies.every(
+          (dependency) => state.work[dependency]?.status === "done",
+        ) ||
         unit.items[0]!.expectedOutputRoles?.length ||
-        prepared.some((other) => itemsConflict(unit.items[0]!, other.items[0]!))
+        [...runningUnits, ...prepared].some((other) =>
+          unit.items.some((item) =>
+            other.items.some((candidate) => itemsConflict(item, candidate)),
+          ),
+        )
       )
         continue;
       prepared.push(unit);
@@ -72,44 +82,62 @@ export async function runNativeGraph(args: {
         const work = state.work[item.id]!;
         work.status = "running";
         work.step = "execute";
-        work.baseSha = state.baseSha;
+        work.baseSha = state.integratedSha ?? state.baseSha;
         work.attempt = randomUUID();
         work.startedAt = new Date().toISOString();
         save();
-        const handle = await driver.start({
-          item,
-          baseSha: state.baseSha,
-          attemptId: work.attempt,
-        });
-        work.execution = handle;
-        save();
-        if (args.cancelled()) {
-          await driver.cancel(handle);
-          throw new Error("Objective cancelled");
+        try {
+          const handle = await driver.start({
+            item,
+            baseSha: work.baseSha!,
+            attemptId: work.attempt,
+          });
+          work.execution = handle;
+          save();
+          if (args.cancelled()) {
+            await driver.cancel(handle);
+            throw new Error("Objective cancelled");
+          }
+          const result = await driver.collect(handle);
+          if (args.cancelled()) throw new Error("Objective cancelled");
+          if (result.assets?.length)
+            throw new Error(
+              `Independent preparation ${item.id} unexpectedly returned AssetSets`,
+            );
+          work.changeRef = result.changeRef;
+          work.treeSha = result.treeSha;
+          delete work.execution;
+          work.step = "validate";
+          save();
+        } catch (error) {
+          work.status = args.cancelled() ? "cancelled" : "failed";
+          work.error = error instanceof Error ? error.message : String(error);
+          save();
+          throw error;
         }
-        const result = await driver.collect(handle);
-        if (result.assets?.length)
-          throw new Error(
-            `Independent preparation ${item.id} unexpectedly returned AssetSets`,
-          );
-        work.changeRef = result.changeRef;
-        work.treeSha = result.treeSha;
-        delete work.execution;
-        work.step = "validate";
-        save();
       });
       for (const [index, task] of tasks.entries())
         active.set(prepared[index]!.id, task);
       try {
         await Promise.all(tasks);
+      } catch (error) {
+        await Promise.all(
+          prepared.map(async (unit) => {
+            const handle = state.work[unit.id]?.execution;
+            if (handle) await driver.cancel(handle).catch(() => undefined);
+          }),
+        );
+        await Promise.allSettled(tasks);
+        throw error;
       } finally {
         for (const unit of prepared) active.delete(unit.id);
       }
     }
-  }
+  };
   for (const unit of units) {
     if (unit.items.every((item) => state.work[item.id]?.status === "done"))
       continue;
+    await prepareReadyUnits();
     if (
       !unit.externalDependencies.every(
         (dependency) => state.work[dependency]?.status === "done",
@@ -131,13 +159,7 @@ export async function runNativeGraph(args: {
         ? previous.changeRef
         : (state.integratedSha ?? state.baseSha);
       if (!itemBase) throw new Error("Native stack predecessor has no commit");
-      if (
-        work.status === "running" &&
-        work.baseSha !== itemBase &&
-        (index !== 0 ||
-          unit.items.length !== 1 ||
-          unit.externalDependencies.length)
-      )
+      if (work.status === "running" && work.baseSha !== itemBase && index !== 0)
         throw new Error(`Work Item ${item.id} resumed on a changed base`);
       if (work.status === "pending") {
         work.status = "running";
@@ -247,7 +269,14 @@ export async function runNativeGraph(args: {
         delete work.step;
         save();
       };
-      const task = perform();
+      const task = perform().catch((error: unknown) => {
+        if (work.status !== "done" && work.status !== "published") {
+          work.status = args.cancelled() ? "cancelled" : "failed";
+          work.error = error instanceof Error ? error.message : String(error);
+          save();
+        }
+        throw error;
+      });
       active.set(item.id, task);
       try {
         await task;
