@@ -489,7 +489,9 @@ export async function compileObjective(
               }
             })()
           : kind === "local"
-            ? visibility === "private" && isAbsolute(path) && body.includes(path)
+            ? visibility === "private" &&
+              isAbsolute(path) &&
+              body.includes(path)
             : kind === "github-attachment"
               ? recognizedObjectiveAttachment(path) && body.includes(path)
               : false;
