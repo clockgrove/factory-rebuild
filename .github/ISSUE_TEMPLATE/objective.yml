@@ -63,3 +63,13 @@ body:
       options:
         - label: I have reviewed the target repository's instructions and can authorize the requested work or identify who can.
           required: true
+  - type: textarea
+    id: planning-sources
+    attributes:
+      label: Planning sources
+      description: Keep the literal heading below. Replace the example with target-repository paths at the current base; use path#Exact Heading to select one section. This must be the last field because Factory reads its entries through the end of the issue body.
+      value: |
+        ## Planning sources
+        - README.md
+    validations:
+      required: true

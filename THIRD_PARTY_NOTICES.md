@@ -4,6 +4,10 @@ Generated from the production dependencies in `package-lock.json` for Factory 0.
 
 | Package | Version | License |
 | --- | --- | --- |
+| `@azu/format-text` | 1.0.2 | BSD-3-Clause |
+| `@azu/style-format` | 1.0.1 | WTFPL |
+| `@babel/code-frame` | 7.29.7 | MIT |
+| `@babel/helper-validator-identifier` | 7.29.7 | MIT |
 | `@openai/codex` | 0.156.0 | Apache-2.0 |
 | `@openai/codex-darwin-arm64` | 0.156.0-darwin-arm64 | Apache-2.0 |
 | `@openai/codex-darwin-x64` | 0.156.0-darwin-x64 | Apache-2.0 |
@@ -12,8 +16,96 @@ Generated from the production dependencies in `package-lock.json` for Factory 0.
 | `@openai/codex-sdk` | 0.156.0 | Apache-2.0 |
 | `@openai/codex-win32-arm64` | 0.156.0-win32-arm64 | Apache-2.0 |
 | `@openai/codex-win32-x64` | 0.156.0-win32-x64 | Apache-2.0 |
+| `@secretlint/config-creator` | 13.0.5 | MIT |
+| `@secretlint/config-loader` | 13.0.5 | MIT |
+| `@secretlint/core` | 13.0.5 | MIT |
+| `@secretlint/formatter` | 13.0.5 | MIT |
+| `@secretlint/node` | 13.0.5 | MIT |
+| `@secretlint/profiler` | 13.0.5 | MIT |
+| `@secretlint/resolver` | 13.0.5 | MIT |
+| `@secretlint/secretlint-rule-preset-recommend` | 13.0.5 | MIT |
+| `@secretlint/source-creator` | 13.0.5 | MIT |
+| `@secretlint/types` | 13.0.5 | MIT |
+| `@secretlint/walker` | 13.0.5 | MIT |
+| `@textlint/ast-node-types` | 15.8.0 | MIT |
+| `@textlint/linter-formatter` | 15.8.0 | MIT |
+| `@textlint/module-interop` | 15.8.0 | MIT |
+| `@textlint/resolver` | 15.8.0 | MIT |
+| `@textlint/types` | 15.8.0 | MIT |
+| `@types/normalize-package-data` | 2.4.4 | MIT |
+| `ajv` | 8.20.0 | MIT |
+| `ajv` | 8.20.0 | MIT |
+| `ansi-escapes` | 7.3.0 | MIT |
+| `ansi-regex` | 5.0.1 | MIT |
+| `ansi-regex` | 6.3.0 | MIT |
+| `ansi-regex` | 5.0.1 | MIT |
+| `ansi-regex` | 5.0.1 | MIT |
+| `ansi-styles` | 4.3.0 | MIT |
+| `argparse` | 2.0.1 | Python-2.0 |
+| `astral-regex` | 2.0.0 | MIT |
+| `binaryextensions` | 6.11.0 | Artistic-2.0 |
+| `boundary` | 2.0.0 | BSD-2-Clause |
+| `chalk` | 5.6.2 | MIT |
+| `color-convert` | 2.0.1 | MIT |
+| `color-name` | 1.1.4 | MIT |
+| `debug` | 4.4.3 | MIT |
+| `editions` | 6.22.0 | Artistic-2.0 |
+| `emoji-regex` | 8.0.0 | MIT |
+| `environment` | 1.1.0 | MIT |
+| `fast-deep-equal` | 3.1.3 | MIT |
+| `fast-uri` | 3.1.8 | BSD-3-Clause |
+| `has-flag` | 5.0.1 | MIT |
+| `hosted-git-info` | 9.0.3 | ISC |
+| `ignore` | 7.0.10 | MIT |
+| `index-to-position` | 1.2.0 | MIT |
+| `is-fullwidth-code-point` | 3.0.0 | MIT |
+| `istextorbinary` | 9.5.0 | Artistic-2.0 |
+| `js-tokens` | 4.0.0 | MIT |
+| `js-yaml` | 4.3.2 | MIT |
+| `json-schema-traverse` | 1.0.0 | MIT |
+| `json-schema-traverse` | 1.0.0 | MIT |
+| `json5` | 2.2.3 | MIT |
+| `lodash` | 4.18.1 | MIT |
+| `lodash.truncate` | 4.4.2 | MIT |
+| `lru-cache` | 11.5.3 | BlueOak-1.0.0 |
+| `ms` | 2.1.3 | MIT |
+| `normalize-package-data` | 8.0.0 | BSD-2-Clause |
+| `p-map` | 7.0.8 | MIT |
+| `parse-json` | 8.3.0 | MIT |
+| `picocolors` | 1.1.1 | ISC |
+| `picomatch` | 4.0.7 | MIT |
+| `pluralize` | 2.0.0 | MIT |
+| `pluralize` | 8.0.0 | MIT |
+| `rc-config-loader` | 4.1.4 | MIT |
+| `read-pkg` | 10.1.0 | MIT |
+| `require-from-string` | 2.0.2 | MIT |
+| `secretlint` | 13.0.5 | MIT |
+| `semver` | 7.8.5 | ISC |
+| `slice-ansi` | 4.0.0 | MIT |
+| `spdx-correct` | 3.2.0 | Apache-2.0 |
+| `spdx-exceptions` | 2.5.0 | CC-BY-3.0 |
+| `spdx-expression-parse` | 3.0.1 | MIT |
+| `spdx-license-ids` | 3.0.24 | CC0-1.0 |
+| `string-width` | 4.2.3 | MIT |
+| `strip-ansi` | 6.0.1 | MIT |
+| `strip-ansi` | 6.0.1 | MIT |
+| `strip-ansi` | 7.2.0 | MIT |
+| `strip-ansi` | 6.0.1 | MIT |
+| `structured-source` | 4.0.0 | BSD-2-Clause |
+| `supports-color` | 10.2.2 | MIT |
+| `supports-hyperlinks` | 4.5.0 | MIT |
+| `table` | 6.9.0 | BSD-3-Clause |
+| `tagged-tag` | 1.0.0 | MIT |
+| `terminal-link` | 5.0.0 | MIT |
+| `text-table` | 0.2.0 | MIT |
+| `textextensions` | 6.11.0 | Artistic-2.0 |
+| `type-fest` | 4.41.0 | (MIT OR CC0-1.0) |
+| `type-fest` | 5.10.0 | (MIT OR CC0-1.0) |
+| `unicorn-magic` | 0.4.0 | MIT |
+| `validate-npm-package-license` | 3.0.4 | Apache-2.0 |
+| `version-range` | 4.15.0 | Artistic-2.0 |
 
-The packages above are distributed under the following license text:
+The Apache-2.0 packages above are distributed under the following license text. The other license identifiers come from the lockfile; their package-specific notices need a final audit before public publication.
 
 ```text
                                  Apache License
