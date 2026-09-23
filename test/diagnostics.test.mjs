@@ -97,6 +97,14 @@ test("private diagnostics redact secrets and validation preserves command output
       readWorkerOutput("example/diagnostics", attemptId),
       "worker stderr\n",
     );
+    assert.throws(
+      () =>
+        readWorkerOutput(
+          "example/diagnostics",
+          "22222222-2222-4222-8222-222222222222",
+        ),
+      /unavailable/,
+    );
   } finally {
     if (previous === undefined) delete process.env.XDG_STATE_HOME;
     else process.env.XDG_STATE_HOME = previous;

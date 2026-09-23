@@ -166,6 +166,10 @@ test("regular application path runs a source-grounded concurrent DAG with stable
       snapshot.work.find((work) => work.id === "join").blockedReason,
       "dependency:alpha",
     );
+    assert.equal(
+      snapshot.work.find((work) => work.id === "alpha").providerProgress,
+      "unavailable",
+    );
     mkdirSync(join(root, "barriers"), { recursive: true });
     writeFileSync(barrier, "go\n");
     const state = await running;

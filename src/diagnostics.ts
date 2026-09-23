@@ -182,7 +182,9 @@ export function readWorkerOutput(
   )
     throw new Error("Invalid worker attempt ID");
   const path = join(stateRoot(repository), "harness", `${attemptId}.log`);
-  return existsSync(path) ? readPrivateFile(path) : "";
+  if (!existsSync(path))
+    throw new Error("Worker output unavailable for this attempt");
+  return readPrivateFile(path);
 }
 
 export function readAgentTimeline(
@@ -287,6 +289,17 @@ export function statusDocument(
       ready: current.status === "pending" && !blockedReason,
       blockedReason: blockedReason ?? null,
       attemptId: current.attempt ?? null,
+      providerProgress:
+        current.attempt &&
+        existsSync(
+          join(
+            stateRoot(repository),
+            "harness",
+            `${current.attempt}.progress.ndjson`,
+          ),
+        )
+          ? "streamed"
+          : "unavailable",
       baseSha: current.baseSha ?? null,
       treeSha: current.treeSha ?? null,
       headSha: current.changeRef ?? null,
