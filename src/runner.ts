@@ -272,59 +272,49 @@ export async function runObjective(
         }
       }
       const baseSha = git(config.checkout, "rev-parse", "HEAD");
-      const planningStarted = Date.now();
-      diagnostics.emit({
-        operation: "planning",
-        outcome: "started",
-        metadata: { baseSha },
-      });
-      const plan =
-        acceptedPlan ??
-        (await compilePlan(
-          objective,
-          issue.body,
-          baseSha,
-          config.checkout,
-          planningModel,
-        ));
-      verifyPlanCandidate(
-        plan,
-        objective,
-        issue.body,
-        baseSha,
-        config.checkout,
-      );
-      if (acceptedPlan) {
-        const freshReview = await planningModel.reviewGraph({
-          objective: issue.body,
-          baseSha,
-          sources: plan.sources,
-          graph: plan.graph,
-        });
-        if (freshReview.findings.length)
-          throw new Error(
-            `Accepted plan no longer passes independent review: ${freshReview.findings[0]!.question}`,
+      const plan = await diagnostics.span(
+        { operation: "planning", metadata: { baseSha } },
+        async () => {
+          const candidate =
+            acceptedPlan ??
+            (await compilePlan(
+              objective,
+              issue.body,
+              baseSha,
+              config.checkout,
+              planningModel,
+            ));
+          verifyPlanCandidate(
+            candidate,
+            objective,
+            issue.body,
+            baseSha,
+            config.checkout,
           );
-      }
+          if (acceptedPlan) {
+            const freshReview = await planningModel.reviewGraph({
+              objective: issue.body,
+              baseSha,
+              sources: candidate.sources,
+              graph: candidate.graph,
+            });
+            if (freshReview.findings.length)
+              throw new Error(
+                `Accepted plan no longer passes independent review: ${freshReview.findings[0]!.question}`,
+              );
+          }
+          return candidate;
+        },
+        (candidate) => ({ itemCount: candidate.graph.items.length }),
+      );
       const graph = plan.graph;
-      diagnostics.emit({
-        operation: "planning",
-        outcome: "completed",
-        durationMs: Date.now() - planningStarted,
-        metadata: { itemCount: graph.items.length, baseSha },
-      });
-      const projectionStarted = Date.now();
-      diagnostics.emit({ operation: "github-projection", outcome: "started" });
-      const projected = await github.projectGraph({
-        graph,
-        objectiveIssue: objective,
-      });
-      diagnostics.emit({
-        operation: "github-projection",
-        outcome: "completed",
-        durationMs: Date.now() - projectionStarted,
-        metadata: { itemCount: graph.items.length },
-      });
+      const projected = await diagnostics.span(
+        {
+          operation: "github-projection",
+          metadata: { itemCount: graph.items.length },
+        },
+        () => github.projectGraph({ graph, objectiveIssue: objective }),
+      );
       state = {
         schemaVersion: 1,
         repository: config.repository,

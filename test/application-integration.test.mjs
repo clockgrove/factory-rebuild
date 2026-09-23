@@ -1062,6 +1062,15 @@ test("partial projection reuses issues and dependency relationships", async () =
       application.runObjective(objective),
       /partial projection/,
     );
+    assert.ok(
+      readDiagnostics(descriptor.config.repository, objective).some(
+        (event) =>
+          event.operation === "github-projection" &&
+          event.outcome === "failed" &&
+          event.durationMs >= 0 &&
+          /partial projection/.test(event.detail),
+      ),
+    );
     const firstIssue = github.state().issues.first;
     assert.equal(github.state().issues.second, undefined);
     const completed = await application.runObjective(objective);

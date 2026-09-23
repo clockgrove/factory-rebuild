@@ -10,6 +10,7 @@ import {
 } from "../dist/compiler.js";
 import { composePlanning } from "../dist/application.js";
 import { stateRoot } from "../dist/config.js";
+import { readDiagnostics } from "../dist/diagnostics.js";
 import { statePath } from "../dist/state-store.js";
 import {
   createTarget,
@@ -177,6 +178,27 @@ test("planning rejects missing selected heading without mutating run state", asy
     await assert.rejects(
       compilePlan(1, body, target.baseSha, target.checkout, model),
       /0 headings named Wave 0/,
+    );
+    const descriptor = {
+      config: factoryConfig(target.checkout, "example/missing-plan"),
+      graph: graph(target.baseSha),
+      objectiveBody: body,
+      fakeRoot: join(root, "fake"),
+      actions: {},
+    };
+    const { application } = makeApplication(descriptor);
+    await assert.rejects(
+      application.runObjective(1),
+      /0 headings named Wave 0/,
+    );
+    assert.ok(
+      readDiagnostics(descriptor.config.repository, 1).some(
+        (event) =>
+          event.operation === "planning" &&
+          event.outcome === "failed" &&
+          event.durationMs >= 0 &&
+          /0 headings named Wave 0/.test(event.detail),
+      ),
     );
     assert.equal(existsSync(statePath("example/missing-plan", 1)), false);
   });
