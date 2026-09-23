@@ -211,20 +211,21 @@ export async function reviewAcceptance(args: {
       reviewFailure = error instanceof Error ? error.message : String(error);
     }
   } else reviewFailure = "No independent result reviewer is configured";
-  const valid =
-    findings.length === criteria.length &&
-    findings.every(
-      (finding, index) =>
-        finding.criterion === criteria[index] &&
-        ["pass", "needs-human", "refuse"].includes(finding.verdict) &&
-        Boolean(finding.detail?.trim()) &&
-        sources.some(
-          (source) =>
-            source.path === finding.source &&
-            Boolean(finding.quote?.trim()) &&
-            source.content.includes(finding.quote),
-        ),
-    );
+  const evidenceSources = [
+    { path: "Exact Git change packet", content: change },
+    {
+      path: "Command pass evidence",
+      content: JSON.stringify(evidence.commands),
+    },
+    {
+      path: "Delivery observations",
+      content: args.observations ?? "",
+    },
+  ];
+  const groundedSources = [...sources, ...evidenceSources];
+  const patchExcerpts = (
+    JSON.parse(change) as { patches: { excerpt: string }[] }
+  ).patches.map((patch) => patch.excerpt);
   const proven: CriterionEvidence[] = [];
   for (const [index, criterion] of criteria.entries()) {
     const decision = args.decisions?.find(
@@ -245,7 +246,23 @@ export async function reviewAcceptance(args: {
       });
       continue;
     }
-    const finding = valid ? findings[index] : undefined;
+    const candidate = findings[index];
+    const finding =
+      candidate?.criterion === criterion &&
+      ["pass", "needs-human", "refuse"].includes(candidate.verdict) &&
+      Boolean(candidate.detail?.trim()) &&
+      groundedSources.some(
+        (source) =>
+          source.path === candidate.source &&
+          Boolean(candidate.quote?.trim()) &&
+          (source.content.includes(candidate.quote) ||
+            (source.path === "Exact Git change packet" &&
+              patchExcerpts.some((excerpt) =>
+                excerpt.includes(candidate.quote),
+              ))),
+      )
+        ? candidate
+        : undefined;
     if (finding?.verdict === "pass" && truncatedPaths.length === 0) {
       proven.push({
         criterion,
@@ -271,7 +288,9 @@ export async function reviewAcceptance(args: {
           : (finding?.detail ??
             (reviewFailure
               ? `Independent result review failed: ${reviewFailure}`
-              : "Independent result review returned insufficient or invalid criterion evidence")),
+              : candidate
+                ? "Independent result review returned invalid evidence for this criterion"
+                : "Independent result review omitted this criterion")),
       question:
         finding?.verdict === "pass" && truncatedPaths.length > 0
           ? `Inspect tree ${evidence.treeSha} and decide this criterion, or retry with a larger FACTORY_RESULT_REVIEW_TEXT_BUDGET_BYTES and reviewer context: ${criterion}`
