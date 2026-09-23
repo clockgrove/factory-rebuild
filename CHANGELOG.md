@@ -2,6 +2,12 @@
 
 This file records public releases of Factory. See [BUILD-STATUS.md](docs/BUILD-STATUS.md) for development acceptance evidence.
 
+## 0.1.2 — 2026-09-23
+
+- Keep result-review findings independent per acceptance criterion, so one malformed citation cannot erase separate valid proofs.
+- Accept only exact quotes from pinned source, the supplied Git change packet, exact-tree command-pass evidence, or delivery observations. Retain human fallback for missing evidence and truncated result text.
+- Add temporary-Git regressions for evidence-backed automatic passes and an unsupported finding that pauses only its own criterion.
+
 ## 0.1.1 — 2026-09-23
 
 - Allow an Objective to create a pnpm workspace and run its exactly source-declared bootstrap, check, and test commands at the validated result tree.

@@ -789,6 +789,91 @@ test("result review auto-accepts sourced evidence, otherwise asks one exact-tree
     });
     assert.equal(clean.criteria[0].verdict, "pass");
     assert.equal(clean.treeSha, treeSha);
+    const resultEvidence = await validateTree(
+      target.checkout,
+      join(root, "validation-command-evidence"),
+      commit,
+      treeSha,
+      ["test -f result.txt"],
+    );
+    const packetGrounded = await reviewAcceptance({
+      ...request,
+      evidence: resultEvidence,
+      criteria: ["result.txt exists", "The declared validation succeeds."],
+      model: {
+        async reviewResult() {
+          return {
+            findings: [
+              {
+                criterion: "result.txt exists",
+                verdict: "pass",
+                source: "Exact Git change packet",
+                quote: "diff --git a/result.txt b/result.txt\nnew file mode",
+                detail: "The complete patch adds result.txt.",
+                question: "",
+              },
+              {
+                criterion: "The declared validation succeeds.",
+                verdict: "pass",
+                source: "Command pass evidence",
+                quote: '"command":"test -f result.txt","passed":true',
+                detail: "The exact-tree command completed successfully.",
+                question: "",
+              },
+            ],
+          };
+        },
+      },
+    });
+    assert.deepEqual(
+      packetGrounded.criteria.map((criterion) => criterion.verdict),
+      ["pass", "pass"],
+    );
+    await assert.rejects(
+      reviewAcceptance({
+        ...request,
+        criteria: ["result.txt exists", "result.txt contains expected text"],
+        sources: [
+          {
+            path: "OBJECTIVE",
+            content: "result.txt exists\nresult.txt contains expected text",
+          },
+        ],
+        model: {
+          async reviewResult() {
+            return {
+              findings: [
+                {
+                  criterion: "result.txt exists",
+                  verdict: "pass",
+                  source: "OBJECTIVE",
+                  quote: "result.txt exists",
+                  detail: "The exact diff adds result.txt",
+                  question: "",
+                },
+                {
+                  criterion: "result.txt contains expected text",
+                  verdict: "pass",
+                  source: "OBJECTIVE",
+                  quote: "a quote absent from the pinned source",
+                  detail: "Unsupported claim",
+                  question: "",
+                },
+              ],
+            };
+          },
+        },
+      }),
+      (error) => {
+        assert.ok(error instanceof AcceptanceDecisionRequired);
+        assert.equal(
+          error.pending.criterion,
+          "result.txt contains expected text",
+        );
+        assert.match(error.pending.detail, /invalid evidence/);
+        return true;
+      },
+    );
     const unsure = {
       async reviewResult() {
         return {
