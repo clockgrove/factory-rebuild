@@ -35,7 +35,7 @@ export function pinnedGit(checkout: string, ...args: string[]): string {
     .trim();
 }
 
-/** Preserve NUL-delimited paths and binary staged blobs without trimming output. */
+/** Preserve exact pinned Git output without trimming or decoding. */
 export function pinnedGitRaw(checkout: string, ...args: string[]): Buffer {
   const result = spawnSync("git", ["-C", checkout, ...args], {
     env: pinnedGitEnvironment(),

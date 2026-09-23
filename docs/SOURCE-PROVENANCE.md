@@ -66,3 +66,7 @@ Issue #22 reuses the existing clean GitHub projection and delivery code named ab
 ## Native dependency waves and retry
 
 Issue #21 extends the clean `src/delivery/native-runner.ts` using the existing `src/scheduler.ts` conflict rule and `src/delivery/plan.ts` unit partition. No additional archived source or test was consulted or copied. New application tests use the current disposable Git target and stateful GitHub fake to prove a post-foundation readiness wave and explicit retry after a terminal native failure.
+
+## Pinned planning and graph review gap (#19)
+
+The audited archive commit's `src/application/plan.ts`, `src/application/compiler-preflight.ts`, and `src/compiler/judge-context.ts` were inspected for the read-only planning boundary, pinned Git authority, and complete independent review packet. The clean `src/compiler.ts`, `src/runner.ts`, and `src/cli.ts` implement only the required current path: exact named sources/headings from the pinned base, a zero-run-state preview, one independent source-backed graph review, at most one automatic revision, and a specific recorded human fallback. The archived policy matrix, repository inventory caps, compiler judge byte cap, obligation inventory, and recovery protocols were not copied.

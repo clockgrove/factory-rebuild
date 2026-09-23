@@ -126,7 +126,10 @@ test("regular application path runs a source-grounded concurrent DAG with stable
       },
     };
     const { application, eventsPath, github } = makeApplication(descriptor);
-    const running = application.runObjective(objective);
+    const acceptedPlan = await application.planObjective(objective);
+    assert.equal(acceptedPlan.review.status, "clean");
+    assert.equal(Object.keys(github.state().issues).length, 0);
+    const running = application.runObjective(objective, acceptedPlan);
     await waitFor(
       () => {
         const starts = readEvents(eventsPath).filter(

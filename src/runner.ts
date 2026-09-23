@@ -4,12 +4,17 @@ import { basename, isAbsolute, join, resolve, sep } from "node:path";
 import type { FactoryConfig } from "./config.js";
 import { stateRoot, validateTarget } from "./config.js";
 import type { FactoryState } from "./state.js";
-import { compileObjective } from "./compiler.js";
 import {
   closeObjectiveIssue,
   closeWorkItem,
   GitHubClosureFailure,
 } from "./completion.js";
+import {
+  compilePlan,
+  resolvePlan,
+  verifyPlanCandidate,
+  type PlanCandidate,
+} from "./compiler.js";
 import type {
   ContentStore,
   DeliveryStrategy,
@@ -40,6 +45,50 @@ export interface ApplicationServices {
   contentStore: ContentStore;
 }
 
+/** Read-only preflight: no controller lock, issue projection, or run state. */
+export async function planObjective(
+  config: FactoryConfig,
+  objective: number,
+  services: Pick<ApplicationServices, "planningModel" | "github">,
+): Promise<PlanCandidate> {
+  validateTarget(config.repository, config.checkout);
+  const issue = await services.github.objective(objective);
+  const baseSha = git(config.checkout, "rev-parse", "HEAD");
+  return compilePlan(
+    objective,
+    issue.body,
+    baseSha,
+    config.checkout,
+    services.planningModel,
+  );
+}
+
+export async function decidePlan(
+  config: FactoryConfig,
+  objective: number,
+  services: Pick<ApplicationServices, "planningModel" | "github">,
+  candidate: PlanCandidate,
+  input: {
+    actor: string;
+    outcome: "accept" | "refuse";
+    answer: string;
+    reason: string;
+  },
+): Promise<PlanCandidate> {
+  validateTarget(config.repository, config.checkout);
+  const issue = await services.github.objective(objective);
+  const baseSha = git(config.checkout, "rev-parse", "HEAD");
+  return resolvePlan(
+    candidate,
+    objective,
+    issue.body,
+    baseSha,
+    config.checkout,
+    services.planningModel,
+    input,
+  );
+}
+
 function objectiveCommands(
   body: string,
   graph: FactoryState["graph"],
@@ -67,6 +116,7 @@ export async function runObjective(
   config: FactoryConfig,
   objective: number,
   services: ApplicationServices,
+  acceptedPlan?: PlanCandidate,
 ): Promise<FactoryState> {
   validateTarget(config.repository, config.checkout);
   if (config.execution.kind !== "local")
@@ -109,6 +159,19 @@ export async function runObjective(
         throw new Error(
           "Existing Objective state does not match this Factory installation",
         );
+      }
+      if (acceptedPlan) {
+        verifyPlanCandidate(
+          acceptedPlan,
+          objective,
+          issue.body,
+          state.baseSha,
+          config.checkout,
+        );
+        if (JSON.stringify(acceptedPlan.graph) !== JSON.stringify(state.graph))
+          throw new Error(
+            "Accepted plan differs from the already active Objective graph",
+          );
       }
       if (state.error)
         throw new Error(
@@ -153,13 +216,35 @@ export async function runObjective(
         }
       }
       const baseSha = git(config.checkout, "rev-parse", "HEAD");
-      const graph = await compileObjective(
+      const plan =
+        acceptedPlan ??
+        (await compilePlan(
+          objective,
+          issue.body,
+          baseSha,
+          config.checkout,
+          planningModel,
+        ));
+      verifyPlanCandidate(
+        plan,
         objective,
         issue.body,
         baseSha,
         config.checkout,
-        planningModel,
       );
+      if (acceptedPlan) {
+        const freshReview = await planningModel.reviewGraph({
+          objective: issue.body,
+          baseSha,
+          sources: plan.sources,
+          graph: plan.graph,
+        });
+        if (freshReview.findings.length)
+          throw new Error(
+            `Accepted plan no longer passes independent review: ${freshReview.findings[0]!.question}`,
+          );
+      }
+      const graph = plan.graph;
       const projected = await github.projectGraph({
         graph,
         objectiveIssue: objective,

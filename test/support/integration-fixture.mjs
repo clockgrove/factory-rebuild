@@ -176,6 +176,10 @@ class ScriptedPlanningModel {
     });
     return structuredClone(this.graph);
   }
+
+  async reviewGraph() {
+    return { findings: [] };
+  }
 }
 
 class ScriptedHarness {
