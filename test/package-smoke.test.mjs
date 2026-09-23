@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, mkdirSync, rmSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -21,42 +27,62 @@ test("fresh packed artifact installs and exposes documented install/status/plan 
       ["pack", "--silent", "--pack-destination", pack],
       { cwd: project, encoding: "utf8" },
     ).trim();
-    const sdkPackage = execFileSync(
-      "npm",
-      [
-        "pack",
-        "--silent",
-        "--pack-destination",
-        pack,
-        "node_modules/@openai/codex-sdk",
-      ],
-      { cwd: project, encoding: "utf8" },
-    ).trim();
-    const codexPackage = execFileSync(
-      "npm",
-      [
-        "pack",
-        "--silent",
-        "--pack-destination",
-        pack,
-        "node_modules/@openai/codex",
-      ],
-      { cwd: project, encoding: "utf8" },
-    ).trim();
+    const emptyCache = join(root, "empty-npm-cache");
     execFileSync(
       "npm",
       [
         "install",
+        "--offline",
         "--prefix",
         prefix,
         "--ignore-scripts",
-        "--omit=optional",
         join(pack, packageName),
-        join(pack, sdkPackage),
-        join(pack, codexPackage),
       ],
-      { stdio: "ignore" },
+      {
+        stdio: "ignore",
+        env: { ...process.env, npm_config_cache: emptyCache },
+      },
     );
+    const installedRoot = join(
+      prefix,
+      "node_modules",
+      "@clockgrove",
+      "factory",
+    );
+    const lock = JSON.parse(
+      readFileSync(join(project, "package-lock.json"), "utf8"),
+    );
+    let checked = 0;
+    for (const [path, entry] of Object.entries(lock.packages)) {
+      if (!path || entry.dev) continue;
+      const installedPath = join(installedRoot, path, "package.json");
+      if (entry.optional && !existsSync(installedPath)) continue;
+      assert.ok(
+        existsSync(installedPath),
+        `bundled dependency missing: ${path}`,
+      );
+      assert.equal(
+        JSON.parse(readFileSync(installedPath, "utf8")).version,
+        entry.version,
+        path,
+      );
+      checked++;
+    }
+    assert.ok(
+      checked > 90,
+      `expected the complete production tree, got ${checked}`,
+    );
+    for (const path of [
+      ".codex-plugin/plugin.json",
+      "skills/director/SKILL.md",
+      "skills/setup/SKILL.md",
+      "THIRD_PARTY_NOTICES.md",
+    ]) {
+      assert.ok(
+        existsSync(join(installedRoot, path)),
+        `release asset missing: ${path}`,
+      );
+    }
     const cli = join(prefix, "node_modules", ".bin", "factory");
     const environment = {
       ...process.env,
