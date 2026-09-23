@@ -1,5 +1,12 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -443,6 +450,284 @@ test("exact script-disabled pnpm bootstrap is source-authorized and plain instal
       );
     },
   );
+});
+
+test("a source-declared pnpm workspace can be created, validated, and pinned for later work", async () => {
+  await withTarget("new-pnpm-workspace", {}, async (root, target) => {
+    const finalCommands = [PINNED_PNPM_BOOTSTRAP, "pnpm check", "pnpm test"];
+    const body = `# Objective\n\n## Acceptance\n- Create the pnpm workspace\n- \`pnpm check\`\n\n## Final validation\n${finalCommands.map((command) => `- \`${command}\``).join("\n")}\n`;
+    const graph = item(target.baseSha, [
+      {
+        command: "pnpm check",
+        provenance: "source-declared",
+        source: "OBJECTIVE",
+      },
+    ]);
+    const model = {
+      async generateStructured() {
+        return structuredClone(graph);
+      },
+      async reviewGraph() {
+        return { findings: [] };
+      },
+    };
+    const plan = await compilePlan(
+      1,
+      body,
+      target.baseSha,
+      target.checkout,
+      model,
+    );
+    assert.ok(
+      plan.commands.every((entry) => entry.hostExecution === "authorized"),
+    );
+    assert.ok(
+      plan.commands.every((entry) => entry.reason.includes("result tree")),
+    );
+    verifyPlanCandidate(plan, 1, body, target.baseSha, target.checkout);
+
+    const invented = await compilePlan(
+      1,
+      body,
+      target.baseSha,
+      target.checkout,
+      {
+        ...model,
+        async generateStructured() {
+          return item(target.baseSha, [
+            {
+              command: "pnpm run invented",
+              provenance: "source-declared",
+              source: "OBJECTIVE",
+            },
+          ]);
+        },
+      },
+    );
+    assert.equal(invented.commands[0].hostExecution, "blocked");
+
+    writeFileSync(
+      join(target.checkout, "package.json"),
+      JSON.stringify({
+        private: true,
+        packageManager: "pnpm@10.0.0",
+        scripts: {
+          check: "test -f packages/core/index.ts",
+          test: "test -f tests/foundation.test.mjs",
+        },
+      }),
+    );
+    writeFileSync(
+      join(target.checkout, "pnpm-lock.yaml"),
+      "lockfileVersion: '9.0'\n",
+    );
+    writeFileSync(
+      join(target.checkout, "pnpm-workspace.yaml"),
+      "packages:\n  - packages/*\n",
+    );
+    mkdirSync(join(target.checkout, "packages/core"), { recursive: true });
+    writeFileSync(
+      join(target.checkout, "packages/core/index.ts"),
+      "export {};\n",
+    );
+    git(target.checkout, "add", "-A");
+    git(
+      target.checkout,
+      "-c",
+      "user.name=Factory Test",
+      "-c",
+      "user.email=factory-test@example.com",
+      "commit",
+      "-m",
+      "Create workspace",
+    );
+    const foundation = git(target.checkout, "rev-parse", "HEAD");
+
+    mkdirSync(join(target.checkout, "tests"), { recursive: true });
+    writeFileSync(
+      join(target.checkout, "tests/foundation.test.mjs"),
+      "export {};\n",
+    );
+    git(target.checkout, "add", "-A");
+    git(
+      target.checkout,
+      "-c",
+      "user.name=Factory Test",
+      "-c",
+      "user.email=factory-test@example.com",
+      "commit",
+      "-m",
+      "Add independent test lane",
+    );
+    const result = git(target.checkout, "rev-parse", "HEAD");
+    const resultTree = git(target.checkout, "rev-parse", "HEAD^{tree}");
+
+    const bin = join(root, "bin");
+    mkdirSync(bin);
+    const pnpm = join(bin, "pnpm");
+    writeFileSync(
+      pnpm,
+      '#!/bin/sh\nif [ "$1" = install ]; then test -f pnpm-lock.yaml; exit $?; fi\nexec npm run "$1" --ignore-scripts\n',
+    );
+    chmodSync(pnpm, 0o755);
+    const previousPath = process.env.PATH;
+    process.env.PATH = `${bin}:${previousPath}`;
+    try {
+      const childEvidence = await validateWorkItem(
+        target.checkout,
+        join(root, "child-validation"),
+        graph.items[0],
+        result,
+        resultTree,
+        target.baseSha,
+        undefined,
+        undefined,
+        foundation,
+      );
+      assert.equal(childEvidence.commands[0].passed, true);
+      assert.doesNotThrow(() =>
+        assertPinnedNpmScripts(
+          target.checkout,
+          target.baseSha,
+          result,
+          finalCommands,
+          { sourceDeclared: finalCommands },
+        ),
+      );
+      const finalEvidence = await validateTree(
+        target.checkout,
+        join(root, "final-validation"),
+        result,
+        resultTree,
+        finalCommands,
+      );
+      assert.equal(finalEvidence.commands.length, 3);
+    } finally {
+      process.env.PATH = previousPath;
+    }
+
+    const changedPackage = JSON.parse(
+      (await import("node:fs")).readFileSync(
+        join(target.checkout, "package.json"),
+        "utf8",
+      ),
+    );
+    changedPackage.scripts.check = "echo changed";
+    writeFileSync(
+      join(target.checkout, "package.json"),
+      JSON.stringify(changedPackage),
+    );
+    git(target.checkout, "add", "package.json");
+    git(
+      target.checkout,
+      "-c",
+      "user.name=Factory Test",
+      "-c",
+      "user.email=factory-test@example.com",
+      "commit",
+      "-m",
+      "Change established script",
+    );
+    const changed = git(target.checkout, "rev-parse", "HEAD");
+    assert.throws(
+      () =>
+        assertPinnedNpmScripts(
+          target.checkout,
+          target.baseSha,
+          changed,
+          ["pnpm check"],
+          {
+            sourceDeclared: ["pnpm check"],
+            predecessorSha: foundation,
+          },
+        ),
+      /script check differs from the accepted base/,
+    );
+  });
+});
+
+test("a predecessor cannot launder a changed script that existed at the Objective base", async () => {
+  await withTarget(
+    "original-script-anchor",
+    { "package.json": JSON.stringify({ scripts: { check: "true" } }) },
+    async (_root, target) => {
+      writeFileSync(
+        join(target.checkout, "package.json"),
+        JSON.stringify({ scripts: { check: "echo changed" } }),
+      );
+      git(target.checkout, "add", "package.json");
+      git(
+        target.checkout,
+        "-c",
+        "user.name=Factory Test",
+        "-c",
+        "user.email=factory-test@example.com",
+        "commit",
+        "-m",
+        "Change original script",
+      );
+      const predecessor = git(target.checkout, "rev-parse", "HEAD");
+      writeFileSync(join(target.checkout, "result.txt"), "result\n");
+      git(target.checkout, "add", "result.txt");
+      git(
+        target.checkout,
+        "-c",
+        "user.name=Factory Test",
+        "-c",
+        "user.email=factory-test@example.com",
+        "commit",
+        "-m",
+        "Later result",
+      );
+      const result = git(target.checkout, "rev-parse", "HEAD");
+      assert.throws(
+        () =>
+          assertPinnedNpmScripts(
+            target.checkout,
+            target.baseSha,
+            result,
+            ["pnpm check"],
+            {
+              sourceDeclared: ["pnpm check"],
+              predecessorSha: predecessor,
+            },
+          ),
+        /script check differs from the accepted base/,
+      );
+    },
+  );
+});
+
+test("a newly declared script cannot smuggle a lifecycle hook", async () => {
+  await withTarget("new-script-hook", {}, async (_root, target) => {
+    writeFileSync(
+      join(target.checkout, "package.json"),
+      JSON.stringify({ scripts: { check: "true", precheck: "echo hook" } }),
+    );
+    git(target.checkout, "add", "package.json");
+    git(
+      target.checkout,
+      "-c",
+      "user.name=Factory Test",
+      "-c",
+      "user.email=factory-test@example.com",
+      "commit",
+      "-m",
+      "Add script with hook",
+    );
+    const result = git(target.checkout, "rev-parse", "HEAD");
+    assert.throws(
+      () =>
+        assertPinnedNpmScripts(
+          target.checkout,
+          target.baseSha,
+          result,
+          ["pnpm check"],
+          { sourceDeclared: ["pnpm check"] },
+        ),
+      /new script check cannot add lifecycle hook precheck/,
+    );
+  });
 });
 
 test("result review auto-accepts sourced evidence, otherwise asks one exact-tree decision", async () => {

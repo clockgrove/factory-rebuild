@@ -410,6 +410,10 @@ export async function runObjective(
       state.baseSha,
       integratedSha,
       state.objectiveCommands ?? finalObjectiveCommands(issue.body),
+      {
+        sourceDeclared:
+          state.objectiveCommands ?? finalObjectiveCommands(issue.body),
+      },
     );
     const commandEvidence = await validateTree(
       config.checkout,

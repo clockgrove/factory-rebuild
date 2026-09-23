@@ -327,6 +327,9 @@ function commandAuthorizations(
         sources,
         checkout,
       );
+      const deferred =
+        check.provenance === "source-declared" &&
+        newPackageEntrypoint(check.command, graph.baseSha, checkout);
       return {
         itemId: item.id,
         command: check.command,
@@ -336,7 +339,9 @@ function commandAuthorizations(
           ? ("authorized" as const)
           : ("blocked" as const),
         reason: declared
-          ? "Exact command line in cited pinned source"
+          ? deferred
+            ? "Exact pinned-source declaration; new package entrypoint is checked at the result tree before execution"
+            : "Exact command line in cited pinned source"
           : "No exact command declaration in cited pinned source or base",
       };
     }),
@@ -351,6 +356,7 @@ function commandAuthorizations(
         sources,
         checkout,
       );
+      const deferred = newPackageEntrypoint(command, graph.baseSha, checkout);
       return {
         itemId: "OBJECTIVE",
         command,
@@ -360,7 +366,9 @@ function commandAuthorizations(
           ? ("authorized" as const)
           : ("blocked" as const),
         reason: authorized
-          ? "Exact final command line in pinned Objective"
+          ? deferred
+            ? "Exact pinned-Objective declaration; new package entrypoint is checked at the result tree before execution"
+            : "Exact final command line in pinned Objective"
           : "Final command has no executable authority at the accepted base",
       };
     }),
@@ -427,6 +435,33 @@ function exactLine(content: string, command: string): boolean {
   });
 }
 
+function newPackageEntrypoint(
+  command: string,
+  baseSha: string,
+  checkout: string,
+): boolean {
+  if (command.trim() === PINNED_PNPM_BOOTSTRAP) {
+    try {
+      pinnedGit(checkout, "cat-file", "-e", `${baseSha}:pnpm-lock.yaml`);
+      return false;
+    } catch {
+      return true;
+    }
+  }
+  const invocation = packageScriptInvocation(command);
+  if (!invocation) return false;
+  try {
+    const pkg = JSON.parse(
+      pinnedGitRaw(checkout, "show", `${baseSha}:package.json`).toString(
+        "utf8",
+      ),
+    );
+    return typeof pkg?.scripts?.[invocation.name] !== "string";
+  } catch {
+    return true;
+  }
+}
+
 function authorizedCommand(
   check: WorkGraph["items"][number]["validation"][number],
   baseSha: string,
@@ -443,26 +478,27 @@ function authorizedCommand(
   if (packageCommand) {
     if (bootstrap) {
       if (check.provenance !== "source-declared") return false;
-      try {
-        pinnedGit(checkout, "cat-file", "-e", `${baseSha}:pnpm-lock.yaml`);
-      } catch {
-        return false;
-      }
     } else {
       if (!invocation) return false;
-      try {
-        const pkg = JSON.parse(
-          pinnedGitRaw(checkout, "show", `${baseSha}:package.json`).toString(
-            "utf8",
-          ),
-        );
-        if (typeof pkg?.scripts?.[invocation.name] !== "string") return false;
-      } catch {
-        return false;
+      if (check.provenance === "base-observed") {
+        try {
+          const pkg = JSON.parse(
+            pinnedGitRaw(checkout, "show", `${baseSha}:package.json`).toString(
+              "utf8",
+            ),
+          );
+          if (typeof pkg?.scripts?.[invocation.name] !== "string") return false;
+        } catch {
+          return false;
+        }
       }
     }
     try {
-      assertPinnedNpmScripts(checkout, baseSha, baseSha, [check.command]);
+      assertPinnedNpmScripts(checkout, baseSha, baseSha, [check.command], {
+        sourceDeclared:
+          check.provenance === "source-declared" ? [check.command] : [],
+        preview: true,
+      });
     } catch {
       return false;
     }

@@ -310,6 +310,7 @@ export async function runNativeGraph(args: {
               entry.output,
               entry.final,
             ),
+          itemBase,
         );
         const reviewResult = () =>
           reviewAcceptance({

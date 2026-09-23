@@ -160,6 +160,7 @@ export async function runRegularGraph(args: {
             entry.output,
             entry.final,
           ),
+        itemBase,
       );
       const reviewResult = () =>
         reviewAcceptance({

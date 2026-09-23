@@ -390,15 +390,26 @@ export async function validateTree(
 export const PINNED_PNPM_BOOTSTRAP =
   "pnpm install --frozen-lockfile --ignore-scripts";
 
+export interface PackageScriptAuthority {
+  /** Commands literally declared by a pinned source, not inferred by the model. */
+  sourceDeclared?: readonly string[];
+  /** A plan may authorize creation of an entrypoint it cannot inspect yet. */
+  preview?: boolean;
+  /** Pin newly established scripts against the exact Work Item predecessor. */
+  predecessorSha?: string;
+}
+
 export function assertPinnedNpmScripts(
   checkout: string,
   acceptedBaseSha: string,
   commit: string,
   commands: string[],
+  authority: PackageScriptAuthority = {},
 ): void {
   const managerToken = /\b(?:npm|pnpm)\b/;
   const selected = commands.filter((check) => managerToken.test(check));
   if (!selected.length) return;
+  const declared = new Set(authority.sourceDeclared ?? []);
   const bootstrap = selected.some(
     (check) => check.trim() === PINNED_PNPM_BOOTSTRAP,
   );
@@ -410,9 +421,10 @@ export function assertPinnedNpmScripts(
     throw new Error(
       "Package script validation blocked: script-disabled bootstrap must run first",
     );
-  const requests = selected
-    .filter((check) => check.trim() !== PINNED_PNPM_BOOTSTRAP)
-    .map(packageScriptInvocation);
+  const scriptCommands = selected.filter(
+    (check) => check.trim() !== PINNED_PNPM_BOOTSTRAP,
+  );
+  const requests = scriptCommands.map(packageScriptInvocation);
   if (requests.some((request) => !request))
     throw new Error(
       "Package script validation blocked: only root npm/pnpm test, pnpm check, or npm/pnpm run NAME can be pinned",
@@ -438,12 +450,11 @@ export function assertPinnedNpmScripts(
       return undefined;
     }
   };
-  const packageFile = (revision: string): Record<string, unknown> => {
+  const packageFile = (
+    revision: string,
+  ): Record<string, unknown> | undefined => {
     const raw = file(revision, "package.json");
-    if (!raw)
-      throw new Error(
-        "Package script validation blocked: package.json is absent",
-      );
+    if (raw === undefined) return undefined;
     try {
       const parsed: unknown = JSON.parse(raw);
       if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
@@ -455,10 +466,22 @@ export function assertPinnedNpmScripts(
       );
     }
   };
-  const before = packageFile(acceptedBaseSha);
+  const original = packageFile(acceptedBaseSha);
+  const predecessor = packageFile(authority.predecessorSha ?? acceptedBaseSha);
   const after = packageFile(commit);
+  if (!original && selected.some((command) => !declared.has(command)))
+    throw new Error(
+      "Package script validation blocked: a new package.json needs exact source-declared command authority",
+    );
+  if (!after && !authority.preview)
+    throw new Error(
+      "Package script validation blocked: package.json is absent from the result tree",
+    );
   for (const key of ["packageManager", "config", "pnpm"])
-    if (!isDeepStrictEqual(before[key], after[key]))
+    if (
+      (original ?? predecessor) &&
+      !isDeepStrictEqual((original ?? predecessor)?.[key], after?.[key])
+    )
       throw new Error(
         `Package script validation blocked: ${key} differs from the accepted base`,
       );
@@ -470,23 +493,50 @@ export function assertPinnedNpmScripts(
       );
     return value as Record<string, unknown>;
   };
-  const beforeScripts = requests.length ? scripts(before) : {};
-  const afterScripts = requests.length ? scripts(after) : {};
+  const originalScripts =
+    requests.length && original?.scripts ? scripts(original) : {};
+  const predecessorScripts =
+    requests.length && predecessor?.scripts ? scripts(predecessor) : {};
+  const afterScripts = requests.length && after?.scripts ? scripts(after) : {};
   const usesPnpm =
     bootstrap || requests.some((request) => request!.manager === "pnpm");
-  for (const request of requests) {
-    const name = request!.name;
+  for (let index = 0; index < requests.length; index++) {
+    const request = requests[index]!;
+    const command = scriptCommands[index]!;
+    const name = request.name;
+    const beforeScripts =
+      typeof originalScripts[name] === "string"
+        ? originalScripts
+        : predecessorScripts;
     const body = beforeScripts[name];
-    if (typeof body !== "string" || afterScripts[name] !== body)
+    if (typeof body !== "string" && !declared.has(command))
+      throw new Error(
+        `Package script validation blocked: new script ${name} needs exact source-declared command authority`,
+      );
+    if (
+      (typeof body === "string" && afterScripts[name] !== body) ||
+      (!authority.preview && typeof afterScripts[name] !== "string")
+    )
       throw new Error(
         `Package script validation blocked: script ${name} differs from the accepted base`,
       );
     for (const scriptName of [name, `pre${name}`, `post${name}`]) {
-      if (beforeScripts[scriptName] !== afterScripts[scriptName])
+      if (
+        scriptName !== name &&
+        typeof body !== "string" &&
+        afterScripts[scriptName] !== undefined
+      )
+        throw new Error(
+          `Package script validation blocked: new script ${name} cannot add lifecycle hook ${scriptName}`,
+        );
+      if (
+        scriptName !== name &&
+        beforeScripts[scriptName] !== afterScripts[scriptName]
+      )
         throw new Error(
           `Package script validation blocked: lifecycle hook ${scriptName} differs from the accepted base`,
         );
-      const scriptBody = beforeScripts[scriptName];
+      const scriptBody = afterScripts[scriptName] ?? beforeScripts[scriptName];
       if (typeof scriptBody !== "string") continue;
       if (/\b(?:npm|pnpm)\b/.test(scriptBody))
         throw new Error(
@@ -504,8 +554,9 @@ export function assertPinnedNpmScripts(
     );
   if (bootstrap) {
     if (
-      !file(acceptedBaseSha, "pnpm-lock.yaml") ||
-      !file(commit, "pnpm-lock.yaml")
+      (!file(acceptedBaseSha, "pnpm-lock.yaml") &&
+        !declared.has(PINNED_PNPM_BOOTSTRAP)) ||
+      (!file(commit, "pnpm-lock.yaml") && !authority.preview)
     )
       throw new Error(
         "Package script validation blocked: frozen pnpm bootstrap needs a tracked lockfile",
@@ -519,11 +570,22 @@ export function assertPinnedNpmScripts(
           "Package script validation blocked: pnpmfile hooks need separate authority",
         );
   }
-  for (const path of [".npmrc", ...(usesPnpm ? ["pnpm-workspace.yaml"] : [])])
-    if (file(acceptedBaseSha, path) !== file(commit, path))
+  for (const path of [".npmrc", ...(usesPnpm ? ["pnpm-workspace.yaml"] : [])]) {
+    const original = file(acceptedBaseSha, path);
+    const predecessor = file(authority.predecessorSha ?? acceptedBaseSha, path);
+    if (
+      (original ?? predecessor) !== file(commit, path) &&
+      !(
+        path === "pnpm-workspace.yaml" &&
+        original === undefined &&
+        predecessor === undefined &&
+        selected.every((command) => declared.has(command))
+      )
+    )
       throw new Error(
         `Package script validation blocked: ${path} differs from the accepted base`,
       );
+  }
   if (
     bootstrap &&
     [file(commit, ".npmrc"), file(commit, "pnpm-workspace.yaml")].some(
@@ -560,12 +622,19 @@ export async function validateWorkItem(
   acceptedBaseSha: string,
   observe?: (entry: ValidationObservation) => void,
   observeOutput?: (entry: ValidationOutputObservation) => void,
+  predecessorSha?: string,
 ): Promise<ValidationEvidence> {
   assertPinnedNpmScripts(
     checkout,
     acceptedBaseSha,
     commit,
     item.validation.map((v) => v.command),
+    {
+      sourceDeclared: item.validation
+        .filter((v) => v.provenance === "source-declared")
+        .map((v) => v.command),
+      predecessorSha,
+    },
   );
   return validateTree(
     checkout,

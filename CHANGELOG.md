@@ -2,6 +2,12 @@
 
 This file records public releases of Factory. See [BUILD-STATUS.md](docs/BUILD-STATUS.md) for development acceptance evidence.
 
+## 0.1.1 — 2026-09-23
+
+- Allow an Objective to create a pnpm workspace and run its exactly source-declared bootstrap, check, and test commands at the validated result tree.
+- Keep pre-existing scripts pinned to the Objective base, pin newly established scripts to later Work Item predecessors, and reject new lifecycle hooks or nested package-manager wrappers.
+- Backfill the `v0.1.0` exact-public-artifact acceptance record and require a new installed-artifact gate before the Clockgrove pilot.
+
 ## 0.1.0 — 2026-09-23
 
 - Compile pinned repository Objectives into reviewed Work Item DAGs with independently admitted validation commands and exact-tree acceptance decisions.
