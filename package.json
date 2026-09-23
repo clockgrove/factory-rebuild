@@ -2,6 +2,21 @@
   "name": "@clockgrove/factory",
   "version": "0.1.0",
   "description": "Objective-driven development plugin for a target repository",
+  "homepage": "https://github.com/clockgrove/factory-rebuild#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/clockgrove/factory-rebuild.git"
+  },
+  "bugs": {
+    "url": "https://github.com/clockgrove/factory-rebuild/issues"
+  },
+  "keywords": [
+    "codex",
+    "development",
+    "github",
+    "plugin",
+    "objectives"
+  ],
   "type": "module",
   "license": "MIT",
   "bin": {
@@ -13,10 +28,15 @@
   "files": [
     "dist",
     "skills",
+    "assets",
     ".codex-plugin",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "THIRD_PARTY_NOTICES.md"
   ],
+  "publishConfig": {
+    "access": "public"
+  },
   "engines": {
     "node": ">=22"
   },
@@ -27,7 +47,9 @@
     "format:check": "prettier --check .",
     "format": "prettier --write .",
     "test": "npm run build && node --test test/*.test.mjs",
-    "package": "npm pack --dry-run"
+    "package": "npm pack --dry-run",
+    "notices": "node scripts/generate-notices.mjs",
+    "notices:check": "node scripts/generate-notices.mjs --check"
   },
   "devDependencies": {
     "@eslint/js": "^9.36.0",

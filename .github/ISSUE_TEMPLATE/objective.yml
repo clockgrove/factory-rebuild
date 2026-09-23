@@ -1,0 +1,65 @@
+name: Development Objective
+description: Propose a source-grounded development outcome for a target repository
+title: "Objective: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this form in the repository that owns the work. Factory reads the resulting issue and that repository's sources. Do not use the Factory source repository as a Factory target.
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Outcome
+      description: Describe the behavior or result the target repository needs.
+      placeholder: A user can...
+    validations:
+      required: true
+  - type: textarea
+    id: completion-experience
+    attributes:
+      label: Completion experience
+      description: Describe what an operator or user should see when the work is complete.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance
+      description: State observable checks, including the final integrated result where relevant.
+    validations:
+      required: true
+  - type: textarea
+    id: boundaries
+    attributes:
+      label: Boundaries
+      description: State non-goals, owned paths or systems, and actions that require separate approval.
+    validations:
+      required: true
+  - type: textarea
+    id: requested-authority
+    attributes:
+      label: Requested authority
+      description: Identify permitted repository changes, checks, GitHub operations, and any human decision points.
+    validations:
+      required: true
+  - type: textarea
+    id: canonical-sources
+    attributes:
+      label: Canonical sources
+      description: Link or name the target repository files, issues, and documents that govern this Objective.
+    validations:
+      required: true
+  - type: textarea
+    id: known-unknowns
+    attributes:
+      label: Known unknowns
+      description: List open questions and who can resolve them; write None if there are none.
+    validations:
+      required: true
+  - type: checkboxes
+    id: acknowledgement
+    attributes:
+      label: Acknowledgement
+      options:
+        - label: I have reviewed the target repository's instructions and can authorize the requested work or identify who can.
+          required: true
