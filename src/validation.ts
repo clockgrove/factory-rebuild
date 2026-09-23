@@ -56,7 +56,7 @@ function resultChangePacket(
   checkout: string,
   baseSha: string,
   commit: string,
-): string {
+): { change: string; truncatedPaths: string[] } {
   const raw = pinnedGitRaw(
     checkout,
     "diff",
@@ -158,7 +158,12 @@ function resultChangePacket(
     remaining -= Buffer.byteLength(excerpt, "utf8");
     return { path, lineStats, excerpt, truncated };
   });
-  return JSON.stringify({ changes, textBudget, patches });
+  return {
+    change: JSON.stringify({ changes, textBudget, patches }),
+    truncatedPaths: patches
+      .filter((patch) => patch.truncated)
+      .map((patch) => patch.path),
+  };
 }
 
 /** A separate read-only review evaluates each criterion on an exact-tree packet. */
@@ -179,7 +184,11 @@ export async function reviewAcceptance(args: {
   const observedTree = pinnedGit(checkout, "rev-parse", `${commit}^{tree}`);
   if (observedTree !== evidence.treeSha)
     throw new Error("Acceptance result tree differs from command evidence");
-  const change = resultChangePacket(checkout, baseSha, commit);
+  const { change, truncatedPaths } = resultChangePacket(
+    checkout,
+    baseSha,
+    commit,
+  );
   let findings: Awaited<
     ReturnType<NonNullable<PlanningModel["reviewResult"]>>
   >["findings"] = [];
@@ -237,7 +246,7 @@ export async function reviewAcceptance(args: {
       continue;
     }
     const finding = valid ? findings[index] : undefined;
-    if (finding?.verdict === "pass") {
+    if (finding?.verdict === "pass" && truncatedPaths.length === 0) {
       proven.push({
         criterion,
         verdict: "pass",
@@ -257,13 +266,17 @@ export async function reviewAcceptance(args: {
       source: finding?.source ?? "OBJECTIVE",
       quote: finding?.quote ?? criterion,
       detail:
-        finding?.detail ??
-        (reviewFailure
-          ? `Independent result review failed: ${reviewFailure}`
-          : "Independent result review returned insufficient or invalid criterion evidence"),
+        finding?.verdict === "pass" && truncatedPaths.length > 0
+          ? `Independent review cannot auto-pass because text excerpts were truncated for ${truncatedPaths.slice(0, 3).join(", ")}${truncatedPaths.length > 3 ? ` and ${truncatedPaths.length - 3} more path(s)` : ""}; a source quote and partial patch do not prove the full result.`
+          : (finding?.detail ??
+            (reviewFailure
+              ? `Independent result review failed: ${reviewFailure}`
+              : "Independent result review returned insufficient or invalid criterion evidence")),
       question:
-        finding?.question?.trim() ||
-        `Inspect tree ${evidence.treeSha} and decide whether it satisfies this criterion, or retry with a reviewer able to read the change packet: ${criterion}`,
+        finding?.verdict === "pass" && truncatedPaths.length > 0
+          ? `Inspect tree ${evidence.treeSha} and decide this criterion, or retry with a larger FACTORY_RESULT_REVIEW_TEXT_BUDGET_BYTES and reviewer context: ${criterion}`
+          : finding?.question?.trim() ||
+            `Inspect tree ${evidence.treeSha} and decide whether it satisfies this criterion, or retry with a reviewer able to read the change packet: ${criterion}`,
     });
   }
   return { ...evidence, criteria: proven };

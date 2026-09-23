@@ -621,7 +621,7 @@ test("large binary results reach independent review as descriptors, and reviewer
   });
 });
 
-test("large text changes keep exact descriptors and explicit truncated hunks for review", async () => {
+test("a reviewer pass cannot auto-accept truncated result text", async () => {
   await withTarget("large-text-review", {}, async (root, target) => {
     writeFileSync(
       join(target.checkout, "result.txt"),
@@ -677,11 +677,12 @@ test("large text changes keep exact descriptors and explicit truncated hunks for
                 findings: [
                   {
                     criterion: "result meets requirements",
-                    verdict: "needs-human",
+                    verdict: "pass",
                     source: "OBJECTIVE",
                     quote: "result meets requirements",
-                    detail: "Relevant text is truncated",
-                    question: "Does this exact result satisfy the requirement?",
+                    detail:
+                      "Objective quote says the result meets requirements",
+                    question: "",
                   },
                 ],
               };
@@ -691,11 +692,42 @@ test("large text changes keep exact descriptors and explicit truncated hunks for
         (error) => {
           assert.ok(error instanceof AcceptanceDecisionRequired);
           assert.equal(error.pending.treeSha, treeSha);
-          assert.match(error.pending.detail, /truncated/);
+          assert.match(error.pending.detail, /text excerpts were truncated/);
+          assert.match(error.pending.detail, /result.txt/);
+          assert.match(
+            error.pending.question,
+            /FACTORY_RESULT_REVIEW_TEXT_BUDGET_BYTES/,
+          );
           return true;
         },
       );
       assert.equal(calls, 1);
+      const accepted = await reviewAcceptance({
+        checkout: target.checkout,
+        baseSha: target.baseSha,
+        commit,
+        evidence: await validateTree(
+          target.checkout,
+          join(root, "validation-again"),
+          commit,
+          treeSha,
+          [],
+        ),
+        criteria: ["result meets requirements"],
+        sources: [{ path: "OBJECTIVE", content: "result meets requirements" }],
+        model: {},
+        decisions: [
+          {
+            criterion: "result meets requirements",
+            treeSha,
+            actor: "owner",
+            at: new Date().toISOString(),
+            outcome: "accept",
+            reason: "Inspected the full exact tree",
+          },
+        ],
+      });
+      assert.equal(accepted.criteria[0].verdict, "human-accept");
     } finally {
       if (previous === undefined)
         delete process.env.FACTORY_RESULT_REVIEW_TEXT_BUDGET_BYTES;
