@@ -19,6 +19,7 @@ import type {
 } from "./contracts.js";
 import { assetSelectionDigest, verifyHydratedAssets } from "./media.js";
 import { runNativeGraph } from "./delivery/native-runner.js";
+import { linearDeliveryUnits } from "./delivery/plan.js";
 import { runRegularGraph } from "./delivery/regular-runner.js";
 import { git, linuxProcessIdentity } from "./process.js";
 import { validateTree } from "./validation.js";
@@ -343,7 +344,20 @@ export function retryWorkItem(
     const work = state.work[itemId];
     if (!work || (work.status !== "failed" && work.status !== "cancelled"))
       throw new Error("Only a failed or cancelled Work Item can be retried");
-    if (work.pullRequest)
+    const nativeUnit =
+      config.delivery.kind === "native-stack"
+        ? linearDeliveryUnits(state.graph).find((unit) =>
+            unit.items.some((item) => item.id === itemId),
+          )
+        : undefined;
+    if (
+      work.pullRequest ||
+      work.step === "deliver" ||
+      nativeUnit?.items.some((item) => state.work[item.id]?.pullRequest) ||
+      (nativeUnit &&
+        (state.stackNumbers?.[nativeUnit.id] ||
+          state.stackMerges?.[nativeUnit.id]))
+    )
       throw new Error("Published PR requires operator direction before retry");
     state.work[itemId] = { status: "pending" };
     state.cancelRequested = false;

@@ -58,3 +58,7 @@ The application integration tests were written from the current public acceptanc
 ## GitHub projection and completion hardening
 
 Issue #22 reuses the existing clean GitHub projection and delivery code named above. No additional archived path, state format, test, or recovery protocol was consulted or copied. The completion changes follow the public issue acceptance: marker-based Work Item reconciliation, dependency checks, PR identity verification, and replayable issue/comment closure in the one atomic snapshot. New interruption tests use the current stateful GitHub fake at the application boundary.
+
+## Native dependency waves and retry
+
+Issue #21 extends the clean `src/delivery/native-runner.ts` using the existing `src/scheduler.ts` conflict rule and `src/delivery/plan.ts` unit partition. No additional archived source or test was consulted or copied. New application tests use the current disposable Git target and stateful GitHub fake to prove a post-foundation readiness wave and explicit retry after a terminal native failure.
