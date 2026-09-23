@@ -10,6 +10,8 @@ import {
 } from "../dist/compiler.js";
 import {
   AcceptanceDecisionRequired,
+  assertPinnedNpmScripts,
+  PINNED_PNPM_BOOTSTRAP,
   reviewAcceptance,
   validateTree,
   validateWorkItem,
@@ -63,7 +65,7 @@ test("preview blocks invented and mismatched commands, and admits exact pinned b
     "commands",
     {
       "package.json": JSON.stringify({
-        scripts: { test: "test -s result.txt" },
+        scripts: { test: "test -s result.txt", check: "test -s result.txt" },
       }),
     },
     async (_root, target) => {
@@ -111,6 +113,23 @@ test("preview blocks invented and mismatched commands, and admits exact pinned b
       );
       assert.equal(base.commands[0].hostExecution, "authorized");
       verifyPlanCandidate(base, 1, body, target.baseSha, target.checkout);
+
+      graph = item(target.baseSha, [
+        {
+          command: "pnpm check",
+          provenance: "base-observed",
+          source: "package.json",
+        },
+      ]);
+      const pnpm = await compilePlan(
+        1,
+        body,
+        target.baseSha,
+        target.checkout,
+        model,
+      );
+      assert.equal(pnpm.commands[0].hostExecution, "authorized");
+      verifyPlanCandidate(pnpm, 1, body, target.baseSha, target.checkout);
 
       graph = item(target.baseSha, [
         {
@@ -183,16 +202,75 @@ test("Objective criteria use explicit acceptance or the source Goal", () => {
   );
 });
 
-test("changed npm lifecycle hooks stop validation before any result shell runs", async () => {
+test("changed npm and pnpm lifecycle hooks stop validation before any result shell runs", async () => {
+  for (const [command, name] of [
+    ["npm test", "test"],
+    ["pnpm check", "check"],
+  ]) {
+    await withTarget(
+      `${name}-scripts`,
+      { "package.json": JSON.stringify({ scripts: { [name]: "true" } }) },
+      async (root, target) => {
+        const marker = join(root, "unexpected-script-execution");
+        writeFileSync(
+          join(target.checkout, "package.json"),
+          JSON.stringify({
+            scripts: { [name]: "true", [`pre${name}`]: `touch ${marker}` },
+          }),
+        );
+        git(target.checkout, "add", "package.json");
+        git(
+          target.checkout,
+          "-c",
+          "user.name=Factory Test",
+          "-c",
+          "user.email=factory-test@example.com",
+          "commit",
+          "-m",
+          "Add lifecycle hook",
+        );
+        const commit = git(target.checkout, "rev-parse", "HEAD");
+        const treeSha = git(target.checkout, "rev-parse", "HEAD^{tree}");
+        assert.throws(
+          () =>
+            validateWorkItem(
+              target.checkout,
+              join(root, "validation"),
+              item(target.baseSha, [
+                {
+                  command,
+                  provenance: "base-observed",
+                  source: "package.json",
+                },
+              ]).items[0],
+              commit,
+              treeSha,
+              target.baseSha,
+            ),
+          /lifecycle hook pre(?:test|check) differs from the accepted base/,
+        );
+        assert.equal(existsSync(marker), false);
+      },
+    );
+  }
+});
+
+test("benign package metadata and dependency edits retain selected npm and pnpm scripts", async () => {
   await withTarget(
-    "npm-scripts",
-    { "package.json": JSON.stringify({ scripts: { test: "true" } }) },
+    "package-metadata",
+    {
+      "package.json": JSON.stringify({
+        scripts: { test: "true", check: "true", lint: "true" },
+        description: "before",
+      }),
+    },
     async (root, target) => {
-      const marker = join(root, "unexpected-script-execution");
       writeFileSync(
         join(target.checkout, "package.json"),
         JSON.stringify({
-          scripts: { test: "true", pretest: `touch ${marker}` },
+          scripts: { test: "true", check: "true", lint: "echo changed" },
+          description: "after",
+          dependencies: { example: "1.0.0" },
         }),
       );
       git(target.checkout, "add", "package.json");
@@ -204,29 +282,165 @@ test("changed npm lifecycle hooks stop validation before any result shell runs",
         "user.email=factory-test@example.com",
         "commit",
         "-m",
-        "Add lifecycle hook",
+        "Edit metadata",
       );
       const commit = git(target.checkout, "rev-parse", "HEAD");
       const treeSha = git(target.checkout, "rev-parse", "HEAD^{tree}");
+      assert.doesNotThrow(() =>
+        assertPinnedNpmScripts(target.checkout, target.baseSha, commit, [
+          "npm test",
+          "pnpm check",
+        ]),
+      );
+      const evidence = validateWorkItem(
+        target.checkout,
+        join(root, "validation"),
+        item(target.baseSha, [
+          {
+            command: "npm test",
+            provenance: "base-observed",
+            source: "package.json",
+          },
+        ]).items[0],
+        commit,
+        treeSha,
+        target.baseSha,
+      );
+      assert.equal(evidence.commands[0].passed, true);
+    },
+  );
+});
+
+test("nested pnpm script wrappers require separate authority", async () => {
+  await withTarget(
+    "nested-pnpm",
+    {
+      "package.json": JSON.stringify({
+        scripts: { check: "pnpm run lint", lint: "true" },
+      }),
+    },
+    async (_root, target) => {
+      writeFileSync(
+        join(target.checkout, "package.json"),
+        JSON.stringify({
+          scripts: { check: "pnpm run lint", lint: "touch unexpected" },
+        }),
+      );
+      git(target.checkout, "add", "package.json");
+      git(
+        target.checkout,
+        "-c",
+        "user.name=Factory Test",
+        "-c",
+        "user.email=factory-test@example.com",
+        "commit",
+        "-m",
+        "Change nested script",
+      );
+      const commit = git(target.checkout, "rev-parse", "HEAD");
       assert.throws(
         () =>
-          validateWorkItem(
-            target.checkout,
-            join(root, "validation"),
-            item(target.baseSha, [
-              {
-                command: "npm test",
-                provenance: "base-observed",
-                source: "package.json",
-              },
-            ]).items[0],
-            commit,
-            treeSha,
-            target.baseSha,
-          ),
-        /package.json differs from the accepted base/,
+          assertPinnedNpmScripts(target.checkout, target.baseSha, commit, [
+            "pnpm check",
+          ]),
+        /nested package-manager invocation in check needs separate authority/,
       );
-      assert.equal(existsSync(marker), false);
+    },
+  );
+});
+
+test("exact script-disabled pnpm bootstrap is source-authorized and plain install is blocked", async () => {
+  await withTarget(
+    "pnpm-bootstrap",
+    {
+      "package.json": JSON.stringify({ scripts: { check: "true" } }),
+      "pnpm-lock.yaml": "lockfileVersion: '9.0'\n",
+    },
+    async (_root, target) => {
+      const body = `# Objective\n\n## Acceptance\n- Check passes\n\n## Final validation\n- \`${PINNED_PNPM_BOOTSTRAP}\`\n- \`pnpm check\`\n`;
+      const graph = item(target.baseSha, [
+        {
+          command: "pnpm check",
+          provenance: "base-observed",
+          source: "package.json",
+        },
+      ]);
+      const model = {
+        async generateStructured() {
+          return structuredClone(graph);
+        },
+        async reviewGraph() {
+          return { findings: [] };
+        },
+      };
+      const plan = await compilePlan(
+        1,
+        body,
+        target.baseSha,
+        target.checkout,
+        model,
+      );
+      assert.ok(
+        plan.commands.every((entry) => entry.hostExecution === "authorized"),
+      );
+      verifyPlanCandidate(plan, 1, body, target.baseSha, target.checkout);
+      assert.doesNotThrow(() =>
+        assertPinnedNpmScripts(
+          target.checkout,
+          target.baseSha,
+          target.baseSha,
+          [PINNED_PNPM_BOOTSTRAP, "pnpm check"],
+        ),
+      );
+
+      const unsafeBody = body.replace(PINNED_PNPM_BOOTSTRAP, "pnpm install");
+      const unsafe = await compilePlan(
+        1,
+        unsafeBody,
+        target.baseSha,
+        target.checkout,
+        model,
+      );
+      assert.equal(
+        unsafe.commands.find((entry) => entry.command === "pnpm install")
+          ?.hostExecution,
+        "blocked",
+      );
+      assert.throws(
+        () =>
+          verifyPlanCandidate(
+            unsafe,
+            1,
+            unsafeBody,
+            target.baseSha,
+            target.checkout,
+          ),
+        /host execution authority/,
+      );
+      writeFileSync(
+        join(target.checkout, ".pnpmfile.cjs"),
+        "module.exports = {}\n",
+      );
+      git(target.checkout, "add", ".pnpmfile.cjs");
+      git(
+        target.checkout,
+        "-c",
+        "user.name=Factory Test",
+        "-c",
+        "user.email=factory-test@example.com",
+        "commit",
+        "-m",
+        "Add pnpm hook",
+      );
+      const withHook = git(target.checkout, "rev-parse", "HEAD");
+      assert.throws(
+        () =>
+          assertPinnedNpmScripts(target.checkout, target.baseSha, withHook, [
+            PINNED_PNPM_BOOTSTRAP,
+            "pnpm check",
+          ]),
+        /pnpmfile hooks need separate authority/,
+      );
     },
   );
 });
@@ -345,6 +559,148 @@ test("result review auto-accepts sourced evidence, otherwise asks one exact-tree
       }),
       /refused/,
     );
+  });
+});
+
+test("large binary results reach independent review as descriptors, and reviewer failure is explicit", async () => {
+  await withTarget("binary-review", {}, async (root, target) => {
+    writeFileSync(join(target.checkout, "image.bin"), Buffer.alloc(150_000));
+    git(target.checkout, "add", "image.bin");
+    git(
+      target.checkout,
+      "-c",
+      "user.name=Factory Test",
+      "-c",
+      "user.email=factory-test@example.com",
+      "commit",
+      "-m",
+      "Add binary result",
+    );
+    const commit = git(target.checkout, "rev-parse", "HEAD");
+    const treeSha = git(target.checkout, "rev-parse", "HEAD^{tree}");
+    const request = {
+      checkout: target.checkout,
+      baseSha: target.baseSha,
+      commit,
+      evidence: validateTree(
+        target.checkout,
+        join(root, "validation"),
+        commit,
+        treeSha,
+        [],
+      ),
+      criteria: ["image exists"],
+      sources: [{ path: "OBJECTIVE", content: "image exists" }],
+    };
+    let calls = 0;
+    await assert.rejects(
+      reviewAcceptance({
+        ...request,
+        model: {
+          async reviewResult(review) {
+            calls++;
+            const packet = JSON.parse(review.change);
+            assert.equal(packet.changes[0].path, "image.bin");
+            assert.equal(packet.changes[0].newBytes, 150_000);
+            assert.match(packet.changes[0].newObject, /^[0-9a-f]{40}$/);
+            assert.match(packet.patches[0].excerpt, /Binary files/);
+            assert.equal(packet.patches[0].truncated, false);
+            assert.ok(review.change.length < 10_000);
+            throw new Error("review context unavailable");
+          },
+        },
+      }),
+      (error) => {
+        assert.ok(error instanceof AcceptanceDecisionRequired);
+        assert.match(error.pending.detail, /review context unavailable/);
+        assert.equal(error.pending.treeSha, treeSha);
+        return true;
+      },
+    );
+    assert.equal(calls, 1);
+  });
+});
+
+test("large text changes keep exact descriptors and explicit truncated hunks for review", async () => {
+  await withTarget("large-text-review", {}, async (root, target) => {
+    writeFileSync(
+      join(target.checkout, "result.txt"),
+      "line of content\n".repeat(20_000),
+    );
+    git(target.checkout, "add", "result.txt");
+    git(
+      target.checkout,
+      "-c",
+      "user.name=Factory Test",
+      "-c",
+      "user.email=factory-test@example.com",
+      "commit",
+      "-m",
+      "Add large text result",
+    );
+    const commit = git(target.checkout, "rev-parse", "HEAD");
+    const treeSha = git(target.checkout, "rev-parse", "HEAD^{tree}");
+    const previous = process.env.FACTORY_RESULT_REVIEW_TEXT_BUDGET_BYTES;
+    process.env.FACTORY_RESULT_REVIEW_TEXT_BUDGET_BYTES = "2048";
+    let calls = 0;
+    try {
+      await assert.rejects(
+        reviewAcceptance({
+          checkout: target.checkout,
+          baseSha: target.baseSha,
+          commit,
+          evidence: validateTree(
+            target.checkout,
+            join(root, "validation"),
+            commit,
+            treeSha,
+            [],
+          ),
+          criteria: ["result meets requirements"],
+          sources: [
+            { path: "OBJECTIVE", content: "result meets requirements" },
+          ],
+          model: {
+            async reviewResult(review) {
+              calls++;
+              const packet = JSON.parse(review.change);
+              assert.equal(packet.textBudget, 2048);
+              assert.equal(packet.changes[0].path, "result.txt");
+              assert.match(packet.changes[0].newObject, /^[0-9a-f]{40}$/);
+              assert.match(packet.patches[0].lineStats, /^20000\s+0\s+/);
+              assert.equal(packet.patches[0].truncated, true);
+              assert.ok(
+                Buffer.byteLength(packet.patches[0].excerpt, "utf8") <= 2048,
+              );
+              assert.ok(review.change.length < 4000);
+              return {
+                findings: [
+                  {
+                    criterion: "result meets requirements",
+                    verdict: "needs-human",
+                    source: "OBJECTIVE",
+                    quote: "result meets requirements",
+                    detail: "Relevant text is truncated",
+                    question: "Does this exact result satisfy the requirement?",
+                  },
+                ],
+              };
+            },
+          },
+        }),
+        (error) => {
+          assert.ok(error instanceof AcceptanceDecisionRequired);
+          assert.equal(error.pending.treeSha, treeSha);
+          assert.match(error.pending.detail, /truncated/);
+          return true;
+        },
+      );
+      assert.equal(calls, 1);
+    } finally {
+      if (previous === undefined)
+        delete process.env.FACTORY_RESULT_REVIEW_TEXT_BUDGET_BYTES;
+      else process.env.FACTORY_RESULT_REVIEW_TEXT_BUDGET_BYTES = previous;
+    }
   });
 });
 

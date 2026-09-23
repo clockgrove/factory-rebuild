@@ -346,6 +346,9 @@ export async function runObjective(
               pullRequest: work.pullRequest,
               integratedSha: work.integratedSha,
               selectedAssetSet: work.selectedAssetSet,
+              selectedAsset: work.assets?.find(
+                (set) => set.id === work.selectedAssetSet,
+              ),
               selection: work.selection,
             };
           }),

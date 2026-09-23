@@ -194,6 +194,7 @@ async function main(): Promise<void> {
             `Work Item ${id} awaits criterion decision at tree ${work.acceptancePending.treeSha}: ${work.acceptancePending.criterion}`,
           );
           console.log(`  ${work.acceptancePending.question}`);
+          console.log(`  Evidence: ${work.acceptancePending.detail}`);
         }
         if (work.status !== "waiting" || work.step !== "approve-asset")
           continue;
@@ -208,6 +209,7 @@ async function main(): Promise<void> {
           `Objective awaits criterion decision at tree ${state.finalAcceptancePending.treeSha}: ${state.finalAcceptancePending.criterion}`,
         );
         console.log(`  ${state.finalAcceptancePending.question}`);
+        console.log(`  Evidence: ${state.finalAcceptancePending.detail}`);
       }
     }
   } else if (command === "cancel") {
