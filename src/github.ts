@@ -6,17 +6,23 @@ import type {
   PullRequestIdentity,
   PullRequestObservation,
   MergeResult,
+  NativeStackLayer,
+  ObjectiveIssue,
 } from "./contracts.js";
 import { command } from "./process.js";
+import { NativeStackDelivery } from "./delivery/native-stack.js";
 
 export class RealGitHubGateway implements GitHubGateway {
-  constructor(readonly repository: string) {}
+  constructor(
+    readonly repository: string,
+    private readonly native: NativeStackDelivery,
+  ) {}
 
-  findOpenPullRequest(
+  async findOpenPullRequest(
     branch: string,
     base: string,
     headSha: string,
-  ): PullRequestIdentity | undefined {
+  ): Promise<PullRequestIdentity | undefined> {
     const pulls = JSON.parse(
       command("gh", [
         "pr",
@@ -54,7 +60,7 @@ export class RealGitHubGateway implements GitHubGateway {
     return result.defaultBranchRef.name;
   }
 
-  objective(number: number): { body: string; title: string } {
+  async objective(number: number): Promise<ObjectiveIssue> {
     return JSON.parse(
       command("gh", [
         "issue",
@@ -68,7 +74,7 @@ export class RealGitHubGateway implements GitHubGateway {
     ) as { body: string; title: string };
   }
 
-  closeIssue(number: number, comment: string): void {
+  async closeIssue(number: number, comment: string): Promise<void> {
     command("gh", [
       "issue",
       "close",
@@ -246,5 +252,25 @@ export class RealGitHubGateway implements GitHubGateway {
     if (detail.state !== "MERGED" || !detail.mergeCommit)
       throw new Error("PR merge did not produce an integrated commit");
     return { integratedSha: detail.mergeCommit.oid };
+  }
+
+  async ensureNativeStack(
+    layers: NativeStackLayer[],
+    baseBranch: string,
+  ): Promise<number> {
+    return this.native.ensureStack(layers, baseBranch);
+  }
+
+  async mergeNativeStack(
+    layers: NativeStackLayer[],
+    baseBranch: string,
+    expectedStack: number,
+    options: {
+      resumeUuid?: string;
+      onPending: (uuid: string) => void;
+      cancelled: () => boolean;
+    },
+  ): Promise<string> {
+    return this.native.mergeStack(layers, baseBranch, expectedStack, options);
   }
 }

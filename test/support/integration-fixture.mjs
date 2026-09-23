@@ -1,0 +1,558 @@
+import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  unwatchFile,
+  watch,
+  watchFile,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join, resolve, sep } from "node:path";
+import { createApplication } from "../../dist/application.js";
+import { LocalContentStore } from "../../dist/content/local.js";
+import { RegularDelivery } from "../../dist/delivery/regular.js";
+import { LocalExecutionDriver } from "../../dist/execution/local.js";
+import { stateRoot } from "../../dist/config.js";
+
+export function git(path, ...args) {
+  return execFileSync("git", ["-C", path, ...args], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  }).trim();
+}
+
+export function createTarget(root, files = {}) {
+  const checkout = join(root, "target");
+  const origin = join(root, "origin.git");
+  mkdirSync(checkout, { recursive: true });
+  mkdirSync(origin, { recursive: true });
+  git(origin, "init", "--bare", "--initial-branch=main");
+  git(checkout, "init", "-b", "main");
+  git(checkout, "remote", "add", "origin", origin);
+  const initial = {
+    "AGENTS.md":
+      "# Target rules\n\nRun the validation commands declared by the Objective.\n",
+    "README.md": "# Disposable target\n",
+    ...files,
+  };
+  for (const [path, value] of Object.entries(initial)) {
+    const destination = join(checkout, path);
+    mkdirSync(dirname(destination), { recursive: true });
+    writeFileSync(destination, value);
+  }
+  git(checkout, "add", "-A");
+  git(
+    checkout,
+    "-c",
+    "user.name=Factory Test",
+    "-c",
+    "user.email=factory-test@example.com",
+    "commit",
+    "-m",
+    "Initial target",
+  );
+  git(checkout, "push", "-u", "origin", "main");
+  return { checkout, origin, baseSha: git(checkout, "rev-parse", "HEAD") };
+}
+
+export function factoryConfig(
+  checkout,
+  repository,
+  delivery = "regular",
+  concurrency = 2,
+) {
+  return {
+    schemaVersion: 1,
+    repository,
+    checkout,
+    planning: { kind: "codex-sdk" },
+    execution: {
+      kind: "local",
+      concurrency,
+      harness: { kind: "codex-sdk" },
+    },
+    delivery: { kind: delivery },
+    contentStore: { kind: "local" },
+    policy: {
+      network: "off",
+      allowedSecretNames: [],
+      deployments: "denied",
+    },
+  };
+}
+
+function readJson(path) {
+  return JSON.parse(readFileSync(path, "utf8"));
+}
+
+function writeJson(path, value) {
+  mkdirSync(dirname(path), { recursive: true });
+  const temporary = `${path}.${process.pid}.tmp`;
+  writeFileSync(temporary, `${JSON.stringify(value, null, 2)}\n`);
+  renameSync(temporary, path);
+}
+
+function appendEvent(path, value) {
+  mkdirSync(dirname(path), { recursive: true });
+  appendFileSync(path, `${JSON.stringify(value)}\n`);
+}
+
+export function readEvents(path) {
+  if (!existsSync(path)) return [];
+  return readFileSync(path, "utf8")
+    .trim()
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => JSON.parse(line));
+}
+
+export async function waitFor(check, directory, message, timeout = 10_000) {
+  const current = check();
+  if (current) return current;
+  mkdirSync(directory, { recursive: true });
+  return new Promise((resolvePromise, reject) => {
+    let settled = false;
+    const observer = watch(directory, { recursive: true }, () => {
+      if (settled) return;
+      const result = check();
+      if (!result) return;
+      settled = true;
+      clearTimeout(timer);
+      observer.close();
+      resolvePromise(result);
+    });
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      observer.close();
+      reject(new Error(`Timed out waiting for ${message}`));
+    }, timeout);
+  });
+}
+
+export async function waitForFile(check, path, message, timeout = 10_000) {
+  const current = check();
+  if (current) return current;
+  mkdirSync(dirname(path), { recursive: true });
+  return new Promise((resolvePromise, reject) => {
+    let settled = false;
+    const observe = () => {
+      if (settled) return;
+      const result = check();
+      if (!result) return;
+      settled = true;
+      clearTimeout(timer);
+      unwatchFile(path, observe);
+      resolvePromise(result);
+    };
+    watchFile(path, { interval: 20 }, observe);
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      unwatchFile(path, observe);
+      reject(new Error(`Timed out waiting for ${message}`));
+    }, timeout);
+  });
+}
+
+class ScriptedPlanningModel {
+  constructor(graph, logPath) {
+    this.graph = graph;
+    this.logPath = logPath;
+  }
+
+  async generateStructured(request) {
+    appendEvent(this.logPath, {
+      baseSha: request.baseSha,
+      objective: request.objective,
+      sources: request.sources.map((source) => source.path),
+    });
+    return structuredClone(this.graph);
+  }
+}
+
+class ScriptedHarness {
+  constructor(root, actions, eventsPath) {
+    this.root = resolve(root);
+    this.actions = actions;
+    this.eventsPath = eventsPath;
+    mkdirSync(this.root, { recursive: true });
+  }
+
+  require(handle) {
+    const data = handle.data;
+    if (
+      !data ||
+      typeof data !== "object" ||
+      !resolve(data.resultPath).startsWith(`${this.root}${sep}`)
+    )
+      throw new Error("Unknown scripted harness handle");
+    return data;
+  }
+
+  async start(request) {
+    const identity = request.attemptId;
+    const requestPath = join(this.root, `${identity}.request.json`);
+    const resultPath = join(this.root, `${identity}.result.json`);
+    const logPath = join(this.root, `${identity}.log`);
+    writeJson(requestPath, {
+      item: request.item.id,
+      worktree: request.worktree,
+      sourceAssets: request.sourceAssets,
+    });
+    writeFileSync(logPath, "scripted harness\n");
+    appendEvent(this.eventsPath, {
+      type: "start",
+      item: request.item.id,
+      attempt: identity,
+      worktree: request.worktree,
+      baseSha: git(request.worktree, "rev-parse", "HEAD"),
+    });
+    return {
+      identity,
+      data: {
+        pid: process.pid,
+        startTime: "scripted",
+        requestPath,
+        resultPath,
+        logPath,
+        worktree: request.worktree,
+        item: request.item.id,
+      },
+    };
+  }
+
+  async observe(handle) {
+    const data = this.require(handle);
+    if (existsSync(`${data.resultPath}.cancelled`))
+      return { state: "cancelled" };
+    if (existsSync(data.resultPath)) return { state: "complete" };
+    return { state: "running" };
+  }
+
+  async cancel(handle) {
+    const data = this.require(handle);
+    writeFileSync(`${data.resultPath}.cancelled`, "cancelled\n");
+    const barrier = this.actions[data.item]?.barrier;
+    if (barrier) {
+      mkdirSync(dirname(barrier), { recursive: true });
+      writeFileSync(`${barrier}.cancelled`, "cancelled\n");
+    }
+    appendEvent(this.eventsPath, {
+      type: "cancel",
+      item: data.item,
+      attempt: handle.identity,
+    });
+  }
+
+  async collect(handle) {
+    const data = this.require(handle);
+    const action = this.actions[data.item] ?? {};
+    if (action.barrier && !existsSync(action.barrier)) {
+      await waitFor(
+        () =>
+          existsSync(action.barrier) ||
+          existsSync(`${data.resultPath}.cancelled`),
+        dirname(action.barrier),
+        `barrier for ${data.item}`,
+      );
+    }
+    if (existsSync(`${data.resultPath}.cancelled`))
+      throw new Error(`Scripted attempt ${data.item} was cancelled`);
+    if (existsSync(data.resultPath)) return readJson(data.resultPath);
+    const starts = readEvents(this.eventsPath).filter(
+      (event) => event.type === "start" && event.item === data.item,
+    ).length;
+    if (starts <= (action.failAttempts ?? 0)) {
+      appendEvent(this.eventsPath, { type: "failed", item: data.item });
+      throw new Error(`Scripted failure for ${data.item}`);
+    }
+    for (const file of action.files ?? []) {
+      const destination = join(data.worktree, file.path);
+      mkdirSync(dirname(destination), { recursive: true });
+      writeFileSync(
+        destination,
+        file.base64 ? Buffer.from(file.base64, "base64") : file.text,
+      );
+    }
+    const assets = (action.assets ?? []).map((set) => ({
+      id: set.id,
+      members: set.members.map((member) => {
+        const relative = `.factory-media/${set.id}/${member.file}`;
+        const destination = join(data.worktree, relative);
+        mkdirSync(dirname(destination), { recursive: true });
+        writeFileSync(
+          destination,
+          member.base64 ? Buffer.from(member.base64, "base64") : member.text,
+        );
+        return {
+          role: member.role,
+          path: relative,
+          mediaType: member.mediaType,
+          destination: member.destination,
+          ...(member.formatMetadata && {
+            formatMetadata: member.formatMetadata,
+          }),
+        };
+      }),
+      ...(set.relationships && { relationships: set.relationships }),
+      provenance: set.provenance,
+    }));
+    const result = {
+      ...(assets.length && { assets }),
+      evidence: { harness: "scripted", threadId: handle.identity },
+    };
+    writeJson(data.resultPath, result);
+    appendEvent(this.eventsPath, {
+      type: "complete",
+      item: data.item,
+      attempt: handle.identity,
+    });
+    return result;
+  }
+}
+
+export class StatefulGitHubFake {
+  constructor(root, checkout, objectiveBody) {
+    this.root = root;
+    this.checkout = checkout;
+    this.path = join(root, "github.json");
+    if (!existsSync(this.path)) {
+      writeJson(this.path, {
+        objectiveBody,
+        nextIssue: 100,
+        nextPullRequest: 200,
+        nextStack: 300,
+        issues: {},
+        projections: {},
+        pullRequests: {},
+        stacks: {},
+        events: [],
+      });
+    }
+  }
+
+  state() {
+    return readJson(this.path);
+  }
+
+  update(change) {
+    const value = this.state();
+    const result = change(value);
+    writeJson(this.path, value);
+    return result;
+  }
+
+  async objective(number) {
+    return { title: `Objective ${number}`, body: this.state().objectiveBody };
+  }
+
+  defaultBranch() {
+    return "main";
+  }
+
+  async closeIssue(number, comment) {
+    this.update((state) => {
+      state.events.push({ type: "close-issue", number, comment });
+    });
+  }
+
+  async projectGraph(request) {
+    return this.update((state) => {
+      const issueByItemId = {};
+      for (const item of request.graph.items) {
+        state.issues[item.id] ??= state.nextIssue++;
+        state.projections[item.id] = structuredClone(item);
+        issueByItemId[item.id] = state.issues[item.id];
+      }
+      state.events.push({
+        type: "project",
+        objective: request.objectiveIssue,
+        issueByItemId,
+      });
+      return { issueByItemId };
+    });
+  }
+
+  async findOpenPullRequest(branch, base, headSha) {
+    const pull = Object.values(this.state().pullRequests).find(
+      (candidate) => candidate.branch === branch && candidate.state === "open",
+    );
+    if (!pull) return undefined;
+    if (pull.base !== base || pull.headSha !== headSha)
+      throw new Error(`Existing PR for ${branch} changed head or base`);
+    return { number: pull.number, branch, headSha };
+  }
+
+  async publish(request) {
+    const headSha = git(this.checkout, "rev-parse", `origin/${request.branch}`);
+    assert.equal(
+      git(this.checkout, "rev-parse", `${headSha}^{tree}`),
+      request.treeSha,
+    );
+    return this.update((state) => {
+      const existing = Object.values(state.pullRequests).find(
+        (candidate) => candidate.branch === request.branch,
+      );
+      if (existing) {
+        assert.equal(existing.base, request.base);
+        assert.equal(existing.headSha, headSha);
+        return { number: existing.number, branch: request.branch, headSha };
+      }
+      const number = state.nextPullRequest++;
+      state.pullRequests[number] = {
+        number,
+        branch: request.branch,
+        base: request.base,
+        headSha,
+        treeSha: request.treeSha,
+        state: "open",
+        checks: "passing",
+      };
+      state.events.push({ type: "publish", number, ...request, headSha });
+      return { number, branch: request.branch, headSha };
+    });
+  }
+
+  async observe(identity) {
+    const pull = this.state().pullRequests[identity.number];
+    if (
+      !pull ||
+      pull.branch !== identity.branch ||
+      pull.headSha !== identity.headSha
+    )
+      throw new Error("Pull request identity changed");
+    return { state: pull.state, checks: pull.checks };
+  }
+
+  integrate(branch) {
+    const directory = mkdtempSync(join(tmpdir(), "factory-github-fake-"));
+    try {
+      const remote = git(this.checkout, "remote", "get-url", "origin");
+      execFileSync("git", ["clone", remote, directory], { stdio: "ignore" });
+      git(directory, "config", "user.name", "Factory Test");
+      git(directory, "config", "user.email", "factory-test@example.com");
+      git(directory, "fetch", "origin");
+      git(directory, "checkout", "main");
+      git(
+        directory,
+        "merge",
+        "--no-ff",
+        `origin/${branch}`,
+        "-m",
+        `Merge ${branch}`,
+      );
+      git(directory, "push", "origin", "HEAD:main");
+      return git(directory, "rev-parse", "HEAD");
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  }
+
+  async merge(identity, expectedHead) {
+    const pull = this.state().pullRequests[identity.number];
+    if (!pull || pull.headSha !== expectedHead || pull.state !== "open")
+      throw new Error("Pull request is not the expected open head");
+    const integratedSha = this.integrate(pull.branch);
+    this.update((state) => {
+      state.pullRequests[identity.number].state = "merged";
+      state.pullRequests[identity.number].integratedSha = integratedSha;
+      state.events.push({
+        type: "merge",
+        number: identity.number,
+        integratedSha,
+      });
+    });
+    return { integratedSha };
+  }
+
+  async ensureNativeStack(layers, baseBranch) {
+    return this.update((state) => {
+      const key = layers.map((layer) => layer.pullRequest).join(",");
+      if (state.stacks[key]) return state.stacks[key].number;
+      for (const [index, layer] of layers.entries()) {
+        const pull = state.pullRequests[layer.pullRequest];
+        assert.equal(pull.branch, layer.branch);
+        assert.equal(pull.headSha, layer.headSha);
+        assert.equal(pull.base, index ? layers[index - 1].branch : baseBranch);
+      }
+      const number = state.nextStack++;
+      state.stacks[key] = { number, layers, baseBranch };
+      state.events.push({ type: "stack", number, layers, baseBranch });
+      return number;
+    });
+  }
+
+  async mergeNativeStack(layers, baseBranch, expectedStack, options) {
+    if (options.cancelled()) throw new Error("Objective cancelled");
+    assert.equal(
+      await this.ensureNativeStack(layers, baseBranch),
+      expectedStack,
+    );
+    const integratedSha = this.integrate(layers.at(-1).branch);
+    this.update((state) => {
+      for (const layer of layers) {
+        state.pullRequests[layer.pullRequest].state = "merged";
+        state.pullRequests[layer.pullRequest].integratedSha = integratedSha;
+      }
+      state.events.push({
+        type: "merge-stack",
+        stack: expectedStack,
+        integratedSha,
+      });
+    });
+    return integratedSha;
+  }
+}
+
+export function makeApplication(descriptor) {
+  const root = stateRoot(descriptor.config.repository);
+  const eventsPath = join(descriptor.fakeRoot, "harness.ndjson");
+  const contentStore = new LocalContentStore(join(root, "content"));
+  const github = new StatefulGitHubFake(
+    descriptor.fakeRoot,
+    descriptor.config.checkout,
+    descriptor.objectiveBody,
+  );
+  const harness = new ScriptedHarness(
+    join(root, "harness"),
+    descriptor.actions,
+    eventsPath,
+  );
+  const driver = new LocalExecutionDriver(
+    descriptor.config.checkout,
+    join(root, "worktrees"),
+    harness,
+    descriptor.config.execution.concurrency,
+    contentStore,
+  );
+  return {
+    application: createApplication(descriptor.config, {
+      planningModel: new ScriptedPlanningModel(
+        descriptor.graph,
+        join(descriptor.fakeRoot, "planning.ndjson"),
+      ),
+      driver,
+      github,
+      delivery: new RegularDelivery(descriptor.config.checkout, github),
+      contentStore,
+    }),
+    eventsPath,
+    github,
+  };
+}
+
+export function writeDescriptor(path, descriptor) {
+  writeJson(path, descriptor);
+}
+
+export function readDescriptor(path) {
+  return readJson(path);
+}

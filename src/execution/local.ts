@@ -10,10 +10,11 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import type {
   AgentHarness,
+  ContentStore,
   ExecutionDriver,
   ExecutionHandle,
   ExecutionObservation,
@@ -24,7 +25,6 @@ import type {
   HarnessRequest,
   HarnessResult,
 } from "../contracts.js";
-import { LocalContentStore } from "../content/local.js";
 import { captureAssetSets, importSourceAssets } from "../media.js";
 import { parseProducedAssetSets } from "../media.js";
 import {
@@ -184,6 +184,11 @@ export class LocalExecutionDriver implements ExecutionDriver {
       this.active.get(handle.identity) ?? (handle.data as Active | undefined);
     if (!active || handle.provider !== "local")
       throw new Error("Unknown local execution handle");
+    if (
+      !resolve(active.worktree).startsWith(`${resolve(this.workRoot)}${sep}`) ||
+      active.request.attemptId !== handle.identity
+    )
+      throw new Error("Local execution handle is outside owned state");
     return active;
   }
 
@@ -192,7 +197,7 @@ export class LocalExecutionDriver implements ExecutionDriver {
     private workRoot: string,
     private harness: AgentHarness,
     private concurrency: number,
-    private contentStore: LocalContentStore,
+    private contentStore: ContentStore,
   ) {}
 
   async availableSlots(): Promise<number> {

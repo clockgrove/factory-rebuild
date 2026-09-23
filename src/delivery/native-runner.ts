@@ -2,15 +2,17 @@ import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import type { FactoryState } from "../state.js";
 import type { FactoryConfig } from "../config.js";
-import type { ExecutionHandle } from "../contracts.js";
-import { LocalExecutionDriver } from "../execution/local.js";
-import { RealGitHubGateway } from "../github.js";
+import type {
+  ContentStore,
+  DeliveryStrategy,
+  ExecutionDriver,
+  ExecutionHandle,
+  GitHubGateway,
+  NativeStackLayer,
+} from "../contracts.js";
 import { git } from "../process.js";
 import { validateWorkItem } from "../validation.js";
-import { RegularDelivery } from "./regular.js";
 import { linearDeliveryUnits } from "./plan.js";
-import { NativeStackDelivery, type StackLayer } from "./native-stack.js";
-import { LocalContentStore } from "../content/local.js";
 import { materializeAssetSet } from "../media.js";
 import { itemsConflict } from "../scheduler.js";
 import { transplantIndependentChange } from "./transplant.js";
@@ -20,33 +22,42 @@ export async function runNativeGraph(args: {
   objective: number;
   root: string;
   state: FactoryState;
-  driver: LocalExecutionDriver;
-  github: RealGitHubGateway;
+  driver: ExecutionDriver;
+  delivery: DeliveryStrategy;
+  contentStore: ContentStore;
+  github: GitHubGateway;
   save: () => void;
   active: Map<string, Promise<void>>;
   cancelled: () => boolean;
 }): Promise<void> {
-  const { config, objective, root, state, driver, github, save, active } = args;
-  const commits = new Map<string, string>();
-  const regular = new RegularDelivery(config.checkout, github, commits);
-  const native = new NativeStackDelivery(config.repository);
-  const contentStore = new LocalContentStore(join(root, "content"));
+  const {
+    config,
+    objective,
+    root,
+    state,
+    driver,
+    delivery,
+    contentStore,
+    github,
+    save,
+    active,
+  } = args;
   const branchFor = (id: string) => `factory/objective-${objective}/${id}`;
   const defaultBranch = github.defaultBranch();
   const units = linearDeliveryUnits(state.graph);
-  // Prepare independent single-item units at the same exact base. Publication
-  // still serializes, and each prepared tree is replayed and revalidated on
-  // the observed default-branch head before it is published.
+  // Prepare conflict-free roots of independent units at the same exact base.
+  // Publication still serializes, and each prepared tree is replayed and
+  // revalidated on the observed default-branch head before it is published.
   if (Object.values(state.work).every((work) => work.status === "pending")) {
+    const reported = await driver.availableSlots();
     const limit = Math.min(
       config.execution.concurrency,
-      await driver.availableSlots(),
+      reported === "unknown" ? config.execution.concurrency : reported,
     );
     const prepared: typeof units = [];
     for (const unit of units) {
       if (prepared.length >= limit) break;
       if (
-        unit.items.length !== 1 ||
         unit.externalDependencies.length ||
         unit.items[0]!.expectedOutputRoles?.length ||
         prepared.some((other) => itemsConflict(unit.items[0]!, other.items[0]!))
@@ -219,11 +230,11 @@ export async function runNativeGraph(args: {
         );
         work.step = "deliver";
         save();
-        commits.set(work.treeSha!, work.changeRef!);
-        const published = await regular.publish({
+        const published = await delivery.publish({
           item,
           baseSha: itemBase,
           treeSha: work.treeSha!,
+          changeRef: work.changeRef!,
           branch: branchFor(item.id),
           lfs: Boolean(work.selectedAssetSet),
           baseBranch: previous
@@ -244,7 +255,7 @@ export async function runNativeGraph(args: {
       }
       if (state.work[item.id]?.status === "waiting") return;
     }
-    const layers: StackLayer[] = unit.items.map((item) => {
+    const layers: NativeStackLayer[] = unit.items.map((item) => {
       const work = state.work[item.id]!;
       if (work.status !== "published" || !work.pullRequest || !work.changeRef)
         throw new Error(`Native delivery layer ${item.id} is incomplete`);
@@ -297,7 +308,7 @@ export async function runNativeGraph(args: {
       state.stackNumbers ??= {};
       const stackNumber =
         state.stackNumbers[unit.id] ??
-        native.ensureStack(layers, defaultBranch);
+        (await github.ensureNativeStack(layers, defaultBranch));
       if (
         state.stackNumbers[unit.id] &&
         state.stackNumbers[unit.id] !== stackNumber
@@ -316,7 +327,7 @@ export async function runNativeGraph(args: {
         throw new Error(
           "Pending native merge identity changed; operator direction required",
         );
-      integratedSha = await native.mergeStack(
+      integratedSha = await github.mergeNativeStack(
         layers,
         defaultBranch,
         stackNumber,
@@ -349,7 +360,7 @@ export async function runNativeGraph(args: {
     }
     save();
     for (const item of unit.items)
-      github.closeIssue(
+      await github.closeIssue(
         state.issueByItemId[item.id]!,
         `Completed by native delivery PR #${state.work[item.id]!.pullRequest}; integrated at ${observedAfter}.`,
       );

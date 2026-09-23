@@ -58,24 +58,29 @@ export function readState(
     const root = resolve(stateRoot(repository));
     for (const [id, work] of Object.entries(state.work)) {
       if (!work.execution) continue;
+      if (work.execution.provider !== "local") continue;
       const active = work.execution.data as {
-        worktree: string;
-        handle: {
-          data: { requestPath: string; resultPath: string; logPath: string };
+        worktree?: unknown;
+        handle?: {
+          data?: {
+            requestPath?: unknown;
+            resultPath?: unknown;
+            logPath?: unknown;
+          };
         };
       };
       if (
+        typeof active.worktree !== "string" ||
         !resolve(active.worktree).startsWith(`${join(root, "worktrees")}${sep}`)
       )
         throw new Error(
           `Work Item ${id} attempt worktree is outside Factory state`,
         );
+      const harness = active.handle?.data;
       for (const key of ["requestPath", "resultPath", "logPath"] as const)
         if (
-          typeof active.handle.data[key] !== "string" ||
-          !resolve(active.handle.data[key]).startsWith(
-            `${join(root, "harness")}${sep}`,
-          )
+          typeof harness?.[key] !== "string" ||
+          !resolve(harness[key]).startsWith(`${join(root, "harness")}${sep}`)
         )
           throw new Error(
             `Work Item ${id} harness ${key} is outside Factory state`,

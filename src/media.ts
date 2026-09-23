@@ -1,6 +1,8 @@
 import { createHash, randomUUID } from "node:crypto";
 import {
   closeSync,
+  constants,
+  createReadStream,
   existsSync,
   fstatSync,
   lstatSync,
@@ -10,15 +12,16 @@ import {
   realpathSync,
   rmSync,
 } from "node:fs";
-import { isAbsolute, join, resolve, sep } from "node:path";
+import { dirname, isAbsolute, join, resolve, sep } from "node:path";
+import { Readable } from "node:stream";
 import type {
   CapturedAssetSet,
   ContentRef,
+  ContentStore,
   ProducedAssetSet,
   SourceAssetBinding,
   WorkItem,
 } from "./contracts.js";
-import { LocalContentStore } from "./content/local.js";
 import { command, pinnedGit } from "./process.js";
 
 function safeRelative(path: string, staging = false): boolean {
@@ -41,6 +44,31 @@ function owned(path: string, scopes: string[]): boolean {
   return scopes.some((scope) =>
     scope.endsWith("/") ? path.startsWith(scope) : path === scope,
   );
+}
+
+async function putFile(
+  store: ContentStore,
+  path: string,
+  mediaType: string,
+): Promise<ContentRef> {
+  if (
+    !isAbsolute(path) ||
+    !lstatSync(path).isFile() ||
+    realpathSync(path) !== resolve(path) ||
+    realpathSync(dirname(path)) !== resolve(dirname(path))
+  )
+    throw new Error("Content source must be a regular file without symlinks");
+  const descriptor = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+  const stream = createReadStream(path, { fd: descriptor, autoClose: true });
+  try {
+    return await store.put(
+      Readable.toWeb(stream) as ReadableStream<Uint8Array>,
+      { mediaType },
+    );
+  } catch (error) {
+    stream.destroy();
+    throw error;
+  }
 }
 
 /** One ingress check for the worker manifest and controller collection. */
@@ -124,7 +152,7 @@ export function parseProducedAssetSets(value: unknown): ProducedAssetSet[] {
 }
 
 export async function importSourceAssets(
-  store: LocalContentStore,
+  store: ContentStore,
   worktree: string,
   item: WorkItem,
 ): Promise<{ binding: SourceAssetBinding; ref: ContentRef }[]> {
@@ -145,16 +173,14 @@ export async function importSourceAssets(
     const absolute = join(worktree, path);
     if (!existsSync(absolute))
       throw new Error(`Source asset does not exist: ${path}`);
-    const ref = await store.importFile(absolute, {
-      mediaType: binding.mediaType,
-    });
+    const ref = await putFile(store, absolute, binding.mediaType);
     result.push({ binding, ref });
   }
   return result;
 }
 
 export async function captureAssetSets(
-  store: LocalContentStore,
+  store: ContentStore,
   worktree: string,
   item: WorkItem,
   sets: ProducedAssetSet[],
@@ -241,9 +267,7 @@ export async function captureAssetSets(
         throw new Error(
           "Produced asset path is missing or escapes the media root",
         );
-      const ref = await store.importFile(path, {
-        mediaType: member.mediaType,
-      });
+      const ref = await putFile(store, path, member.mediaType);
       members.push({
         role: member.role,
         ref,
@@ -283,7 +307,7 @@ export async function materializeAssetSet(args: {
   baseCommit: string;
   item: WorkItem;
   set: CapturedAssetSet;
-  store: LocalContentStore;
+  store: ContentStore;
 }): Promise<{ changeRef: string; treeSha: string }> {
   const worktree = join(args.workRoot, `selected-${randomUUID()}`);
   mkdirSync(args.workRoot, { recursive: true });

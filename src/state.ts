@@ -327,27 +327,33 @@ export function parseFactoryState(
     if (item.execution !== undefined) {
       const execution = record(item.execution, `work.${id}.execution`);
       if (
-        execution.provider !== "local" ||
-        typeof execution.identity !== "string"
+        typeof execution.provider !== "string" ||
+        !execution.provider ||
+        typeof execution.identity !== "string" ||
+        !execution.identity
       )
         throw new Error(`Work Item ${id} execution identity is invalid`);
-      const active = record(execution.data, `work.${id}.execution.data`);
-      const request = record(active.request, `work.${id}.execution.request`);
-      const attemptedItem = record(request.item, `work.${id}.execution.item`);
-      const handle = record(active.handle, `work.${id}.harness`);
-      const host = record(handle.data, `work.${id}.harness.data`);
-      if (
-        typeof active.worktree !== "string" ||
-        attemptedItem.id !== id ||
-        (request.baseSha !== item.baseSha &&
-          item.status !== "done" &&
-          item.status !== "published") ||
-        typeof handle.identity !== "string" ||
-        !Number.isSafeInteger(host.pid) ||
-        typeof host.startTime !== "string" ||
-        typeof host.resultPath !== "string"
-      )
-        throw new Error(`Work Item ${id} active attempt handle is invalid`);
+      if (execution.data !== undefined)
+        record(execution.data, `work.${id}.execution.data`);
+      if (execution.provider === "local") {
+        const active = record(execution.data, `work.${id}.execution.data`);
+        const request = record(active.request, `work.${id}.execution.request`);
+        const attemptedItem = record(request.item, `work.${id}.execution.item`);
+        const handle = record(active.handle, `work.${id}.harness`);
+        const host = record(handle.data, `work.${id}.harness.data`);
+        if (
+          typeof active.worktree !== "string" ||
+          attemptedItem.id !== id ||
+          (request.baseSha !== item.baseSha &&
+            item.status !== "done" &&
+            item.status !== "published") ||
+          typeof handle.identity !== "string" ||
+          !Number.isSafeInteger(host.pid) ||
+          typeof host.startTime !== "string" ||
+          typeof host.resultPath !== "string"
+        )
+          throw new Error(`Work Item ${id} active attempt handle is invalid`);
+      }
     }
   }
   if (state.integratedSha !== undefined)
