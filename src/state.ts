@@ -141,11 +141,28 @@ export function parseFactoryState(
       "dependencies",
       "ownedPaths",
       "resources",
-      "sourceAssets",
       "expectedOutputRoles",
       "requiredLfsRoles",
     ])
       strings(item[key], `${id}.${key}`);
+    if (
+      !Array.isArray(item.sourceAssets) ||
+      !item.sourceAssets.every((raw: unknown) => {
+        if (typeof raw === "string") return !!raw;
+        if (!raw || typeof raw !== "object" || Array.isArray(raw)) return false;
+        const binding = raw as Record<string, unknown>;
+        return (
+          typeof binding.path === "string" &&
+          !!binding.path &&
+          typeof binding.role === "string" &&
+          !!binding.role &&
+          typeof binding.mediaType === "string" &&
+          !!binding.mediaType &&
+          ["private", "repository"].includes(String(binding.visibility))
+        );
+      })
+    )
+      throw new Error(`${id}.sourceAssets are invalid`);
     if (
       !Number.isSafeInteger(item.minimumAssetSets) ||
       Number(item.minimumAssetSets) < 0
@@ -239,13 +256,23 @@ export function parseFactoryState(
         strings(provenance.lineage, "AssetSet lineage");
         if (!Array.isArray(set.members) || !set.members.length)
           throw new Error("AssetSet has no members");
+        const memberRoles = new Set<string>();
         const evidence = record(set.evidence, "AssetSet harness evidence");
         string(evidence.harnessIdentity, "AssetSet harness identity");
         sha(evidence.resultDigest, "AssetSet harness result digest", 64);
         for (const rawMember of set.members) {
           const member = record(rawMember, "AssetSet member");
           string(member.role, "AssetSet role");
+          memberRoles.add(member.role as string);
           string(member.destination, "AssetSet destination");
+          if (member.formatMetadata !== undefined) {
+            const format = record(
+              member.formatMetadata,
+              "AssetSet format metadata",
+            );
+            string(format.source, "AssetSet format metadata source");
+            record(format.values, "AssetSet format metadata values");
+          }
           const ref = record(member.ref, "AssetSet content ref");
           sha(ref.digest, "AssetSet content digest", 64);
           if (
@@ -254,6 +281,25 @@ export function parseFactoryState(
             typeof ref.mediaType !== "string"
           )
             throw new Error("AssetSet content reference is invalid");
+        }
+        if (set.relationships !== undefined) {
+          if (
+            !Array.isArray(set.relationships) ||
+            !set.relationships.every((raw: unknown) => {
+              if (!raw || typeof raw !== "object" || Array.isArray(raw))
+                return false;
+              const edge = raw as Record<string, unknown>;
+              return (
+                typeof edge.from === "string" &&
+                !!edge.from &&
+                typeof edge.toRole === "string" &&
+                memberRoles.has(edge.toRole) &&
+                typeof edge.kind === "string" &&
+                !!edge.kind
+              );
+            })
+          )
+            throw new Error("AssetSet relationships are invalid");
         }
       }
     }

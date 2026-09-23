@@ -52,7 +52,7 @@ factory select --objective ISSUE_NUMBER --item WORK_ITEM_ID --set CANDIDATE_ID
 factory run --objective ISSUE_NUMBER
 ```
 
-The target owns its `.gitattributes` policy. Factory checks selected bytes against the committed LFS pointer and a fresh clone after merge. The [public media fixture](test/fixtures/objectives/media-lfs.md) shows the required source, roles, and validation commands. If you use a temporary `XDG_CONFIG_HOME` for Factory, keep the controller's GitHub CLI authentication visible through `GH_CONFIG_DIR` or its normal configuration path.
+The target owns its `.gitattributes` policy. Factory checks selected bytes against the committed LFS pointer and a fresh clone after merge. Media contracts use declared source roles, types, and visibility, plus output roles, lineage, and optional tool-supplied format metadata; Factory does not interpret the file format. The [public PNG fixture](test/fixtures/objectives/media-lfs.md) shows one source, role, and validation example, while a local test covers an opaque 3D file and sidecar under target-owned LFS. If you use a temporary `XDG_CONFIG_HOME` for Factory, keep the controller's GitHub CLI authentication visible through `GH_CONFIG_DIR` or its normal configuration path.
 
 `factory cancel --objective ISSUE_NUMBER` stops owned local processes. `factory retry --objective ISSUE_NUMBER --item WORK_ITEM_ID` starts a new explicit attempt for a failed or cancelled unpublished item. Managed-agent and sandbox modes are reserved contract shapes and fail preflight until their branches ship.
 

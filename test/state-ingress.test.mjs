@@ -71,6 +71,30 @@ test("persisted state validates identities and graph/work keys before use", () =
   );
 });
 
+test("schemaVersion 1 state accepts legacy source paths and explicit source bindings", () => {
+  const legacy = state();
+  legacy.graph.items[0].sourceAssets = ["assets/source.png"];
+  assert.equal(
+    parseFactoryState(legacy, repository, objective).graph.items[0]
+      .sourceAssets[0],
+    "assets/source.png",
+  );
+  const bound = state();
+  bound.graph.items[0].sourceAssets = [
+    {
+      path: "assets/source.blend",
+      role: "mesh",
+      mediaType: "application/x-blender",
+      visibility: "repository",
+    },
+  ];
+  assert.equal(
+    parseFactoryState(bound, repository, objective).graph.items[0]
+      .sourceAssets[0].role,
+    "mesh",
+  );
+});
+
 test("persisted asset and active process identities fail closed", () => {
   const waiting = state();
   waiting.work.asset = {

@@ -229,7 +229,7 @@ export class LocalExecutionDriver implements ExecutionDriver {
         item: request.item,
         worktree,
         attemptId: identity,
-        sourceAssets: sourceAssets.map((entry) => entry.ref),
+        sourceAssets,
       });
       const active = { request, worktree, handle };
       this.active.set(identity, active);

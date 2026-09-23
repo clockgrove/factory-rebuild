@@ -51,7 +51,20 @@ export const graphSchema = {
             },
           },
           brief: { type: "string" },
-          sourceAssets: { type: "array", items: { type: "string" } },
+          sourceAssets: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                path: { type: "string" },
+                role: { type: "string" },
+                mediaType: { type: "string" },
+                visibility: { type: "string", enum: ["private", "repository"] },
+              },
+              required: ["path", "role", "mediaType", "visibility"],
+              additionalProperties: false,
+            },
+          },
           expectedOutputRoles: { type: "array", items: { type: "string" } },
           minimumAssetSets: { type: "integer" },
           requiredLfsRoles: { type: "array", items: { type: "string" } },
@@ -91,7 +104,7 @@ export class CodexPlanningModel implements PlanningModel {
       sandboxMode: "read-only",
       approvalPolicy: "never",
     });
-    const prompt = `Compile this human Objective into the smallest complete dependency-aware Work Item graph. Use parallel lanes only when ownership and resources allow them. Return the requested JSON only. Use exact supplied base SHA and Objective number. Cite only supplied source paths. Give each item explicit non-goals. Choose observable acceptance and owned paths. For every validation command, set provenance to base-observed or source-declared. If source-declared, set source to the exact supplied path that declares it, such as OBJECTIVE or AGENTS.md; if base-observed, set source to an empty string. List repository source asset paths and expected output roles for media work; use empty arrays for ordinary work. Set minimumAssetSets from the Objective candidate count, or 1 for unspecified media and 0 for ordinary work. List requiredLfsRoles only when a supplied source requires them; the target repository .gitattributes is authoritative. Do not add deployment, paid services, providers, recovery, or later scope.\n\nObjective:\n${request.objective}\n\nBase: ${request.baseSha}\n\nSources:\n${request.sources.map((s) => `--- ${s.path} ---\n${s.content}`).join("\n")}`;
+    const prompt = `Compile this human Objective into the smallest complete dependency-aware Work Item graph. Use parallel lanes only when ownership and resources allow them. Return the requested JSON only. Use exact supplied base SHA and Objective number. Cite only supplied source paths. Give each item explicit non-goals. Choose observable acceptance and owned paths. For every validation command, set provenance to base-observed or source-declared. If source-declared, set source to the exact supplied path that declares it, such as OBJECTIVE or AGENTS.md; if base-observed, set source to an empty string. For each repository source asset, bind its path, role, media type, and private or repository visibility. Use an explicitly declared media type when available, otherwise application/octet-stream; never infer format from an extension. List expected output roles for media work; use empty arrays for ordinary work. Set minimumAssetSets from the Objective candidate count, or 1 for unspecified media and 0 for ordinary work. List requiredLfsRoles only when a supplied source requires them; the target repository .gitattributes is authoritative. Do not add deployment, paid services, providers, recovery, or later scope.\n\nObjective:\n${request.objective}\n\nBase: ${request.baseSha}\n\nSources:\n${request.sources.map((s) => `--- ${s.path} ---\n${s.content}`).join("\n")}`;
     const result = await thread.run(prompt, { outputSchema: request.schema });
     return JSON.parse(result.finalResponse) as T;
   }
@@ -174,15 +187,28 @@ export async function compileObjective(
       throw new Error(
         `Work Item ${item.id} requires LFS for an unknown output role`,
       );
-    for (const path of item.sourceAssets ?? []) {
+    for (const source of item.sourceAssets ?? []) {
+      const binding =
+        typeof source === "string"
+          ? {
+              path: source,
+              role: "source",
+              mediaType: "application/octet-stream",
+              visibility: "repository",
+            }
+          : source;
+      const { path, role, mediaType, visibility } = binding;
       if (
+        !role ||
+        !mediaType ||
+        !["private", "repository"].includes(visibility) ||
         !/^[A-Za-z0-9_./-]+$/.test(path) ||
         path.startsWith("/") ||
         path.split("/").includes("..") ||
         !existsSync(join(checkout, path))
       )
         throw new Error(
-          `Work Item ${item.id} cites an unavailable source asset: ${path}`,
+          `Work Item ${item.id} cites an unavailable or invalid source asset: ${path}`,
         );
     }
   }
