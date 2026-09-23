@@ -4,6 +4,10 @@ The clean implementation starts from the Factory plan reviewed September 22, 202
 
 The MIT license text is retained from the archived repository. Runtime code does not read this ledger.
 
+## Trunk issue #24 — changed-file safety
+
+Inspected the archived `docs/THREAT-MODEL.md`, `src/runtime/pinned-git-environment.ts`, and `src/execution/artifacts.ts` at commit `994bbfcadb317aed2dfa932ec9d128e7d0d8c7a8`. The clean local driver retains exact-base collection, pinned Git environment, changed-path ownership, and the trusted-local worker boundary. It checks staged candidate modes and traversal, rejects newly introduced special entries, scans only changed staged and working bytes with maintained Secretlint rules, and filters the worker's effective environment to a small ambient allowlist. The archived artifact protocol, blanket file-size/count limits, receipt machinery, and claim of hostile-code containment were not retained. A reviewed operator-owned Secretlint config outside the target checkout is the explicit false-positive path.
+
 ## Slice 1 extraction
 
 Audited commit for every row: `994bbfcadb317aed2dfa932ec9d128e7d0d8c7a8`. Each destination was reimplemented after inspection behind the clean contracts; no archived source file, protocol, helper, or test was copied.
