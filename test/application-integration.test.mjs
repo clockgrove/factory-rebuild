@@ -739,6 +739,24 @@ test("an explicitly accepted malformed graph review runs the same pinned graph w
       existsSync(statePath("example/malformed-graph-integration", objective)),
       false,
     );
+    await assert.rejects(
+      application.runObjective(objective, {
+        ...candidate,
+        review: {
+          ...candidate.review,
+          status: "clean",
+          findings: [],
+          failure: undefined,
+        },
+      }),
+      /differs from the current Objective/,
+    );
+    assert.equal(Object.keys(github.state().issues).length, 0);
+    assert.equal(
+      existsSync(statePath("example/malformed-graph-integration", objective)),
+      false,
+    );
+    assert.equal(reviewCount, 1);
     const accepted = await application.decidePlan(objective, candidate, {
       actor: "test operator",
       outcome: "accept",
@@ -749,6 +767,80 @@ test("an explicitly accepted malformed graph review runs the same pinned graph w
     assert.equal(reviewCount, 1);
     const completed = await application.runObjective(objective, accepted);
     assert.equal(completed.finalValidation.passed, true);
+    assert.equal(reviewCount, 1);
+  });
+});
+
+test("clean accepted plan activates without planning calls and rejects config drift", async () => {
+  await fixture("clean-plan-activation", async (root) => {
+    const target = createTarget(root);
+    const command = 'test "$(cat clean.txt)" = clean';
+    const graph = {
+      objective,
+      baseSha: target.baseSha,
+      items: [item("clean", { path: "clean.txt", command })],
+    };
+    const config = factoryConfig(
+      target.checkout,
+      "example/clean-plan-activation",
+      "regular",
+      1,
+    );
+    let generationCount = 0;
+    let reviewCount = 0;
+    let reviewedPacket;
+    const planningModel = {
+      async generateStructured() {
+        generationCount += 1;
+        return structuredClone(graph);
+      },
+      async reviewGraph(request) {
+        reviewCount += 1;
+        reviewedPacket = structuredClone(request);
+        return { findings: [] };
+      },
+      async reviewResult(request) {
+        return {
+          findings: request.criteria.map((criterion) => ({
+            criterion,
+            verdict: "pass",
+            source: "OBJECTIVE",
+            quote: "## Acceptance",
+            detail: "The scripted result proves the exact criterion",
+            question: "",
+          })),
+        };
+      },
+    };
+    const { application, github } = makeApplication({
+      config,
+      graph,
+      objectiveBody: body([command]),
+      fakeRoot: join(root, "fake"),
+      planningModel,
+      actions: { clean: { files: [{ path: "clean.txt", text: "clean\n" }] } },
+    });
+    const candidate = await application.planObjective(objective);
+    assert.equal(candidate.review.status, "clean");
+    assert.equal(generationCount, 1);
+    assert.equal(reviewCount, 1);
+    assert.deepEqual(reviewedPacket.commands, candidate.commands);
+    assert.deepEqual(reviewedPacket.finalCommands, [command]);
+
+    config.planning.reviewer.reasoningEffort = "high";
+    await assert.rejects(
+      application.runObjective(objective, candidate),
+      /differs from the current Objective/,
+    );
+    assert.equal(Object.keys(github.state().issues).length, 0);
+    assert.equal(existsSync(statePath(config.repository, objective)), false);
+    assert.equal(generationCount, 1);
+    assert.equal(reviewCount, 1);
+
+    config.planning.reviewer.reasoningEffort = "medium";
+    const completed = await application.runObjective(objective, candidate);
+    assert.equal(completed.finalValidation.passed, true);
+    assert.equal(generationCount, 1);
     assert.equal(reviewCount, 1);
   });
 });
