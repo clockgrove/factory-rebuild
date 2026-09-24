@@ -2,6 +2,12 @@
 
 This file records public releases of Factory. See [BUILD-STATUS.md](docs/BUILD-STATUS.md) for development acceptance evidence.
 
+## 0.1.10 — 2026-09-24
+
+- Ground final Objective acceptance in bounded, supervisor-generated per-Work-Item Git deltas tied to exact result and integration identities.
+- Exclude nested Work Item reviewer prose from final review while preserving canonical command receipts, selected-asset facts, and exact source quotations.
+- Fail closed on truncated or identity-inconsistent evidence and preserve every rejected final-review candidate with its field-level rejection reason.
+
 ## 0.1.9 — 2026-09-24
 
 - Bind every ordered validation-command receipt to its exact result tree, stable index, and successful exit code for Work Item and final Objective review.
