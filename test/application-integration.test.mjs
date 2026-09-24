@@ -405,6 +405,7 @@ test("Work Item review receives exact concurrent-attempt provenance from run sta
               "id",
               "integratedSha",
               "integrationAtStart",
+              "resultHeadSha",
               "startedAt",
             ]);
             assert.match(attempts[id].attemptId, /^[0-9a-f-]{36}$/);
@@ -413,6 +414,7 @@ test("Work Item review receives exact concurrent-attempt provenance from run sta
               recorded: true,
               integratedSha: null,
             });
+            assert.match(attempts[id].resultHeadSha, /^[0-9a-f]{40}$/);
             assert.ok(Number.isFinite(Date.parse(attempts[id].startedAt)));
           }
           if (observations.reviewedItemId === "rc-left") {
@@ -510,6 +512,167 @@ test("Work Item review receives exact concurrent-attempt provenance from run sta
         completed.work[id].validation.criteria.at(-1).verdict,
         "pass",
       );
+  });
+});
+
+test("native successor review receives its exact predecessor result head", async () => {
+  await fixture("native-predecessor-provenance", async (root) => {
+    const target = createTarget(root);
+    const fakeRoot = join(root, "fake");
+    const commands = [
+      'test "$(cat foundation.txt)" = foundation',
+      'test "$(cat successor.txt)" = successor',
+      'test "$(cat top.txt)" = top',
+    ];
+    const predecessorCriterion =
+      "successor is the second native stack layer and uses foundation as its exact predecessor base";
+    const topCriterion =
+      "top is the third native stack layer and completes the maximal three-layer stack after successor";
+    const foundation = item("foundation", {
+      path: "foundation.txt",
+      command: commands[0],
+    });
+    const successor = item("successor", {
+      path: "successor.txt",
+      command: commands[1],
+      dependencies: ["foundation"],
+    });
+    successor.acceptance = [
+      "successor.txt has the scripted result",
+      predecessorCriterion,
+    ];
+    const top = item("top", {
+      path: "top.txt",
+      command: commands[2],
+      dependencies: ["successor"],
+    });
+    top.acceptance = ["top.txt has the scripted result", topCriterion];
+    const graph = {
+      objective,
+      baseSha: target.baseSha,
+      items: [foundation, successor, top],
+    };
+    const objectiveBody = `# Native predecessor provenance
+
+## Work Items
+
+- foundation.txt has the scripted result
+- successor.txt has the scripted result
+- ${predecessorCriterion}
+- top.txt has the scripted result
+- ${topCriterion}
+- \`${commands[0]}\`
+- \`${commands[1]}\`
+- \`${commands[2]}\`
+
+## Acceptance
+
+- The final tree contains all three scripted results.
+
+## Final validation
+
+- \`${commands[0]}\`
+- \`${commands[1]}\`
+- \`${commands[2]}\`
+`;
+    const observedProofs = new Set();
+    const planningModel = {
+      async generateStructured() {
+        return structuredClone(graph);
+      },
+      async reviewGraph() {
+        return { findings: [] };
+      },
+      async reviewResult(request) {
+        return {
+          findings: request.criteria.map((criterion) => {
+            if (
+              criterion === predecessorCriterion ||
+              criterion === topCriterion
+            ) {
+              const observations = JSON.parse(request.observations);
+              const attempts = Object.fromEntries(
+                observations.attempts.map((attempt) => [attempt.id, attempt]),
+              );
+              const isMiddle = criterion === predecessorCriterion;
+              const currentId = isMiddle ? "successor" : "top";
+              const predecessorId = isMiddle ? "foundation" : "successor";
+              assert.equal(observations.reviewedItemId, currentId);
+              assert.deepEqual(observations.delivery, {
+                kind: "native-stack",
+                unitId: "foundation",
+                layerNumber: isMiddle ? 2 : 3,
+                layerCount: 3,
+                predecessorItemId: predecessorId,
+              });
+              assert.deepEqual(
+                Object.keys(attempts).sort(),
+                [currentId, predecessorId].sort(),
+              );
+              assert.match(
+                attempts[predecessorId].resultHeadSha,
+                /^[0-9a-f]{40}$/,
+              );
+              assert.equal(
+                attempts[currentId].executionBaseSha,
+                attempts[predecessorId].resultHeadSha,
+              );
+              assert.equal(attempts[predecessorId].integratedSha, null);
+              observedProofs.add(criterion);
+              return {
+                criterion,
+                verdict: "pass",
+                source: "Delivery observations",
+                quote: request.observations,
+                detail:
+                  "The native layer position is explicit and the predecessor result head exactly equals the successor execution base.",
+                question: "",
+              };
+            }
+            return {
+              criterion,
+              verdict: "pass",
+              source: "OBJECTIVE",
+              quote: criterion,
+              detail: "The pinned Objective states this exact criterion.",
+              question: "",
+            };
+          }),
+        };
+      },
+    };
+    const { application } = makeApplication({
+      config: factoryConfig(
+        target.checkout,
+        "example/native-predecessor-provenance",
+        "native-stack",
+        1,
+      ),
+      graph,
+      objectiveBody,
+      fakeRoot,
+      planningModel,
+      actions: {
+        foundation: {
+          files: [{ path: "foundation.txt", text: "foundation\n" }],
+        },
+        successor: {
+          files: [{ path: "successor.txt", text: "successor\n" }],
+        },
+        top: { files: [{ path: "top.txt", text: "top\n" }] },
+      },
+    });
+    const completed = await application.runObjective(objective);
+    assert.ok(completed.finalValidation, JSON.stringify(completed, null, 2));
+    assert.equal(completed.finalValidation.passed, true);
+    assert.deepEqual(
+      observedProofs,
+      new Set([predecessorCriterion, topCriterion]),
+    );
+    assert.equal(completed.work.successor.acceptancePending, undefined);
+    assert.equal(completed.work.successor.acceptanceDecisions, undefined);
+    assert.equal(completed.work.top.acceptancePending, undefined);
+    assert.equal(completed.work.top.acceptanceDecisions, undefined);
   });
 });
 

@@ -4,7 +4,7 @@ This is the release and installation procedure for the current candidate. [#25](
 
 ## Distribution shape
 
-The [Clockgrove marketplace](../.agents/plugins/marketplace.json) names the plugin at this repository's root and pins `v0.1.5`. Codex loads its manifest and use skills from that Git tag. The TypeScript CLI and its production dependency tree are built into a separate npm tarball attached to the matching public GitHub Release; marketplace installation does not build the CLI. The bundled tree makes the release install independent of later npm dependency resolution and needs no npm publishing account. The first tarball targets Linux x64 with Node.js 22 or later. The repo marketplace is a public distribution source for people who add it; a listing in the universal Plugins Directory would require a separate submission and review.
+The [Clockgrove marketplace](../.agents/plugins/marketplace.json) names the plugin at this repository's root and pins `v0.1.6`. Codex loads its manifest and use skills from that Git tag. The TypeScript CLI and its production dependency tree are built into a separate npm tarball attached to the matching public GitHub Release; marketplace installation does not build the CLI. The bundled tree makes the release install independent of later npm dependency resolution and needs no npm publishing account. The first tarball targets Linux x64 with Node.js 22 or later. The repo marketplace is a public distribution source for people who add it; a listing in the universal Plugins Directory would require a separate submission and review.
 
 Publish a candidate tag and release asset only after its code, CI, packaging, and notice checks pass; then run the disposable gate from a fresh public download. Publication is not acceptance and does not authorize the Clockgrove pilot. Do not point the marketplace at a moving branch. If the candidate version changes, update the package, manifest, marketplace ref, changelog, README status, and commands here together before tagging.
 
@@ -23,10 +23,10 @@ npm test
 mkdir -p /absolute/empty/release-directory
 npm pack --pack-destination /absolute/empty/release-directory
 cd /absolute/empty/release-directory
-sha256sum clockgrove-factory-0.1.5.tgz > SHA256SUMS
+sha256sum clockgrove-factory-0.1.6.tgz > SHA256SUMS
 ```
 
-Inspect the tarball file list for the manifest, installed skills, CLI, license, logo, notices, and bundled production dependency tree. In a separate empty prefix, install the tarball with `npm install --offline --ignore-scripts --prefix /absolute/private/check-prefix ./clockgrove-factory-0.1.5.tgz` using an empty npm cache; verify `factory help`, compare every installed bundled package version with `package-lock.json`, and check that notices cover the same tree. Record `git rev-parse HEAD`, package version, tarball SHA-256, and the passing CI run. Create a protected `v0.1.5` tag at that same commit and attach both `clockgrove-factory-0.1.5.tgz` and `SHA256SUMS` to a public GitHub Release. Record the expected SHA-256 outside the mutable Release assets, in [BUILD-STATUS.md](BUILD-STATUS.md). This procedure does not itself publish or tag anything.
+Inspect the tarball file list for the manifest, installed skills, CLI, license, logo, notices, and bundled production dependency tree. In a separate empty prefix, install the tarball with `npm install --offline --ignore-scripts --prefix /absolute/private/check-prefix ./clockgrove-factory-0.1.6.tgz` using an empty npm cache; verify `factory help`, compare every installed bundled package version with `package-lock.json`, and check that notices cover the same tree. Record `git rev-parse HEAD`, package version, tarball SHA-256, and the passing CI run. Create a protected `v0.1.6` tag at that same commit and attach both `clockgrove-factory-0.1.6.tgz` and `SHA256SUMS` to a public GitHub Release. Record the expected SHA-256 outside the mutable Release assets, in [BUILD-STATUS.md](BUILD-STATUS.md). This procedure does not itself publish or tag anything.
 
 ## Install from public artifacts
 
@@ -43,13 +43,13 @@ gh auth status
 Then install from the public tag and release assets:
 
 ```sh
-codex plugin marketplace add clockgrove/factory-rebuild --ref v0.1.5
+codex plugin marketplace add clockgrove/factory-rebuild --ref v0.1.6
 codex plugin add factory@clockgrove
-gh release download v0.1.5 --repo clockgrove/factory-rebuild \
-  --pattern clockgrove-factory-0.1.5.tgz --pattern SHA256SUMS
+gh release download v0.1.6 --repo clockgrove/factory-rebuild \
+  --pattern clockgrove-factory-0.1.6.tgz --pattern SHA256SUMS
 sha256sum --check SHA256SUMS
 # Also compare the digest with the independently recorded release value in BUILD-STATUS.md.
-npm install --offline --ignore-scripts --prefix /absolute/private/factory-prefix ./clockgrove-factory-0.1.5.tgz
+npm install --offline --ignore-scripts --prefix /absolute/private/factory-prefix ./clockgrove-factory-0.1.6.tgz
 export PATH="/absolute/private/factory-prefix/node_modules/.bin:$PATH"
 factory help
 ```
@@ -63,7 +63,7 @@ Verify `factory@clockgrove` appears in `codex plugin list --json` before the liv
 3. Use `factory status --objective N` and `factory status --objective N --json` for the current atomic snapshot. Use `factory diagnostics --objective N` for a private timeline and `factory logs --objective N --item ID` for a recorded attempt's worker output; add `--follow` only while observation is needed. These outputs can include private target content and never authorize continuation by themselves. When requested, use `factory review` and `factory select` with the complete chosen AssetSet and explicit `--bind` for each dependent. Resume with `factory run --objective N`. If status pauses on a result criterion, inspect its named evidence and exact tree; a bounded text excerpt or opaque blob descriptor is not a complete large file. A truncated text excerpt requires exact-tree operator decision even if the reviewer reported pass; inspect the full tree or repeat review with a larger `FACTORY_RESULT_REVIEW_TEXT_BUDGET_BYTES` and reviewer context. Ask the operator to accept or refuse that criterion, record `factory decide-result --objective N [--item ID] --tree EXACT_TREE_SHA --outcome accept|refuse --actor NAME --reason TEXT`, then resume `factory run --objective N` after acceptance. Include `--item` for a Work Item and omit it for final Objective acceptance. Inspect the final validation result, GitHub issues/PRs, merged default-branch head, and hydrated media bytes.
 4. Record the release URL, tag and commit, tarball digest, marketplace source and installed version, target Objective and PR identities, selected AssetSet and LFS evidence, validated tree, exact final head, final commands, and operator acceptance in [BUILD-STATUS.md](BUILD-STATUS.md). The target repository may be private, but the public report must omit its sensitive content, worker logs, and diagnostic details.
 
-Issue #26 is a separate private adopter smoke using the new exact published artifact after its public disposable gate succeeds. The `v0.1.0` proof is historical and does not qualify changed code. The published v0.1.2 artifact was blocked at read-only graph review; v0.1.3 reached a human-accepted exact graph but paused at Work Item result review because the review packet omitted authoritative attempt provenance. The v0.1.4 gate then proved the added packet for the first root, but native replay exposed that its mutable delivery base had been mislabeled as immutable execution provenance for the second root. Those failures remain recorded in [BUILD-STATUS.md](BUILD-STATUS.md); the v0.1.5 candidate must earn its own installed disposable gate.
+Issue #26 is a separate private adopter smoke using the new exact published artifact after its public disposable gate succeeds. The `v0.1.0` proof is historical and does not qualify changed code. The published v0.1.2 artifact was blocked at read-only graph review; v0.1.3 reached a human-accepted exact graph but paused at Work Item result review because the review packet omitted authoritative attempt provenance. The v0.1.4 gate then proved the added packet for the first root, but native replay exposed that its mutable delivery base had been mislabeled as immutable execution provenance for the second root. The v0.1.5 gate proved the immutable start facts across replay, then paused because a native successor's packet omitted its predecessor result head and explicit layer context. Those failures remain recorded in [BUILD-STATUS.md](BUILD-STATUS.md); the v0.1.6 candidate must earn its own installed disposable gate.
 
 ## Open release decisions
 

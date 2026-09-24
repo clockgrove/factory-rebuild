@@ -334,6 +334,13 @@ export async function runNativeGraph(args: {
             observations: workItemReviewObservations(
               state,
               item,
+              {
+                kind: "native-stack",
+                unitId: unit.id,
+                layerNumber: index + 1,
+                layerCount: unit.items.length,
+                predecessorItemId: unit.items[index - 1]?.id ?? null,
+              },
               work.assets?.find((set) => set.id === work.selectedAssetSet),
             ),
           });

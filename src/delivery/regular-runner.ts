@@ -180,6 +180,7 @@ export async function runRegularGraph(args: {
           observations: workItemReviewObservations(
             state,
             item,
+            { kind: "regular" },
             work.assets?.find((set) => set.id === work.selectedAssetSet),
           ),
         });
