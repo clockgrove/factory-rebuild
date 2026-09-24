@@ -9,7 +9,16 @@ import {
   packageScriptInvocation,
   PINNED_PNPM_BOOTSTRAP,
 } from "./validation.js";
-import type { PlanningModel, PlanningRequest, WorkGraph } from "./contracts.js";
+import type {
+  PlanCommandAuthorization,
+  PlanningModel,
+  PlanningRequest,
+  PlanReviewRequest,
+  ResultReviewEvidenceSource,
+  ResultReviewFinding,
+  ValidationCommandReceipt,
+  WorkGraph,
+} from "./contracts.js";
 import type { CodexModelSelection } from "./config.js";
 
 export const graphSchema = {
@@ -131,12 +140,7 @@ export class CodexPlanningModel implements PlanningModel {
     return JSON.parse(result.finalResponse) as T;
   }
 
-  async reviewGraph(request: {
-    objective: string;
-    baseSha: string;
-    sources: { path: string; content: string }[];
-    graph: WorkGraph;
-  }): Promise<{
+  async reviewGraph(request: PlanReviewRequest): Promise<{
     findings: {
       source: string;
       quote: string;
@@ -145,7 +149,7 @@ export class CodexPlanningModel implements PlanningModel {
     }[];
   }> {
     const thread = this.startThread(this.reviewer);
-    const prompt = `Independently review this proposed Factory Work Item graph against the exact pinned Objective and source packet. Check every Objective obligation, unsupported scope, citations, dependencies, path/resource ownership, and observable acceptance. Return only material findings with the supplied source path and a short exact quote from that source. Give a specific operator question for unresolved authority. Do not edit the graph or grant authority. A clean graph has an empty findings array.\n\nObjective:\n${request.objective}\nBase: ${request.baseSha}\nSources:\n${request.sources.map((s) => `--- ${s.path} ---\n${s.content}`).join("\n")}\nGraph:\n${JSON.stringify(request.graph)}`;
+    const prompt = `Independently review this complete proposed Factory plan against the exact pinned Objective and source packet. The Work Item graph, command-authority receipts, and final integrated-head commands are one review surface. Check every Objective obligation, unsupported scope, citations, dependencies, path/resource ownership, observable acceptance, exact command authority, and final validation. The separate Final commands and Command authority receipts sections are authoritative supervisor fields outside the inner WorkGraph; do not report them missing when they are present there. Return only material findings with the supplied source path and a short exact quote from that source. Give a specific operator question for unresolved authority. Do not edit the plan or grant authority. A clean plan has an empty findings array.\n\nObjective:\n${request.objective}\nBase: ${request.baseSha}\nSources:\n${request.sources.map((s) => `--- ${s.path} ---\n${s.content}`).join("\n")}\nGraph:\n${JSON.stringify(request.graph)}\nCommand authority receipts:\n${JSON.stringify(request.commands)}\nFinal commands:\n${JSON.stringify(request.finalCommands)}`;
     const result = await thread.run(prompt, {
       outputSchema: {
         type: "object",
@@ -178,21 +182,18 @@ export class CodexPlanningModel implements PlanningModel {
     treeSha: string;
     sources: { path: string; content: string }[];
     change: string;
-    commands: { command: string; passed: true }[];
+    commands: ValidationCommandReceipt[];
+    evidence?: ResultReviewEvidenceSource[];
     observations?: string;
-  }): Promise<{
-    findings: {
-      criterion: string;
-      verdict: "pass" | "needs-human" | "refuse";
-      source: string;
-      quote: string;
-      detail: string;
-      question: string;
-    }[];
-  }> {
+  }): Promise<{ findings: ResultReviewFinding[] }> {
     const thread = this.startThread(this.reviewer);
+    const promptSources = [...request.sources, ...(request.evidence ?? [])];
+    request = { ...request, sources: promptSources };
+    const identityInstructions =
+      "The result identity is a Git tree. Delivery observations separately name every Git commit and Git tree; never compare them as the same object type. Command pass evidence is an ordered array of canonical receipts. Each receipt names its stable zero-based index, command, successful exit code 0, and exact result tree, produced only after Factory verified the result commit resolves to that tree. Sources whose path begins with Work Item Git delta are supervisor-generated exact result evidence: they bind accepted path ownership and that item's execution base, actual result base, result commit/tree, integrated commit/tree, changed paths, and raw patch excerpts. Treat each such path as an allowed supplied source path. Use those sources for criteria about one Work Item's exact delta or its relationship to another item's owned paths. Copy quotes exactly as serialized; never decode an escaped string into a quote. ";
     const result = await thread.run(
-      `Independently review the exact result of a Factory Objective. Decide each criterion only from the supplied pinned source, command pass evidence, delivery observations when supplied, and exact Git change packet. The packet has bounded text patch excerpts, explicit truncation flags, line counts, and exact blob identities/sizes. Never pass a criterion when relevant text is truncated or omitted unless other supplied evidence independently proves it. Blob identity alone does not prove opaque content semantics; ask for a focused human decision when missing evidence matters. A shell exit code alone proves only that command's assertion. Return one finding per criterion in the given order. Pass only when the evidence proves that criterion; otherwise needs-human with one specific question. Use refuse for a directly disproved criterion. For source, use exactly a supplied pinned source path, or exactly one of "Exact Git change packet", "Command pass evidence", or "Delivery observations". For quote, copy an exact contiguous fragment from that named input. Never invent a source label or paraphrase a quote. Never edit or run commands.\n\nBase: ${request.baseSha}\nResult tree: ${request.treeSha}\nCriteria: ${JSON.stringify(request.criteria)}\nCommands: ${JSON.stringify(request.commands)}\nDelivery observations: ${request.observations ?? "none"}\nSources: ${request.sources.map((s) => `--- ${s.path} ---\n${s.content}`).join("\n")}\nChange packet:\n${request.change}`,
+      identityInstructions +
+        `Independently review the exact result of a Factory Objective. Decide each criterion only from the supplied pinned source, command pass evidence, delivery observations when supplied, and exact Git change packet. The packet has bounded text patch excerpts, explicit truncation flags, line counts, and exact blob identities/sizes. Never pass a criterion when relevant text is truncated or omitted unless other supplied evidence independently proves it. Blob identity alone does not prove opaque content semantics; ask for a focused human decision when missing evidence matters. A shell exit code alone proves only that command's assertion. Return one finding per criterion in the given order. Pass only when the evidence proves that criterion; otherwise needs-human with one specific question. Use refuse for a directly disproved criterion. For source, use exactly a supplied pinned source path, or exactly one of "Exact Git change packet", "Command pass evidence", or "Delivery observations". For quote, copy an exact contiguous fragment from that named input. Never invent a source label or paraphrase a quote. Never edit or run commands.\n\nBase: ${request.baseSha}\nResult tree: ${request.treeSha}\nCriteria: ${JSON.stringify(request.criteria)}\nCommands: ${JSON.stringify(request.commands)}\nDelivery observations: ${request.observations ?? "none"}\nSources: ${request.sources.map((s) => `--- ${s.path} ---\n${s.content}`).join("\n")}\nChange packet:\n${request.change}`,
       {
         outputSchema: {
           type: "object",
@@ -265,7 +266,7 @@ export interface PlanningSource {
 }
 
 export interface PlanCandidate {
-  schemaVersion: 1;
+  schemaVersion: 2;
   objective: number;
   baseSha: string;
   bodyDigest: string;
@@ -273,15 +274,14 @@ export interface PlanCandidate {
   sourceDigests: { path: string; heading?: string; digest: string }[];
   graph: WorkGraph;
   graphDigest: string;
-  commands: {
-    itemId: string;
-    command: string;
-    provenance: "base-observed" | "source-declared";
-    source?: string;
-    hostExecution: "authorized" | "blocked";
-    reason: string;
-  }[];
+  commands: PlanCommandAuthorization[];
   finalCommands: string[];
+  /** Digest of the complete immutable packet supplied to independent review. */
+  packetDigest: string;
+  /** Digest of the packet digest and immutable independent-review result. */
+  reviewDigest: string;
+  /** Factory installation configuration bound at preview time. */
+  configDigest: string;
   humanDecision?: {
     question: string;
     answer: string;
@@ -289,7 +289,7 @@ export interface PlanCandidate {
     at: string;
     outcome: "accept" | "refuse";
     reason: string;
-    graphDigest?: string;
+    reviewDigest: string;
   };
   review: {
     status: "clean" | "needs-human" | "human-accepted" | "refused";
@@ -304,17 +304,43 @@ export interface PlanCandidate {
   };
 }
 
-function decisionSource(
-  decision: NonNullable<PlanCandidate["humanDecision"]>,
-): PlanningSource {
+function digest(value: string): string {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+function planReviewPacket(
+  objective: string,
+  baseSha: string,
+  sources: PlanningSource[],
+  graph: WorkGraph,
+  checkout: string,
+): PlanReviewRequest {
   return {
-    path: "OPERATOR_DECISION",
-    content: JSON.stringify(decision),
+    objective,
+    baseSha,
+    sources,
+    graph,
+    commands: commandAuthorizations(graph, sources, checkout),
+    finalCommands: finalObjectiveCommands(objective),
   };
 }
 
-function digest(value: string): string {
-  return createHash("sha256").update(value).digest("hex");
+function planReviewDigest(packet: PlanReviewRequest): string {
+  return digest(JSON.stringify(packet));
+}
+
+function reviewResultDigest(
+  packetDigest: string,
+  review: Pick<PlanCandidate["review"], "revisions" | "findings" | "failure">,
+): string {
+  return digest(
+    JSON.stringify({
+      packetDigest,
+      revisions: review.revisions,
+      findings: review.findings,
+      ...(review.failure ? { failure: review.failure } : {}),
+    }),
+  );
 }
 
 function commandAuthorizations(
@@ -789,12 +815,9 @@ function checkedFindings(
   return findings;
 }
 
-async function checkedGraphReview(
+async function checkedPlanReview(
   model: PlanningModel,
-  objective: string,
-  baseSha: string,
-  sources: PlanningSource[],
-  graph: WorkGraph,
+  packet: PlanReviewRequest,
 ): Promise<{
   findings: ReturnType<typeof checkedFindings>;
   failure?: { detail: string; question: string };
@@ -802,9 +825,8 @@ async function checkedGraphReview(
   try {
     return {
       findings: checkedFindings(
-        (await model.reviewGraph({ objective, baseSha, sources, graph }))
-          .findings,
-        sources,
+        (await model.reviewGraph(packet)).findings,
+        packet.sources,
       ),
     };
   } catch (error) {
@@ -812,8 +834,8 @@ async function checkedGraphReview(
     return {
       findings: [],
       failure: {
-        detail: `Independent graph review could not be validated: ${detail}`,
-        question: `Inspect pinned Work Item graph ${digest(JSON.stringify(graph))} for missing Objective obligations, unsupported scope, citations, dependencies, ownership, and observable acceptance. Do you accept it despite the invalid independent review?`,
+        detail: `Independent plan review could not be validated: ${detail}`,
+        question: `Inspect pinned Factory plan ${planReviewDigest(packet)} for missing Objective obligations, unsupported scope, citations, dependencies, ownership, command authority, final validation, and observable acceptance. Do you accept it despite the invalid independent review?`,
       },
     };
   }
@@ -826,10 +848,12 @@ export async function compilePlan(
   baseSha: string,
   checkout: string,
   model: PlanningModel,
+  configDigest = digest("unbound-test-configuration"),
 ): Promise<PlanCandidate> {
   const sources = planningSources(body, baseSha, checkout);
   let graph = await compileObjective(objective, body, baseSha, checkout, model);
-  let review = await checkedGraphReview(model, body, baseSha, sources, graph);
+  let packet = planReviewPacket(body, baseSha, sources, graph, checkout);
+  let review = await checkedPlanReview(model, packet);
   let findings = review.findings;
   let revisions = 0;
   if (findings.length && !review.failure) {
@@ -844,7 +868,8 @@ export async function compilePlan(
         findings,
       );
       revisions = 1;
-      review = await checkedGraphReview(model, body, baseSha, sources, graph);
+      packet = planReviewPacket(body, baseSha, sources, graph, checkout);
+      review = await checkedPlanReview(model, packet);
       findings = review.findings;
     } catch (error) {
       if (
@@ -862,8 +887,15 @@ export async function compilePlan(
       ];
     }
   }
+  const packetDigest = planReviewDigest(packet);
+  const candidateReview: PlanCandidate["review"] = {
+    status: findings.length || review.failure ? "needs-human" : "clean",
+    revisions,
+    findings,
+    ...(review.failure ? { failure: review.failure } : {}),
+  };
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     objective,
     baseSha,
     bodyDigest: digest(body),
@@ -875,15 +907,29 @@ export async function compilePlan(
     })),
     graph,
     graphDigest: digest(JSON.stringify(graph)),
-    commands: commandAuthorizations(graph, sources, checkout),
-    finalCommands: finalObjectiveCommands(body),
-    review: {
-      status: findings.length || review.failure ? "needs-human" : "clean",
-      revisions,
-      findings,
-      ...(review.failure ? { failure: review.failure } : {}),
-    },
+    commands: packet.commands,
+    finalCommands: packet.finalCommands,
+    packetDigest,
+    reviewDigest: reviewResultDigest(packetDigest, candidateReview),
+    configDigest,
+    review: candidateReview,
   };
+}
+
+function completeAcceptedDecision(
+  decision: PlanCandidate["humanDecision"],
+): decision is NonNullable<PlanCandidate["humanDecision"]> {
+  return Boolean(
+    decision?.outcome === "accept" &&
+    typeof decision.actor === "string" &&
+    decision.actor.trim() &&
+    typeof decision.answer === "string" &&
+    decision.answer.trim() &&
+    typeof decision.reason === "string" &&
+    decision.reason.trim() &&
+    typeof decision.at === "string" &&
+    decision.at.trim(),
+  );
 }
 
 /** Reject a stale or modified preview before activating its exact graph. */
@@ -893,24 +939,32 @@ export function verifyPlanCandidate(
   body: string,
   baseSha: string,
   checkout: string,
+  configDigest = digest("unbound-test-configuration"),
   allowPending = false,
 ): void {
   const expectedSources = planningSources(body, baseSha, checkout);
-  if (candidate.humanDecision)
-    expectedSources.push(decisionSource(candidate.humanDecision));
+  const expectedPacket = planReviewPacket(
+    body,
+    baseSha,
+    expectedSources,
+    candidate.graph,
+    checkout,
+  );
   if (
-    candidate.schemaVersion !== 1 ||
+    candidate.schemaVersion !== 2 ||
     candidate.objective !== objective ||
     candidate.baseSha !== baseSha ||
     candidate.bodyDigest !== digest(body) ||
+    candidate.configDigest !== configDigest ||
     JSON.stringify(candidate.sources) !== JSON.stringify(expectedSources) ||
     candidate.graphDigest !== digest(JSON.stringify(candidate.graph)) ||
     JSON.stringify(candidate.commands) !==
-      JSON.stringify(
-        commandAuthorizations(candidate.graph, expectedSources, checkout),
-      ) ||
+      JSON.stringify(expectedPacket.commands) ||
     JSON.stringify(candidate.finalCommands) !==
-      JSON.stringify(finalObjectiveCommands(body)) ||
+      JSON.stringify(expectedPacket.finalCommands) ||
+    candidate.packetDigest !== planReviewDigest(expectedPacket) ||
+    candidate.reviewDigest !==
+      reviewResultDigest(candidate.packetDigest, candidate.review) ||
     JSON.stringify(candidate.sourceDigests) !==
       JSON.stringify(
         expectedSources.map(({ path, heading, content }) => ({
@@ -930,11 +984,12 @@ export function verifyPlanCandidate(
         !candidate.review.findings.length &&
         !candidate.review.failure) ||
       (candidate.review.status === "human-accepted" &&
-        !candidate.review.findings.length &&
-        candidate.review.failure !== undefined &&
-        candidate.humanDecision?.outcome === "accept" &&
-        candidate.humanDecision.graphDigest === candidate.graphDigest &&
-        candidate.humanDecision.question === candidate.review.failure.question)
+        Boolean(candidate.review.findings.length || candidate.review.failure) &&
+        completeAcceptedDecision(candidate.humanDecision) &&
+        candidate.humanDecision.reviewDigest === candidate.reviewDigest &&
+        candidate.humanDecision.question ===
+          (candidate.review.failure?.question ??
+            candidate.review.findings[0]?.question))
     )
   )
     throw new Error("Plan needs a specific human source decision before run");
@@ -955,22 +1010,30 @@ export function verifyPlanCandidate(
   validateCommandProvenance(candidate.graph, candidate.sources, checkout);
 }
 
-/** Record a specific human fallback and re-review the resulting graph. */
+/** Bind a specific human fallback to the exact reviewed plan packet. */
 export async function resolvePlan(
   candidate: PlanCandidate,
   objective: number,
   body: string,
   baseSha: string,
   checkout: string,
-  model: PlanningModel,
   input: {
     actor: string;
     outcome: "accept" | "refuse";
     answer: string;
     reason: string;
   },
+  configDigest = digest("unbound-test-configuration"),
 ): Promise<PlanCandidate> {
-  verifyPlanCandidate(candidate, objective, body, baseSha, checkout, true);
+  verifyPlanCandidate(
+    candidate,
+    objective,
+    body,
+    baseSha,
+    checkout,
+    configDigest,
+    true,
+  );
   if (
     candidate.review.status !== "needs-human" ||
     (!candidate.review.findings.length && !candidate.review.failure)
@@ -993,70 +1056,14 @@ export async function resolvePlan(
     at: new Date().toISOString(),
     outcome: input.outcome,
     reason: input.reason,
-    ...(candidate.review.failure ? { graphDigest: candidate.graphDigest } : {}),
+    reviewDigest: candidate.reviewDigest,
   };
-  const sources = [
-    ...planningSources(body, baseSha, checkout),
-    decisionSource(decision),
-  ];
-  if (input.outcome === "refuse")
-    return {
-      ...candidate,
-      humanDecision: decision,
-      sources,
-      sourceDigests: sources.map(({ path, heading, content }) => ({
-        path,
-        ...(heading ? { heading } : {}),
-        digest: digest(content),
-      })),
-      review: { ...candidate.review, status: "refused" },
-    };
-  if (candidate.review.failure)
-    return {
-      ...candidate,
-      humanDecision: decision,
-      sources,
-      sourceDigests: sources.map(({ path, heading, content }) => ({
-        path,
-        ...(heading ? { heading } : {}),
-        digest: digest(content),
-      })),
-      review: { ...candidate.review, status: "human-accepted" },
-    };
-  const graph = await compileObjective(
-    objective,
-    body,
-    baseSha,
-    checkout,
-    model,
-    [decisionSource(decision)],
-    candidate.review.findings,
-  );
-  const findings = checkedFindings(
-    (
-      await model
-        .reviewGraph({ objective: body, baseSha, sources, graph })
-        .catch(planningFailure)
-    ).findings,
-    sources,
-  );
   return {
     ...candidate,
     humanDecision: decision,
-    sources,
-    sourceDigests: sources.map(({ path, heading, content }) => ({
-      path,
-      ...(heading ? { heading } : {}),
-      digest: digest(content),
-    })),
-    graph,
-    graphDigest: digest(JSON.stringify(graph)),
-    commands: commandAuthorizations(graph, sources, checkout),
-    finalCommands: finalObjectiveCommands(body),
     review: {
-      status: findings.length ? "needs-human" : "clean",
-      revisions: candidate.review.revisions,
-      findings,
+      ...candidate.review,
+      status: input.outcome === "accept" ? "human-accepted" : "refused",
     },
   };
 }

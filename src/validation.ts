@@ -4,8 +4,21 @@ import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { spawn, spawnSync } from "node:child_process";
 import { StringDecoder } from "node:string_decoder";
-import type { CapturedAssetSet, PlanningModel, WorkItem } from "./contracts.js";
-import type { FactoryState } from "./state.js";
+import type {
+  CapturedAssetSet,
+  PlanningModel,
+  ResultReviewCandidate,
+  ResultReviewEvidenceSource,
+  ResultReviewFinding,
+  ValidationCommandReceipt,
+  WorkItem,
+} from "./contracts.js";
+import type {
+  AcceptancePending,
+  FactoryState,
+  ReviewRejectionReason,
+  WorkState,
+} from "./state.js";
 import {
   pinnedGit,
   pinnedGitRaw,
@@ -31,16 +44,7 @@ export interface AcceptanceDecision {
 }
 
 export class AcceptanceDecisionRequired extends Error {
-  constructor(
-    public readonly pending: {
-      criterion: string;
-      treeSha: string;
-      source: string;
-      quote: string;
-      question: string;
-      detail: string;
-    },
-  ) {
+  constructor(public readonly pending: AcceptancePending) {
     super(
       `Acceptance decision required for ${pending.criterion}: ${pending.question}`,
     );
@@ -49,7 +53,7 @@ export class AcceptanceDecisionRequired extends Error {
 
 export interface ValidationEvidence {
   treeSha: string;
-  commands: { command: string; passed: true }[];
+  commands: ValidationCommandReceipt[];
   criteria?: CriterionEvidence[];
 }
 
@@ -89,8 +93,8 @@ export function workItemReviewObservations(
     );
   });
   return JSON.stringify({
-    objectiveBaseSha: state.baseSha,
-    currentIntegratedSha: state.integratedSha ?? null,
+    objectiveBaseCommitSha: state.baseSha,
+    currentIntegratedCommitSha: state.integratedSha ?? null,
     reviewedItemId: item.id,
     delivery,
     attempts: relevant.map((candidate) => {
@@ -102,16 +106,17 @@ export function workItemReviewObservations(
         resources: candidate.resources ?? [],
         attemptId: work.attempt ?? null,
         startedAt: work.startedAt ?? null,
-        executionBaseSha: work.executionBaseSha ?? null,
+        executionBaseCommitSha: work.executionBaseSha ?? null,
         integrationAtStart:
           work.integratedShaAtStart === undefined
             ? { recorded: false }
             : {
                 recorded: true,
-                integratedSha: work.integratedShaAtStart,
+                integratedCommitSha: work.integratedShaAtStart,
               },
-        resultHeadSha: work.changeRef ?? null,
-        integratedSha: work.integratedSha ?? null,
+        resultCommitSha: work.changeRef ?? null,
+        resultTreeSha: work.treeSha ?? null,
+        integratedCommitSha: work.integratedSha ?? null,
       };
     }),
     selectedAsset: selectedAsset ?? null,
@@ -122,6 +127,7 @@ function resultChangePacket(
   checkout: string,
   baseSha: string,
   commit: string,
+  textBudgetOverride?: number,
 ): { change: string; truncatedPaths: string[] } {
   const raw = pinnedGitRaw(
     checkout,
@@ -173,11 +179,11 @@ function resultChangePacket(
   }
   // Leave room in the reviewer context for sources, criteria, and observations.
   // The operator can raise this limit for a model with a larger context window.
-  const configured = Number(
-    process.env.FACTORY_RESULT_REVIEW_TEXT_BUDGET_BYTES ?? 48_000,
-  );
+  const configured =
+    textBudgetOverride ??
+    Number(process.env.FACTORY_RESULT_REVIEW_TEXT_BUDGET_BYTES ?? 48_000);
   const textBudget =
-    Number.isSafeInteger(configured) && configured > 0 ? configured : 48_000;
+    Number.isSafeInteger(configured) && configured >= 0 ? configured : 48_000;
   let remaining = textBudget;
   const patches = changes.map(({ path }, index) => {
     const lineStats = pinnedGit(
@@ -232,6 +238,488 @@ function resultChangePacket(
   };
 }
 
+function configuredResultReviewTextBudget(): number {
+  const configured = Number(
+    process.env.FACTORY_RESULT_REVIEW_TEXT_BUDGET_BYTES ?? 48_000,
+  );
+  return Number.isSafeInteger(configured) && configured > 0
+    ? configured
+    : 48_000;
+}
+
+interface ResultChangePacket {
+  changes: {
+    path: string;
+    status: string;
+    oldMode: string;
+    newMode: string;
+    oldObject: string;
+    newObject: string;
+    oldBytes?: number;
+    newBytes?: number;
+  }[];
+  textBudget: number;
+  patches: {
+    path: string;
+    lineStats: string;
+    excerpt: string;
+    truncated: boolean;
+  }[];
+}
+
+function parseResultChangePacket(change: string): ResultChangePacket {
+  return JSON.parse(change) as ResultChangePacket;
+}
+
+function assertCommitTree(
+  checkout: string,
+  commit: string,
+  expectedTree: string,
+  label: string,
+): void {
+  let observed: string;
+  try {
+    observed = pinnedGit(checkout, "rev-parse", `${commit}^{tree}`);
+  } catch {
+    throw new Error(`${label} commit is unavailable: ${commit}`);
+  }
+  if (observed !== expectedTree)
+    throw new Error(
+      `${label} commit/tree mismatch: ${commit} resolves to ${observed}, not ${expectedTree}`,
+    );
+}
+
+function assertAncestor(
+  checkout: string,
+  ancestor: string,
+  descendant: string,
+  label: string,
+): void {
+  try {
+    pinnedGit(checkout, "merge-base", "--is-ancestor", ancestor, descendant);
+  } catch {
+    throw new Error(
+      `${label} is not an ancestor relationship: ${ancestor} -> ${descendant}`,
+    );
+  }
+}
+
+function commitParents(checkout: string, commit: string): string[] {
+  return pinnedGit(checkout, "rev-list", "--parents", "-n", "1", commit)
+    .split(" ")
+    .slice(1);
+}
+
+function commitMessage(checkout: string, commit: string): string {
+  return pinnedGit(checkout, "log", "-1", "--format=%B", commit);
+}
+
+function assertResultCommitShape(
+  checkout: string,
+  item: WorkItem,
+  current: WorkState & {
+    executionBaseSha: string;
+    baseSha: string;
+    changeRef: string;
+  },
+): void {
+  const parents = commitParents(checkout, current.changeRef);
+  if (parents.length !== 1)
+    throw new Error(
+      `Work Item ${item.id} result is not a single-parent commit`,
+    );
+  const parent = parents[0]!;
+  if (current.selectedAssetSet) {
+    if (current.executionBaseSha !== current.baseSha)
+      throw new Error(`Work Item ${item.id} replayed selected assets`);
+    if (
+      commitMessage(checkout, current.changeRef) !==
+      `Factory: selected ${current.selectedAssetSet} assets`
+    )
+      throw new Error(
+        `Work Item ${item.id} selected-asset result has an unexpected commit identity`,
+      );
+    if (parent === current.baseSha) return;
+    const workerParents = commitParents(checkout, parent);
+    if (
+      workerParents.length !== 1 ||
+      workerParents[0] !== current.baseSha ||
+      commitMessage(checkout, parent) !== `Factory: ${item.title}`
+    )
+      throw new Error(
+        `Work Item ${item.id} selected-asset result is not rooted at its recorded result base`,
+      );
+    return;
+  }
+  if (parent !== current.baseSha)
+    throw new Error(
+      `Work Item ${item.id} result commit is not rooted at its recorded result base`,
+    );
+  const expectedMessage =
+    current.executionBaseSha === current.baseSha
+      ? `Factory: ${item.title}`
+      : "Factory: replay independently prepared Work Item";
+  if (commitMessage(checkout, current.changeRef) !== expectedMessage)
+    throw new Error(
+      `Work Item ${item.id} result has an unexpected controller commit identity`,
+    );
+}
+
+function itemOwnsPath(item: WorkItem, path: string): boolean {
+  return item.ownedPaths.some((scope) =>
+    scope.endsWith("/") ? path.startsWith(scope) : path === scope,
+  );
+}
+
+function assertIntegrationBindings(
+  checkout: string,
+  records: {
+    item: WorkItem;
+    resultBaseSha: string;
+    resultCommitSha: string;
+    integratedCommitSha: string;
+  }[],
+): void {
+  const groups = new Map<string, typeof records>();
+  for (const record of records) {
+    const group = groups.get(record.integratedCommitSha) ?? [];
+    group.push(record);
+    groups.set(record.integratedCommitSha, group);
+  }
+  for (const [integratedCommitSha, group] of groups) {
+    const parents = commitParents(checkout, integratedCommitSha);
+    if (parents.length !== 2 || parents[1] !== group.at(-1)!.resultCommitSha)
+      throw new Error(
+        `Integrated commit ${integratedCommitSha} is not bound to the exact delivered result head`,
+      );
+    if (group.length === 1) continue;
+    if (parents[0] !== group[0]!.resultBaseSha)
+      throw new Error(
+        `Native integration group ${integratedCommitSha} is not rooted at its first result base`,
+      );
+    for (let index = 1; index < group.length; index++)
+      if (group[index]!.resultBaseSha !== group[index - 1]!.resultCommitSha)
+        throw new Error(
+          `Native integration group ${integratedCommitSha} has a non-exact layer base`,
+        );
+  }
+}
+
+function assertCommandReceipts(
+  evidence: ValidationEvidence,
+  expectedTree: string,
+  label: string,
+): void {
+  if (evidence.treeSha !== expectedTree)
+    throw new Error(`${label} is not bound to the exact result tree`);
+  for (const [index, receipt] of evidence.commands.entries())
+    if (
+      receipt.index !== index ||
+      !receipt.command ||
+      receipt.passed !== true ||
+      receipt.exitCode !== 0 ||
+      receipt.treeSha !== expectedTree
+    )
+      throw new Error(
+        `${label} command receipt ${index} is not bound to the exact result tree and order`,
+      );
+}
+
+function workItemDeltaContent(args: {
+  item: WorkItem;
+  state: FactoryState;
+  executionBaseSha: string;
+  resultBaseSha: string;
+  resultCommitSha: string;
+  resultTreeSha: string;
+  integratedCommitSha: string;
+  integratedTreeSha: string;
+  change: string;
+}): string {
+  const packet = parseResultChangePacket(args.change);
+  const identity = {
+    authority: "Factory supervisor exact Git evidence",
+    workItemId: args.item.id,
+    executionBaseCommitSha: args.executionBaseSha,
+    resultBaseCommitSha: args.resultBaseSha,
+    resultCommitSha: args.resultCommitSha,
+    resultTreeSha: args.resultTreeSha,
+    integratedCommitSha: args.integratedCommitSha,
+    integratedTreeSha: args.integratedTreeSha,
+    declaredDependencies: args.item.dependencies,
+    acceptedPathOwnership: args.state.graph.items
+      .filter(
+        (candidate) =>
+          candidate.id === args.item.id ||
+          args.item.dependencies.includes(candidate.id),
+      )
+      .map((item) => ({
+        workItemId: item.id,
+        ownedPaths: item.ownedPaths,
+      })),
+    changes: packet.changes,
+    textBudget: packet.textBudget,
+    patches: packet.patches.map(({ path, lineStats, truncated }) => ({
+      path,
+      lineStats,
+      truncated,
+    })),
+  };
+  const patches = packet.patches
+    .map(
+      (patch) =>
+        `--- Exact patch ${JSON.stringify({ path: patch.path, lineStats: patch.lineStats, truncated: patch.truncated })} ---\n${patch.excerpt}`,
+    )
+    .join("\n");
+  return `${JSON.stringify(identity)}\n${patches}`;
+}
+
+/**
+ * Build final-review authority from supervisor state and exact Git objects.
+ * Previous model verdicts and quotes are intentionally excluded.
+ */
+export function objectiveReviewEvidence(args: {
+  state: FactoryState;
+  checkout: string;
+  integratedCommitSha: string;
+  integratedTreeSha: string;
+}): {
+  observations: string;
+  evidence: ResultReviewEvidenceSource[];
+} {
+  const { state, checkout, integratedCommitSha, integratedTreeSha } = args;
+  if (state.integratedSha !== integratedCommitSha)
+    throw new Error(
+      "Final integrated commit differs from the atomic supervisor snapshot",
+    );
+  assertCommitTree(
+    checkout,
+    integratedCommitSha,
+    integratedTreeSha,
+    "Final integrated",
+  );
+  const evidence: ResultReviewEvidenceSource[] = [];
+  const integrationRecords: {
+    item: WorkItem;
+    resultBaseSha: string;
+    resultCommitSha: string;
+    integratedCommitSha: string;
+  }[] = [];
+  const perItemTextBudget = Math.floor(
+    configuredResultReviewTextBudget() / Math.max(1, state.graph.items.length),
+  );
+  const work = state.graph.items.map((item) => {
+    const current = state.work[item.id];
+    if (
+      !current ||
+      current.status !== "done" ||
+      !current.executionBaseSha ||
+      !current.baseSha ||
+      !current.changeRef ||
+      !current.treeSha ||
+      !current.integratedSha ||
+      !current.validation
+    )
+      throw new Error(
+        `Work Item ${item.id} lacks complete final-review identity`,
+      );
+    assertCommitTree(
+      checkout,
+      current.changeRef,
+      current.treeSha,
+      `Work Item ${item.id} result`,
+    );
+    assertAncestor(
+      checkout,
+      current.baseSha,
+      current.changeRef,
+      `Work Item ${item.id} result base`,
+    );
+    assertAncestor(
+      checkout,
+      current.executionBaseSha,
+      current.baseSha,
+      `Work Item ${item.id} execution base`,
+    );
+    const startSnapshot = current.integratedShaAtStart ?? state.baseSha;
+    const dependencyResults = item.dependencies.map(
+      (dependency) => state.work[dependency]?.changeRef,
+    );
+    if (
+      current.executionBaseSha !== startSnapshot &&
+      !dependencyResults.includes(current.executionBaseSha)
+    )
+      throw new Error(
+        `Work Item ${item.id} execution base is not bound to its recorded start snapshot or a declared dependency result`,
+      );
+    if (
+      current.executionBaseSha !== current.baseSha &&
+      current.executionBaseSha !== startSnapshot
+    )
+      throw new Error(
+        `Work Item ${item.id} replay base is not bound to its recorded start snapshot`,
+      );
+    assertResultCommitShape(checkout, item, {
+      ...current,
+      executionBaseSha: current.executionBaseSha,
+      baseSha: current.baseSha,
+      changeRef: current.changeRef,
+    });
+    const itemIntegratedTreeSha = pinnedGit(
+      checkout,
+      "rev-parse",
+      `${current.integratedSha}^{tree}`,
+    );
+    assertAncestor(
+      checkout,
+      current.changeRef,
+      current.integratedSha,
+      `Work Item ${item.id} result integration`,
+    );
+    assertAncestor(
+      checkout,
+      current.integratedSha,
+      integratedCommitSha,
+      `Work Item ${item.id} integration`,
+    );
+    assertCommandReceipts(
+      current.validation,
+      current.treeSha,
+      `Work Item ${item.id} validation`,
+    );
+    const { change, truncatedPaths } = resultChangePacket(
+      checkout,
+      current.baseSha,
+      current.changeRef,
+      perItemTextBudget,
+    );
+    const changePacket = parseResultChangePacket(change);
+    const unownedChanges = changePacket.changes
+      .map((entry) => entry.path)
+      .filter((path) => !itemOwnsPath(item, path));
+    if (unownedChanges.length)
+      throw new Error(
+        `Work Item ${item.id} final delta contains paths outside accepted ownership: ${unownedChanges.join(", ")}`,
+      );
+    integrationRecords.push({
+      item,
+      resultBaseSha: current.baseSha,
+      resultCommitSha: current.changeRef,
+      integratedCommitSha: current.integratedSha,
+    });
+    const evidencePath = `Work Item Git delta: ${item.id}`;
+    evidence.push({
+      path: evidencePath,
+      complete: truncatedPaths.length === 0,
+      content: workItemDeltaContent({
+        item,
+        state,
+        executionBaseSha: current.executionBaseSha,
+        resultBaseSha: current.baseSha,
+        resultCommitSha: current.changeRef,
+        resultTreeSha: current.treeSha,
+        integratedCommitSha: current.integratedSha,
+        integratedTreeSha: itemIntegratedTreeSha,
+        change,
+      }),
+    });
+    return {
+      id: item.id,
+      status: current.status,
+      executionBaseCommitSha: current.executionBaseSha,
+      resultBaseCommitSha: current.baseSha,
+      resultCommitSha: current.changeRef,
+      resultTreeSha: current.treeSha,
+      validationTreeSha: current.validation.treeSha,
+      validationCommands: current.validation.commands,
+      pullRequest: current.pullRequest,
+      integratedCommitSha: current.integratedSha,
+      integratedTreeSha: itemIntegratedTreeSha,
+      evidenceSource: evidencePath,
+      selectedAssetSet: current.selectedAssetSet,
+      selectedAsset: current.assets?.find(
+        (set) => set.id === current.selectedAssetSet,
+      ),
+      selection: current.selection,
+    };
+  });
+  assertIntegrationBindings(checkout, integrationRecords);
+  return {
+    observations: JSON.stringify({
+      integratedCommitSha,
+      integratedTreeSha,
+      work,
+    }),
+    evidence,
+  };
+}
+
+function boundedReviewText(value: unknown): string {
+  if (typeof value !== "string") return "";
+  return Array.from(value)
+    .map((character) => {
+      const code = character.charCodeAt(0);
+      return code < 32 && code !== 9 && code !== 10 && code !== 13
+        ? " "
+        : code === 127
+          ? " "
+          : character;
+    })
+    .join("")
+    .slice(0, 4_096);
+}
+
+function capturedReviewFinding(
+  candidate: ResultReviewFinding,
+): ResultReviewCandidate {
+  return {
+    criterion: boundedReviewText(candidate.criterion),
+    verdict: boundedReviewText(candidate.verdict),
+    source: boundedReviewText(candidate.source),
+    quote: boundedReviewText(candidate.quote),
+    detail: boundedReviewText(candidate.detail),
+    question: boundedReviewText(candidate.question),
+  };
+}
+
+function reviewFindingRejection(
+  candidate: ResultReviewFinding | undefined,
+  criterion: string,
+  groundedSources: ResultReviewEvidenceSource[],
+  patchExcerpts: string[],
+):
+  | {
+      field:
+        "finding" | "criterion" | "verdict" | "detail" | "source" | "quote";
+      reason: ReviewRejectionReason;
+    }
+  | undefined {
+  if (!candidate) return { field: "finding", reason: "missing-finding" };
+  if (candidate.criterion !== criterion)
+    return { field: "criterion", reason: "criterion-mismatch" };
+  if (!["pass", "needs-human", "refuse"].includes(candidate.verdict))
+    return { field: "verdict", reason: "invalid-verdict" };
+  if (!candidate.detail?.trim())
+    return { field: "detail", reason: "empty-detail" };
+  const source = groundedSources.find(
+    (entry) => entry.path === candidate.source,
+  );
+  if (!source) return { field: "source", reason: "unknown-source" };
+  if (candidate.verdict === "pass" && source.complete === false)
+    return { field: "source", reason: "source-truncated" };
+  if (!candidate.quote?.trim())
+    return { field: "quote", reason: "empty-quote" };
+  if (
+    !source.content.includes(candidate.quote) &&
+    !(
+      source.path === "Exact Git change packet" &&
+      patchExcerpts.some((excerpt) => excerpt.includes(candidate.quote))
+    )
+  )
+    return { field: "quote", reason: "quote-not-found" };
+  return undefined;
+}
+
 /** A separate read-only review evaluates each criterion on an exact-tree packet. */
 export async function reviewAcceptance(args: {
   model: PlanningModel;
@@ -241,6 +729,7 @@ export async function reviewAcceptance(args: {
   evidence: ValidationEvidence;
   criteria: string[];
   sources: { path: string; content: string }[];
+  evidenceSources?: ResultReviewEvidenceSource[];
   decisions?: AcceptanceDecision[];
   observations?: string;
 }): Promise<ValidationEvidence> {
@@ -250,10 +739,32 @@ export async function reviewAcceptance(args: {
   const observedTree = pinnedGit(checkout, "rev-parse", `${commit}^{tree}`);
   if (observedTree !== evidence.treeSha)
     throw new Error("Acceptance result tree differs from command evidence");
+  assertCommandReceipts(evidence, evidence.treeSha, "Acceptance");
   const { change, truncatedPaths } = resultChangePacket(
     checkout,
     baseSha,
     commit,
+  );
+  const evidenceSources: ResultReviewEvidenceSource[] = [
+    { path: "Exact Git change packet", content: change },
+    {
+      path: "Command pass evidence",
+      content: JSON.stringify(evidence.commands),
+    },
+    {
+      path: "Delivery observations",
+      content: args.observations ?? "",
+    },
+    ...(args.evidenceSources ?? []),
+  ];
+  const groundedSources = [...sources, ...evidenceSources];
+  if (
+    new Set(groundedSources.map((source) => source.path)).size !==
+    groundedSources.length
+  )
+    throw new Error("Result review evidence paths must be unique");
+  const patchExcerpts = parseResultChangePacket(change).patches.map(
+    (patch) => patch.excerpt,
   );
   let findings: Awaited<
     ReturnType<NonNullable<PlanningModel["reviewResult"]>>
@@ -268,6 +779,9 @@ export async function reviewAcceptance(args: {
         sources,
         change,
         commands: evidence.commands,
+        ...(args.evidenceSources?.length
+          ? { evidence: args.evidenceSources }
+          : {}),
         ...(args.observations ? { observations: args.observations } : {}),
       });
       if (!Array.isArray(reviewed.findings))
@@ -277,21 +791,6 @@ export async function reviewAcceptance(args: {
       reviewFailure = error instanceof Error ? error.message : String(error);
     }
   } else reviewFailure = "No independent result reviewer is configured";
-  const evidenceSources = [
-    { path: "Exact Git change packet", content: change },
-    {
-      path: "Command pass evidence",
-      content: JSON.stringify(evidence.commands),
-    },
-    {
-      path: "Delivery observations",
-      content: args.observations ?? "",
-    },
-  ];
-  const groundedSources = [...sources, ...evidenceSources];
-  const patchExcerpts = (
-    JSON.parse(change) as { patches: { excerpt: string }[] }
-  ).patches.map((patch) => patch.excerpt);
   const proven: CriterionEvidence[] = [];
   for (const [index, criterion] of criteria.entries()) {
     const decision = args.decisions?.find(
@@ -313,22 +812,13 @@ export async function reviewAcceptance(args: {
       continue;
     }
     const candidate = findings[index];
-    const finding =
-      candidate?.criterion === criterion &&
-      ["pass", "needs-human", "refuse"].includes(candidate.verdict) &&
-      Boolean(candidate.detail?.trim()) &&
-      groundedSources.some(
-        (source) =>
-          source.path === candidate.source &&
-          Boolean(candidate.quote?.trim()) &&
-          (source.content.includes(candidate.quote) ||
-            (source.path === "Exact Git change packet" &&
-              patchExcerpts.some((excerpt) =>
-                excerpt.includes(candidate.quote),
-              ))),
-      )
-        ? candidate
-        : undefined;
+    const rejection = reviewFindingRejection(
+      candidate,
+      criterion,
+      groundedSources,
+      patchExcerpts,
+    );
+    const finding = rejection ? undefined : candidate;
     if (finding?.verdict === "pass" && truncatedPaths.length === 0) {
       proven.push({
         criterion,
@@ -346,8 +836,12 @@ export async function reviewAcceptance(args: {
     throw new AcceptanceDecisionRequired({
       criterion,
       treeSha: evidence.treeSha,
-      source: finding?.source ?? "OBJECTIVE",
-      quote: finding?.quote ?? criterion,
+      source:
+        finding?.source ??
+        (boundedReviewText(candidate?.source).trim() || "OBJECTIVE"),
+      quote:
+        finding?.quote ??
+        (boundedReviewText(candidate?.quote).trim() || criterion),
       detail:
         finding?.verdict === "pass" && truncatedPaths.length > 0
           ? `Independent review cannot auto-pass because text excerpts were truncated for ${truncatedPaths.slice(0, 3).join(", ")}${truncatedPaths.length > 3 ? ` and ${truncatedPaths.length - 3} more path(s)` : ""}; a source quote and partial patch do not prove the full result.`
@@ -355,13 +849,16 @@ export async function reviewAcceptance(args: {
             (reviewFailure
               ? `Independent result review failed: ${reviewFailure}`
               : candidate
-                ? "Independent result review returned invalid evidence for this criterion"
+                ? `Independent result review returned invalid evidence for this criterion (${rejection?.field}: ${rejection?.reason})`
                 : "Independent result review omitted this criterion")),
       question:
         finding?.verdict === "pass" && truncatedPaths.length > 0
           ? `Inspect tree ${evidence.treeSha} and decide this criterion, or retry with a larger FACTORY_RESULT_REVIEW_TEXT_BUDGET_BYTES and reviewer context: ${criterion}`
           : finding?.question?.trim() ||
+            boundedReviewText(candidate?.question).trim() ||
             `Inspect tree ${evidence.treeSha} and decide whether it satisfies this criterion, or retry with a reviewer able to read the change packet: ${criterion}`,
+      ...(candidate ? { reviewFinding: capturedReviewFinding(candidate) } : {}),
+      ...(rejection ? { reviewRejection: rejection } : {}),
     });
   }
   return { ...evidence, criteria: proven };
@@ -456,7 +953,13 @@ export async function validateTree(
         throw new Error(
           `Validation command failed (${result.status}): ${check}: ${output}`,
         );
-      evidence.commands.push({ command: check, passed: true });
+      evidence.commands.push({
+        index,
+        command: check,
+        passed: true,
+        exitCode: 0,
+        treeSha,
+      });
     }
     if (pinnedGit(worktree, "status", "--porcelain"))
       throw new Error("Validation command modified the result tree");

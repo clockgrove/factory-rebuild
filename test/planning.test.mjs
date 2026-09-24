@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { mkdtempSync, existsSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -112,7 +113,17 @@ test("read-only plan uses pinned selected heading despite dirty checkout", async
     );
     assert.equal(existsSync(statePath(descriptor.config.repository, 1)), false);
     assert.equal(Object.keys(github.state().issues).length, 0);
-    verifyPlanCandidate(candidate, 1, body, target.baseSha, target.checkout);
+    const installationDigest = createHash("sha256")
+      .update(JSON.stringify(descriptor.config))
+      .digest("hex");
+    verifyPlanCandidate(
+      candidate,
+      1,
+      body,
+      target.baseSha,
+      target.checkout,
+      installationDigest,
+    );
     assert.throws(
       () =>
         verifyPlanCandidate(
@@ -121,6 +132,7 @@ test("read-only plan uses pinned selected heading despite dirty checkout", async
           body.replace("# Objective", "# Changed Objective"),
           target.baseSha,
           target.checkout,
+          installationDigest,
         ),
       /differs from the current Objective/,
     );
@@ -249,6 +261,79 @@ test("one sourced review finding permits one revision and re-review", async () =
   });
 });
 
+test("review and verification bind commands, final commands, and installation config", async () => {
+  await fixture("review-packet", async (root) => {
+    const target = createTarget(root, {
+      "docs/plan.md": "# Plan\n\n## Wave 0\nCanonical obligation\n",
+    });
+    const reviewed = [];
+    const model = {
+      async generateStructured() {
+        return graph(target.baseSha);
+      },
+      async reviewGraph(request) {
+        reviewed.push(structuredClone(request));
+        return { findings: [] };
+      },
+    };
+    const installationDigest = "c".repeat(64);
+    const candidate = await compilePlan(
+      1,
+      body,
+      target.baseSha,
+      target.checkout,
+      model,
+      installationDigest,
+    );
+    assert.equal(reviewed.length, 1);
+    assert.deepEqual(reviewed[0].commands, candidate.commands);
+    assert.deepEqual(reviewed[0].finalCommands, candidate.finalCommands);
+    assert.equal(reviewed[0].objective, body);
+    assert.equal(candidate.packetDigest.length, 64);
+    assert.equal(candidate.reviewDigest.length, 64);
+    assert.equal(candidate.configDigest, installationDigest);
+    verifyPlanCandidate(
+      candidate,
+      1,
+      body,
+      target.baseSha,
+      target.checkout,
+      installationDigest,
+    );
+    for (const mutated of [
+      { ...candidate, finalCommands: ["test -s invented.txt"] },
+      { ...candidate, commands: [] },
+      { ...candidate, packetDigest: "d".repeat(64) },
+      { ...candidate, reviewDigest: "d".repeat(64) },
+    ]) {
+      assert.throws(
+        () =>
+          verifyPlanCandidate(
+            mutated,
+            1,
+            body,
+            target.baseSha,
+            target.checkout,
+            installationDigest,
+          ),
+        /differs from the current Objective/,
+      );
+    }
+    assert.throws(
+      () =>
+        verifyPlanCandidate(
+          candidate,
+          1,
+          body,
+          target.baseSha,
+          target.checkout,
+          "e".repeat(64),
+        ),
+      /differs from the current Objective/,
+    );
+  });
+});
+
 test("unresolved review asks one human question and records a specific decision", async () => {
   await fixture("decision", async (root) => {
     const target = createTarget(root, {
@@ -259,21 +344,17 @@ test("unresolved review asks one human question and records a specific decision"
       async generateStructured() {
         return graph(target.baseSha);
       },
-      async reviewGraph(request) {
+      async reviewGraph() {
         reviewCount += 1;
         return {
-          findings: request.sources.some(
-            (source) => source.path === "OPERATOR_DECISION",
-          )
-            ? []
-            : [
-                {
-                  source: "OBJECTIVE",
-                  quote: "## Acceptance",
-                  detail: "Authority unresolved",
-                  question: "Which source authorizes this?",
-                },
-              ],
+          findings: [
+            {
+              source: "OBJECTIVE",
+              quote: "## Acceptance",
+              detail: "Authority unresolved",
+              question: "Which source authorizes this?",
+            },
+          ],
         };
       },
     };
@@ -286,6 +367,20 @@ test("unresolved review asks one human question and records a specific decision"
     );
     assert.equal(candidate.review.status, "needs-human");
     assert.equal(reviewCount, 2);
+    assert.throws(
+      () =>
+        verifyPlanCandidate(
+          {
+            ...candidate,
+            review: { ...candidate.review, status: "clean", findings: [] },
+          },
+          1,
+          body,
+          target.baseSha,
+          target.checkout,
+        ),
+      /differs from the current Objective/,
+    );
     assert.throws(
       () =>
         verifyPlanCandidate(
@@ -303,7 +398,6 @@ test("unresolved review asks one human question and records a specific decision"
       body,
       target.baseSha,
       target.checkout,
-      model,
       {
         actor: "test operator",
         outcome: "accept",
@@ -311,13 +405,37 @@ test("unresolved review asks one human question and records a specific decision"
         reason: "The target owner confirmed this source",
       },
     );
-    assert.equal(decided.review.status, "clean");
+    assert.equal(decided.review.status, "human-accepted");
     assert.equal(
       decided.humanDecision.question,
       "Which source authorizes this?",
     );
     assert.ok(decided.humanDecision.at);
+    assert.equal(decided.humanDecision.reviewDigest, candidate.reviewDigest);
+    assert.equal(reviewCount, 2);
     verifyPlanCandidate(decided, 1, body, target.baseSha, target.checkout);
+    assert.throws(
+      () =>
+        verifyPlanCandidate(
+          {
+            ...decided,
+            review: {
+              ...decided.review,
+              findings: [
+                {
+                  ...decided.review.findings[0],
+                  question: "A different unresolved question?",
+                },
+              ],
+            },
+          },
+          1,
+          body,
+          target.baseSha,
+          target.checkout,
+        ),
+      /differs from the current Objective/,
+    );
   });
 });
 
@@ -357,10 +475,10 @@ test("malformed graph review pauses on the pinned graph and an explicit decision
     assert.equal(candidate.review.status, "needs-human");
     assert.equal(candidate.review.findings.length, 0);
     assert.match(candidate.review.failure.detail, /supplied source/);
-    assert.match(candidate.review.failure.question, /pinned Work Item graph/);
+    assert.match(candidate.review.failure.question, /pinned Factory plan/);
     assert.match(
       candidate.review.failure.question,
-      new RegExp(candidate.graphDigest),
+      new RegExp(candidate.packetDigest),
     );
     assert.equal(generationCount, 1);
     assert.equal(reviewCount, 1);
@@ -381,7 +499,6 @@ test("malformed graph review pauses on the pinned graph and an explicit decision
       body,
       target.baseSha,
       target.checkout,
-      model,
       {
         actor: "test operator",
         outcome: "accept",
@@ -392,7 +509,8 @@ test("malformed graph review pauses on the pinned graph and an explicit decision
     );
     assert.equal(decided.review.status, "human-accepted");
     assert.equal(decided.graphDigest, candidate.graphDigest);
-    assert.equal(decided.humanDecision.graphDigest, candidate.graphDigest);
+    assert.equal(decided.reviewDigest, candidate.reviewDigest);
+    assert.equal(decided.humanDecision.reviewDigest, candidate.reviewDigest);
     assert.equal(generationCount, 1);
     assert.equal(reviewCount, 1);
     verifyPlanCandidate(decided, 1, body, target.baseSha, target.checkout);
@@ -401,7 +519,24 @@ test("malformed graph review pauses on the pinned graph and an explicit decision
         verifyPlanCandidate(
           {
             ...decided,
-            humanDecision: { ...decided.humanDecision, graphDigest: "wrong" },
+            humanDecision: { ...decided.humanDecision, actor: "" },
+          },
+          1,
+          body,
+          target.baseSha,
+          target.checkout,
+        ),
+      /specific human source decision/,
+    );
+    assert.throws(
+      () =>
+        verifyPlanCandidate(
+          {
+            ...decided,
+            humanDecision: {
+              ...decided.humanDecision,
+              reviewDigest: "wrong",
+            },
           },
           1,
           body,

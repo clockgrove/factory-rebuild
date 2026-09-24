@@ -2,6 +2,24 @@
 
 This file records public releases of Factory. See [BUILD-STATUS.md](docs/BUILD-STATUS.md) for development acceptance evidence.
 
+## 0.1.10 — 2026-09-24
+
+- Ground final Objective acceptance in bounded, supervisor-generated per-Work-Item Git deltas tied to exact result and integration identities.
+- Exclude nested Work Item reviewer prose from final review while preserving canonical command receipts, selected-asset facts, and exact source quotations.
+- Fail closed on truncated or identity-inconsistent evidence and preserve every rejected final-review candidate with its field-level rejection reason.
+
+## 0.1.9 — 2026-09-24
+
+- Bind every ordered validation-command receipt to its exact result tree, stable index, and successful exit code for Work Item and final Objective review.
+- Name result and integrated commit/tree identities separately in reviewer observations, and explicitly teach the reviewer that Git commits and trees are different object types.
+- Move durable run state to schemaVersion 2 and reject missing, misordered, cross-tree, or command-substituted receipts before resumed state can be trusted.
+
+## 0.1.8 — 2026-09-23
+
+- Review the complete proposed plan, including command-authority receipts and exact final integrated-head commands, rather than only the inner Work Item graph.
+- Bind the canonical plan packet, independent review result, and installation configuration to schemaVersion 2 planning candidates and exact-digest human decisions.
+- Activate an unchanged accepted preview with deterministic verification and no second planning-review model call; reject stale, configuration-drifted, or review-tampered candidates before GitHub projection.
+
 ## 0.1.7 — 2026-09-23
 
 - Persist explicit, independently selectable Codex model and reasoning choices for planning, review, and Work Item execution instead of inheriting ambient user configuration.

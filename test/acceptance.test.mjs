@@ -18,6 +18,7 @@ import {
 import {
   AcceptanceDecisionRequired,
   assertPinnedNpmScripts,
+  objectiveReviewEvidence,
   PINNED_PNPM_BOOTSTRAP,
   reviewAcceptance,
   validateTree,
@@ -796,12 +797,22 @@ test("result review auto-accepts sourced evidence, otherwise asks one exact-tree
       treeSha,
       ["test -f result.txt"],
     );
+    assert.deepEqual(resultEvidence.commands, [
+      {
+        index: 0,
+        command: "test -f result.txt",
+        passed: true,
+        exitCode: 0,
+        treeSha,
+      },
+    ]);
     const packetGrounded = await reviewAcceptance({
       ...request,
       evidence: resultEvidence,
       criteria: ["result.txt exists", "The declared validation succeeds."],
       model: {
-        async reviewResult() {
+        async reviewResult(review) {
+          assert.deepEqual(review.commands, resultEvidence.commands);
           return {
             findings: [
               {
@@ -816,7 +827,7 @@ test("result review auto-accepts sourced evidence, otherwise asks one exact-tree
                 criterion: "The declared validation succeeds.",
                 verdict: "pass",
                 source: "Command pass evidence",
-                quote: '"command":"test -f result.txt","passed":true',
+                quote: `"index":0,"command":"test -f result.txt","passed":true,"exitCode":0,"treeSha":"${treeSha}"`,
                 detail: "The exact-tree command completed successfully.",
                 question: "",
               },
@@ -829,11 +840,37 @@ test("result review auto-accepts sourced evidence, otherwise asks one exact-tree
       packetGrounded.criteria.map((criterion) => criterion.verdict),
       ["pass", "pass"],
     );
+    let invalidReceiptReviewCalls = 0;
+    for (const invalidEvidence of [
+      {
+        ...structuredClone(resultEvidence),
+        commands: [{ ...resultEvidence.commands[0], treeSha: target.baseSha }],
+      },
+      {
+        ...structuredClone(resultEvidence),
+        commands: [{ ...resultEvidence.commands[0], index: 1 }],
+      },
+    ]) {
+      await assert.rejects(
+        reviewAcceptance({
+          ...request,
+          evidence: invalidEvidence,
+          model: {
+            async reviewResult() {
+              invalidReceiptReviewCalls++;
+              return { findings: [] };
+            },
+          },
+        }),
+        /not bound to the exact result tree and order/,
+      );
+    }
+    assert.equal(invalidReceiptReviewCalls, 0);
     const provenanceCriterion =
       "The dependency-free attempt started at the Objective base before either result integrated.";
     const missingProvenance = JSON.stringify({
-      objectiveBaseSha: target.baseSha,
-      currentIntegratedSha: null,
+      objectiveBaseCommitSha: target.baseSha,
+      currentIntegratedCommitSha: null,
       reviewedItemId: "result",
       attempts: [],
       selectedAsset: null,
@@ -886,8 +923,8 @@ test("result review auto-accepts sourced evidence, otherwise asks one exact-tree
     );
     const contradictoryBase = "0".repeat(40);
     const contradictoryProvenance = JSON.stringify({
-      objectiveBaseSha: target.baseSha,
-      currentIntegratedSha: null,
+      objectiveBaseCommitSha: target.baseSha,
+      currentIntegratedCommitSha: null,
       reviewedItemId: "result",
       attempts: [
         {
@@ -895,8 +932,8 @@ test("result review auto-accepts sourced evidence, otherwise asks one exact-tree
           declaredDependencies: [],
           attemptId: "11111111-1111-4111-8111-111111111111",
           startedAt: "2026-09-23T00:00:00.000Z",
-          executionBaseSha: contradictoryBase,
-          integratedSha: null,
+          executionBaseCommitSha: contradictoryBase,
+          integratedCommitSha: null,
         },
       ],
       selectedAsset: null,
@@ -929,7 +966,7 @@ test("result review auto-accepts sourced evidence, otherwise asks one exact-tree
                   criterion: provenanceCriterion,
                   verdict: "needs-human",
                   source: "Delivery observations",
-                  quote: `"executionBaseSha":"${contradictoryBase}"`,
+                  quote: `"executionBaseCommitSha":"${contradictoryBase}"`,
                   detail:
                     "The authoritative attempt base contradicts the Objective base.",
                   question:
@@ -989,9 +1026,112 @@ test("result review auto-accepts sourced evidence, otherwise asks one exact-tree
           "result.txt contains expected text",
         );
         assert.match(error.pending.detail, /invalid evidence/);
+        assert.deepEqual(error.pending.reviewRejection, {
+          field: "quote",
+          reason: "quote-not-found",
+        });
+        assert.deepEqual(error.pending.reviewFinding, {
+          criterion: "result.txt contains expected text",
+          verdict: "pass",
+          source: "OBJECTIVE",
+          quote: "a quote absent from the pinned source",
+          detail: "Unsupported claim",
+          question: "",
+        });
         return true;
       },
     );
+    for (const [name, finding, rejection] of [
+      [
+        "criterion mismatch",
+        {
+          criterion: "different criterion",
+          verdict: "pass",
+          source: "OBJECTIVE",
+          quote: "result.txt exists",
+          detail: "Detail",
+          question: "",
+        },
+        { field: "criterion", reason: "criterion-mismatch" },
+      ],
+      [
+        "invalid verdict",
+        {
+          criterion: "result.txt exists",
+          verdict: "maybe",
+          source: "OBJECTIVE",
+          quote: "result.txt exists",
+          detail: "Detail",
+          question: "",
+        },
+        { field: "verdict", reason: "invalid-verdict" },
+      ],
+      [
+        "empty detail",
+        {
+          criterion: "result.txt exists",
+          verdict: "pass",
+          source: "OBJECTIVE",
+          quote: "result.txt exists",
+          detail: "",
+          question: "",
+        },
+        { field: "detail", reason: "empty-detail" },
+      ],
+      [
+        "unknown source",
+        {
+          criterion: "result.txt exists",
+          verdict: "pass",
+          source: "invented",
+          quote: "result.txt exists",
+          detail: "Detail",
+          question: "",
+        },
+        { field: "source", reason: "unknown-source" },
+      ],
+      [
+        "empty quote",
+        {
+          criterion: "result.txt exists",
+          verdict: "pass",
+          source: "OBJECTIVE",
+          quote: "",
+          detail: "Detail",
+          question: "",
+        },
+        { field: "quote", reason: "empty-quote" },
+      ],
+      [
+        "quote not found",
+        {
+          criterion: "result.txt exists",
+          verdict: "pass",
+          source: "OBJECTIVE",
+          quote: "not in source",
+          detail: "Detail",
+          question: "",
+        },
+        { field: "quote", reason: "quote-not-found" },
+      ],
+    ]) {
+      await assert.rejects(
+        reviewAcceptance({
+          ...request,
+          model: {
+            async reviewResult() {
+              return { findings: [finding] };
+            },
+          },
+        }),
+        (error) => {
+          assert.ok(error instanceof AcceptanceDecisionRequired, name);
+          assert.deepEqual(error.pending.reviewRejection, rejection, name);
+          assert.equal(error.pending.reviewFinding.verdict, finding.verdict);
+          return true;
+        },
+      );
+    }
     const unsure = {
       async reviewResult() {
         return {
@@ -1047,6 +1187,449 @@ test("result review auto-accepts sourced evidence, otherwise asks one exact-tree
       }),
       /refused/,
     );
+  });
+});
+
+test("final review uses bounded authoritative per-Work-Item Git deltas without prior model prose", async () => {
+  await withTarget("objective-item-deltas", {}, async (root, target) => {
+    writeFileSync(join(target.checkout, "bootstrap.txt"), "bootstrap\n");
+    git(target.checkout, "add", "bootstrap.txt");
+    git(
+      target.checkout,
+      "-c",
+      "user.name=Factory Test",
+      "-c",
+      "user.email=factory-test@example.com",
+      "commit",
+      "-m",
+      "Factory: Bootstrap",
+    );
+    const bootstrapCommit = git(target.checkout, "rev-parse", "HEAD");
+    const bootstrapTree = git(target.checkout, "rev-parse", "HEAD^{tree}");
+    const bootstrapIntegrated = git(
+      target.checkout,
+      "-c",
+      "user.name=Factory Test",
+      "-c",
+      "user.email=factory-test@example.com",
+      "commit-tree",
+      bootstrapTree,
+      "-p",
+      target.baseSha,
+      "-p",
+      bootstrapCommit,
+      "-m",
+      "Merge bootstrap",
+    );
+    git(target.checkout, "checkout", "--detach", bootstrapIntegrated);
+    writeFileSync(join(target.checkout, "intervening.txt"), "intervening\n");
+    git(target.checkout, "add", "intervening.txt");
+    git(
+      target.checkout,
+      "-c",
+      "user.name=Factory Test",
+      "-c",
+      "user.email=factory-test@example.com",
+      "commit",
+      "-m",
+      "Factory: Intervening",
+    );
+    const interveningCommit = git(target.checkout, "rev-parse", "HEAD");
+    const interveningTree = git(target.checkout, "rev-parse", "HEAD^{tree}");
+    const interveningIntegrated = git(
+      target.checkout,
+      "-c",
+      "user.name=Factory Test",
+      "-c",
+      "user.email=factory-test@example.com",
+      "commit-tree",
+      interveningTree,
+      "-p",
+      bootstrapIntegrated,
+      "-p",
+      interveningCommit,
+      "-m",
+      "Merge intervening",
+    );
+    git(target.checkout, "checkout", "--detach", interveningIntegrated);
+    writeFileSync(
+      join(target.checkout, "proof-follow-up.txt"),
+      "greenfield pnpm follow-up\n",
+    );
+    git(target.checkout, "add", "proof-follow-up.txt");
+    git(
+      target.checkout,
+      "-c",
+      "user.name=Factory Test",
+      "-c",
+      "user.email=factory-test@example.com",
+      "commit",
+      "-m",
+      "Factory: replay independently prepared Work Item",
+    );
+    const followUpCommit = git(target.checkout, "rev-parse", "HEAD");
+    const finalTree = git(target.checkout, "rev-parse", "HEAD^{tree}");
+    const finalIntegrated = git(
+      target.checkout,
+      "-c",
+      "user.name=Factory Test",
+      "-c",
+      "user.email=factory-test@example.com",
+      "commit-tree",
+      finalTree,
+      "-p",
+      interveningIntegrated,
+      "-p",
+      followUpCommit,
+      "-m",
+      "Merge follow-up",
+    );
+    const bootstrap = structuredClone(item(target.baseSha, []).items[0]);
+    Object.assign(bootstrap, {
+      id: "bootstrap",
+      title: "Bootstrap",
+      ownedPaths: ["bootstrap.txt"],
+      acceptance: ["bootstrap.txt exists"],
+    });
+    const intervening = structuredClone(item(target.baseSha, []).items[0]);
+    Object.assign(intervening, {
+      id: "intervening",
+      title: "Intervening",
+      ownedPaths: ["intervening.txt"],
+      acceptance: ["intervening.txt exists"],
+    });
+    const followUp = structuredClone(item(target.baseSha, []).items[0]);
+    Object.assign(followUp, {
+      id: "follow-up",
+      title: "Follow up",
+      dependencies: ["bootstrap"],
+      ownedPaths: ["proof-follow-up.txt"],
+      acceptance: ["follow-up is exact and preserves bootstrap paths"],
+    });
+    const state = {
+      schemaVersion: 2,
+      repository: "example/objective-item-deltas",
+      objective: 1,
+      runId: "delta-review",
+      configDigest: "a".repeat(64),
+      baseSha: target.baseSha,
+      graph: {
+        objective: 1,
+        baseSha: target.baseSha,
+        items: [bootstrap, intervening, followUp],
+      },
+      issueByItemId: { bootstrap: 2, intervening: 3, "follow-up": 4 },
+      integratedSha: finalIntegrated,
+      work: {
+        bootstrap: {
+          status: "done",
+          executionBaseSha: target.baseSha,
+          integratedShaAtStart: null,
+          baseSha: target.baseSha,
+          changeRef: bootstrapCommit,
+          treeSha: bootstrapTree,
+          integratedSha: bootstrapIntegrated,
+          validation: {
+            treeSha: bootstrapTree,
+            commands: [],
+            criteria: [
+              {
+                criterion: "bootstrap.txt exists",
+                verdict: "pass",
+                source: "OBJECTIVE",
+                quote: "model-generated quote must not be final authority",
+                detail: "model-generated detail must not be final authority",
+              },
+            ],
+          },
+        },
+        intervening: {
+          status: "done",
+          executionBaseSha: bootstrapIntegrated,
+          integratedShaAtStart: bootstrapIntegrated,
+          baseSha: bootstrapIntegrated,
+          changeRef: interveningCommit,
+          treeSha: interveningTree,
+          integratedSha: interveningIntegrated,
+          validation: {
+            treeSha: interveningTree,
+            commands: [],
+          },
+        },
+        "follow-up": {
+          status: "done",
+          executionBaseSha: bootstrapIntegrated,
+          integratedShaAtStart: bootstrapIntegrated,
+          baseSha: interveningIntegrated,
+          changeRef: followUpCommit,
+          treeSha: finalTree,
+          integratedSha: finalIntegrated,
+          validation: {
+            treeSha: finalTree,
+            commands: [],
+            criteria: [
+              {
+                criterion: "follow-up is exact and preserves bootstrap paths",
+                verdict: "pass",
+                source: "Delivery observations",
+                quote: "another model-generated quote",
+                detail: "another model-generated detail",
+              },
+            ],
+          },
+        },
+      },
+    };
+    const objectiveEvidence = objectiveReviewEvidence({
+      state,
+      checkout: target.checkout,
+      integratedCommitSha: finalIntegrated,
+      integratedTreeSha: finalTree,
+    });
+    const observations = JSON.parse(objectiveEvidence.observations);
+    assert.equal(observations.work.length, 3);
+    assert.equal(
+      observations.work[2].resultBaseCommitSha,
+      interveningIntegrated,
+    );
+    assert.deepEqual(observations.work[2].validationCommands, []);
+    assert.equal(observations.work[2].validation, undefined);
+    assert.doesNotMatch(objectiveEvidence.observations, /model-generated/);
+    const followUpEvidence = objectiveEvidence.evidence.find(
+      (source) => source.path === "Work Item Git delta: follow-up",
+    );
+    assert.equal(followUpEvidence.complete, true);
+    assert.match(followUpEvidence.content, /greenfield pnpm follow-up/);
+    assert.match(
+      followUpEvidence.content,
+      /"workItemId":"bootstrap","ownedPaths":\["bootstrap.txt"\]/,
+    );
+    assert.doesNotMatch(followUpEvidence.content, /model-generated/);
+    const criterion =
+      "proof-follow-up.txt contains exactly greenfield pnpm follow-up and follow-up changes no bootstrap-owned path";
+    const accepted = await reviewAcceptance({
+      model: {
+        async reviewResult(request) {
+          assert.deepEqual(request.evidence, objectiveEvidence.evidence);
+          return {
+            findings: [
+              {
+                criterion,
+                verdict: "pass",
+                source: followUpEvidence.path,
+                quote: "greenfield pnpm follow-up",
+                detail:
+                  "The supervisor delta has the exact added line, only proof-follow-up.txt changes, and bootstrap.txt is bootstrap-owned.",
+                question: "",
+              },
+            ],
+          };
+        },
+      },
+      checkout: target.checkout,
+      baseSha: target.baseSha,
+      commit: finalIntegrated,
+      evidence: await validateTree(
+        target.checkout,
+        join(root, "final-validation"),
+        finalIntegrated,
+        finalTree,
+        [],
+      ),
+      criteria: [criterion],
+      sources: [{ path: "OBJECTIVE", content: criterion }],
+      evidenceSources: objectiveEvidence.evidence,
+      observations: objectiveEvidence.observations,
+    });
+    assert.equal(accepted.criteria[0].verdict, "pass");
+
+    for (const [name, mutate, expected] of [
+      [
+        "result tree",
+        (candidate) => {
+          candidate.work.bootstrap.treeSha = "0".repeat(40);
+        },
+        /result commit\/tree mismatch/,
+      ],
+      [
+        "result base ancestry",
+        (candidate) => {
+          candidate.work.bootstrap.baseSha = finalIntegrated;
+          candidate.work.bootstrap.executionBaseSha = finalIntegrated;
+        },
+        /result base is not an ancestor relationship/,
+      ],
+      [
+        "earlier valid result base",
+        (candidate) => {
+          candidate.work["follow-up"].baseSha = bootstrapIntegrated;
+        },
+        /result commit is not rooted at its recorded result base/,
+      ],
+      [
+        "result integration ancestry",
+        (candidate) => {
+          candidate.work.bootstrap.integratedSha = target.baseSha;
+        },
+        /result integration is not an ancestor relationship/,
+      ],
+      [
+        "later descendant integration",
+        (candidate) => {
+          candidate.work.bootstrap.integratedSha = finalIntegrated;
+        },
+        /Native integration group .* is not rooted at its first result base/,
+      ],
+      [
+        "wrong changed path set",
+        (candidate) => {
+          candidate.graph.items[2].ownedPaths = ["not-proof.txt"];
+        },
+        /final delta contains paths outside accepted ownership: proof-follow-up.txt/,
+      ],
+      [
+        "foreign ancestor",
+        (candidate) => {
+          candidate.graph.items[2].dependencies = [];
+          candidate.work["follow-up"].integratedShaAtStart = null;
+        },
+        /execution base is not bound to its recorded start snapshot or a declared dependency result/,
+      ],
+      [
+        "replay start snapshot",
+        (candidate) => {
+          candidate.work["follow-up"].executionBaseSha = bootstrapCommit;
+          candidate.work["follow-up"].integratedShaAtStart =
+            interveningIntegrated;
+        },
+        /replay base is not bound to its recorded start snapshot/,
+      ],
+    ]) {
+      const tampered = structuredClone(state);
+      mutate(tampered);
+      assert.throws(
+        () =>
+          objectiveReviewEvidence({
+            state: tampered,
+            checkout: target.checkout,
+            integratedCommitSha: finalIntegrated,
+            integratedTreeSha: finalTree,
+          }),
+        expected,
+        name,
+      );
+    }
+  });
+});
+
+test("truncated per-Work-Item evidence cannot ground an automatic pass", async () => {
+  await withTarget("objective-item-delta-budget", {}, async (root, target) => {
+    writeFileSync(join(target.checkout, "result.txt"), "content\n".repeat(100));
+    git(target.checkout, "add", "result.txt");
+    git(
+      target.checkout,
+      "-c",
+      "user.name=Factory Test",
+      "-c",
+      "user.email=factory-test@example.com",
+      "commit",
+      "-m",
+      "Factory: One",
+    );
+    const commit = git(target.checkout, "rev-parse", "HEAD");
+    const treeSha = git(target.checkout, "rev-parse", "HEAD^{tree}");
+    const integrated = git(
+      target.checkout,
+      "-c",
+      "user.name=Factory Test",
+      "-c",
+      "user.email=factory-test@example.com",
+      "commit-tree",
+      treeSha,
+      "-p",
+      target.baseSha,
+      "-p",
+      commit,
+      "-m",
+      "Merge result",
+    );
+    const graph = item(target.baseSha, []);
+    graph.items[0].ownedPaths = ["result.txt"];
+    const state = {
+      schemaVersion: 2,
+      repository: "example/objective-item-delta-budget",
+      objective: 1,
+      runId: "delta-budget",
+      configDigest: "a".repeat(64),
+      baseSha: target.baseSha,
+      graph,
+      issueByItemId: { one: 2 },
+      integratedSha: integrated,
+      work: {
+        one: {
+          status: "done",
+          executionBaseSha: target.baseSha,
+          integratedShaAtStart: null,
+          baseSha: target.baseSha,
+          changeRef: commit,
+          treeSha,
+          integratedSha: integrated,
+          validation: { treeSha, commands: [] },
+        },
+      },
+    };
+    const previous = process.env.FACTORY_RESULT_REVIEW_TEXT_BUDGET_BYTES;
+    process.env.FACTORY_RESULT_REVIEW_TEXT_BUDGET_BYTES = "32";
+    try {
+      const objectiveEvidence = objectiveReviewEvidence({
+        state,
+        checkout: target.checkout,
+        integratedCommitSha: integrated,
+        integratedTreeSha: treeSha,
+      });
+      assert.equal(objectiveEvidence.evidence[0].complete, false);
+      assert.match(objectiveEvidence.evidence[0].content, /"textBudget":32/);
+      assert.match(objectiveEvidence.evidence[0].content, /"truncated":true/);
+      await assert.rejects(
+        reviewAcceptance({
+          checkout: target.checkout,
+          baseSha: target.baseSha,
+          commit: integrated,
+          evidence: { treeSha, commands: [] },
+          criteria: ["result is complete"],
+          sources: [{ path: "OBJECTIVE", content: "result is complete" }],
+          evidenceSources: objectiveEvidence.evidence,
+          model: {
+            async reviewResult() {
+              return {
+                findings: [
+                  {
+                    criterion: "result is complete",
+                    verdict: "pass",
+                    source: objectiveEvidence.evidence[0].path,
+                    quote: "result.txt",
+                    detail: "The partial packet appears sufficient.",
+                    question: "",
+                  },
+                ],
+              };
+            },
+          },
+        }),
+        (error) => {
+          assert.ok(error instanceof AcceptanceDecisionRequired);
+          assert.deepEqual(error.pending.reviewRejection, {
+            field: "source",
+            reason: "source-truncated",
+          });
+          return true;
+        },
+      );
+    } finally {
+      if (previous === undefined)
+        delete process.env.FACTORY_RESULT_REVIEW_TEXT_BUDGET_BYTES;
+      else process.env.FACTORY_RESULT_REVIEW_TEXT_BUDGET_BYTES = previous;
+    }
   });
 });
 
@@ -1245,7 +1828,7 @@ test("operator decision records criterion and exact tree before resuming validat
       const treeSha = git(target.checkout, "rev-parse", "HEAD^{tree}");
       const config = factoryConfig(target.checkout, "example/acceptance");
       const state = {
-        schemaVersion: 1,
+        schemaVersion: 2,
         repository: config.repository,
         objective: 1,
         runId: "acceptance-test",
@@ -1268,6 +1851,18 @@ test("operator decision records criterion and exact tree before resuming validat
               quote: "result.txt exists",
               question: "Does the result satisfy this criterion?",
               detail: "Review needs owner evidence",
+              reviewFinding: {
+                criterion: "result.txt exists",
+                verdict: "pass",
+                source: "OBJECTIVE",
+                quote: "missing quote",
+                detail: "Unsupported",
+                question: "",
+              },
+              reviewRejection: {
+                field: "quote",
+                reason: "quote-not-found",
+              },
             },
           },
         },
@@ -1284,7 +1879,16 @@ test("operator decision records criterion and exact tree before resuming validat
           }),
         /tree differs/,
       );
-      assert.equal(readState(config.repository, 1).work.one.status, "waiting");
+      const stillWaiting = readState(config.repository, 1).work.one;
+      assert.equal(stillWaiting.status, "waiting");
+      assert.deepEqual(stillWaiting.acceptancePending.reviewRejection, {
+        field: "quote",
+        reason: "quote-not-found",
+      });
+      assert.equal(
+        stillWaiting.acceptancePending.reviewFinding.quote,
+        "missing quote",
+      );
       decideResult(config, 1, {
         item: "one",
         treeSha,

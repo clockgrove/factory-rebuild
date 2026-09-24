@@ -35,6 +35,7 @@ import { git, linuxProcessIdentity, pinnedGit } from "./process.js";
 import {
   AcceptanceDecisionRequired,
   assertPinnedNpmScripts,
+  objectiveReviewEvidence,
   reviewAcceptance,
   validateTree,
 } from "./validation.js";
@@ -56,6 +57,10 @@ export interface ApplicationServices {
   contentStore: ContentStore;
 }
 
+function configDigest(config: FactoryConfig): string {
+  return createHash("sha256").update(JSON.stringify(config)).digest("hex");
+}
+
 /** Read-only preflight: no controller lock, issue projection, or run state. */
 export async function planObjective(
   config: FactoryConfig,
@@ -75,6 +80,7 @@ export async function planObjective(
       baseSha,
       config.checkout,
       services.planningModel,
+      configDigest(config),
     );
     diagnostics.emit({
       operation: "planning-preview",
@@ -101,7 +107,7 @@ export async function planObjective(
 export async function decidePlan(
   config: FactoryConfig,
   objective: number,
-  services: Pick<ApplicationServices, "planningModel" | "github">,
+  services: Pick<ApplicationServices, "github">,
   candidate: PlanCandidate,
   input: {
     actor: string;
@@ -123,8 +129,8 @@ export async function decidePlan(
       issue.body,
       baseSha,
       config.checkout,
-      services.planningModel,
       input,
+      configDigest(config),
     );
     diagnostics.emit({
       operation: "planning-decision",
@@ -197,15 +203,13 @@ export async function runObjective(
   try {
     diagnostics.emit({ operation: "objective-run", outcome: "started" });
     const issue = await github.objective(objective);
-    const configDigest = createHash("sha256")
-      .update(JSON.stringify(config))
-      .digest("hex");
+    const installationConfigDigest = configDigest(config);
     let state = readState(config.repository, objective);
     if (state) {
       if (
-        state.schemaVersion !== 1 ||
+        state.schemaVersion !== 2 ||
         state.repository !== config.repository ||
-        state.configDigest !== configDigest
+        state.configDigest !== installationConfigDigest
       ) {
         throw new Error(
           "Existing Objective state does not match this Factory installation",
@@ -218,6 +222,7 @@ export async function runObjective(
           issue.body,
           state.baseSha,
           config.checkout,
+          installationConfigDigest,
         );
         if (JSON.stringify(acceptedPlan.graph) !== JSON.stringify(state.graph))
           throw new Error(
@@ -284,6 +289,7 @@ export async function runObjective(
               baseSha,
               config.checkout,
               planningModel,
+              installationConfigDigest,
             ));
           verifyPlanCandidate(
             candidate,
@@ -291,19 +297,8 @@ export async function runObjective(
             issue.body,
             baseSha,
             config.checkout,
+            installationConfigDigest,
           );
-          if (acceptedPlan && candidate.review.status === "clean") {
-            const freshReview = await planningModel.reviewGraph({
-              objective: issue.body,
-              baseSha,
-              sources: candidate.sources,
-              graph: candidate.graph,
-            });
-            if (freshReview.findings.length)
-              throw new Error(
-                `Accepted plan no longer passes independent review: ${freshReview.findings[0]!.question}`,
-              );
-          }
           return candidate;
         },
         (candidate) => ({ itemCount: candidate.graph.items.length }),
@@ -317,11 +312,11 @@ export async function runObjective(
         () => github.projectGraph({ graph, objectiveIssue: objective }),
       );
       state = {
-        schemaVersion: 1,
+        schemaVersion: 2,
         repository: config.repository,
         objective,
         runId: randomUUID(),
-        configDigest,
+        configDigest: installationConfigDigest,
         baseSha,
         graph,
         objectiveCommands: finalObjectiveCommands(issue.body),
@@ -444,6 +439,12 @@ export async function runObjective(
     );
     let finalEvidence;
     try {
+      const objectiveEvidence = objectiveReviewEvidence({
+        state,
+        checkout: config.checkout,
+        integratedCommitSha: integratedSha,
+        integratedTreeSha: finalTree,
+      });
       const reviewFinal = () =>
         reviewAcceptance({
           model: planningModel,
@@ -453,26 +454,9 @@ export async function runObjective(
           evidence: commandEvidence,
           criteria: objectiveCriteria(issue.body),
           sources: planningSources(issue.body, state.baseSha, config.checkout),
+          evidenceSources: objectiveEvidence.evidence,
           decisions: state.finalAcceptanceDecisions,
-          observations: JSON.stringify({
-            integratedSha,
-            work: graph.items.map((item) => {
-              const work = state.work[item.id]!;
-              return {
-                id: item.id,
-                status: work.status,
-                treeSha: work.treeSha,
-                validation: work.validation,
-                pullRequest: work.pullRequest,
-                integratedSha: work.integratedSha,
-                selectedAssetSet: work.selectedAssetSet,
-                selectedAsset: work.assets?.find(
-                  (set) => set.id === work.selectedAssetSet,
-                ),
-                selection: work.selection,
-              };
-            }),
-          }),
+          observations: objectiveEvidence.observations,
         });
       finalEvidence = await diagnostics.span(
         {
@@ -496,7 +480,12 @@ export async function runObjective(
           outcome: "waiting",
           durationMs: Date.now() - finalValidationStarted,
           metadata: { treeSha: finalTree },
-          detail: error.pending.question,
+          detail: JSON.stringify({
+            question: error.pending.question,
+            detail: error.pending.detail,
+            reviewFinding: error.pending.reviewFinding ?? null,
+            reviewRejection: error.pending.reviewRejection ?? null,
+          }),
         });
         return state;
       }
