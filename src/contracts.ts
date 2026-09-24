@@ -44,14 +44,28 @@ export interface PlanningRequest<T> {
   schema: unknown;
   resultType?: T;
 }
+
+export interface PlanCommandAuthorization {
+  itemId: string;
+  command: string;
+  provenance: "base-observed" | "source-declared";
+  source?: string;
+  hostExecution: "authorized" | "blocked";
+  reason: string;
+}
+
+export interface PlanReviewRequest {
+  objective: string;
+  baseSha: string;
+  sources: { path: string; content: string; heading?: string }[];
+  graph: WorkGraph;
+  commands: PlanCommandAuthorization[];
+  finalCommands: string[];
+}
+
 export interface PlanningModel {
   generateStructured<T>(request: PlanningRequest<T>): Promise<T>;
-  reviewGraph(request: {
-    objective: string;
-    baseSha: string;
-    sources: { path: string; content: string }[];
-    graph: WorkGraph;
-  }): Promise<{
+  reviewGraph(request: PlanReviewRequest): Promise<{
     findings: {
       source: string;
       quote: string;

@@ -687,6 +687,8 @@ test("Codex adapter passes phase selections to every planning and review thread"
       baseSha,
       sources: [],
       graph: { objective: 1, baseSha, items: [] },
+      commands: [],
+      finalCommands: [],
     });
     await model.reviewResult({
       criteria: ["Criterion"],
