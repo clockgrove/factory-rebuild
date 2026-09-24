@@ -81,9 +81,13 @@ The `v0.1.0` one-immutable-package combined disposable gate passed; [BUILD-STATU
 
 ## Named branches after trunk
 
-- [Managed cloud agent, issue #7](https://github.com/clockgrove/factory-rebuild/issues/7): add a `ManagedAgentExecutionDriver` for the selected GitHub Agent SDK path. Persist provider task identity, observe/cancel/collect, and feed unchanged validation and delivery. Prove the same disposable Objective with this driver.
-- [Sandbox driver, issue #8](https://github.com/clockgrove/factory-rebuild/issues/8): compose `SandboxExecutionDriver` from `SandboxProvider` and the installed harness seam already delivered by trunk issue #55. Prove transfer, execution, observation, cancellation, collection, and destruction with a provider-neutral fixture; do not redefine BYO harness installation or configuration in this branch.
-- [Daytona, issue #9](https://github.com/clockgrove/factory-rebuild/issues/9): add the first concrete `SandboxProvider` and run the Branch 2 scenario unchanged. Keep Daytona details within its adapter.
+![Planning, harness, and execution-driver layering](architecture/execution-drivers.png)
+
+`PlanningModel` compiles and reviews the Work Item graph. `AgentHarness` performs one Work Item under a Factory-operated local or sandbox driver. The three peer `ExecutionDriver` implementations differ in placement and lifecycle ownership: trunk's `LocalExecutionDriver` operates a local worktree; Branch 1's `ManagedExecutionDriver` submits and tracks a provider-owned agent task; Branch 2's `SandboxExecutionDriver` operates a `SandboxProvider` and invokes the configured harness inside it. An SDK name alone does not determine whether an agent is local or managed.
+
+- [ManagedExecutionDriver, issue #7](https://github.com/clockgrove/factory-rebuild/issues/7): evaluate GitHub Copilot SDK [cloud sessions](https://docs.github.com/en/copilot/how-tos/copilot-sdk/features/cloud-sessions) as the initial GitHub-hosted candidate, then implement only if its durable task, authorization, cancellation, exact-change, and result semantics fit the `ExecutionDriver` contract. Copilot SDK local CLI/runtime mode is not a managed task. Persist provider identity, observe/cancel/collect, and feed unchanged validation and delivery. Prove the same disposable Objective with this driver.
+- [SandboxExecutionDriver, issue #8](https://github.com/clockgrove/factory-rebuild/issues/8): compose `SandboxProvider` with the installed harness seam already delivered by trunk issue #55. Prove transfer, execution, observation, cancellation, collection, and destruction with a provider-neutral fixture; do not redefine BYO harness installation or configuration in this branch.
+- [Daytona SandboxProvider, issue #9](https://github.com/clockgrove/factory-rebuild/issues/9): add the first concrete provider behind `SandboxExecutionDriver` and run the Branch 2 scenario unchanged. Keep Daytona details within its adapter.
 
 ## Test reset and representative gates
 
