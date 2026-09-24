@@ -94,6 +94,8 @@ export async function runNativeGraph(args: {
         work.status = "running";
         work.step = "execute";
         work.baseSha = state.integratedSha ?? state.baseSha;
+        work.executionBaseSha = work.baseSha;
+        work.integratedShaAtStart = state.integratedSha ?? null;
         work.attempt = randomUUID();
         work.startedAt = new Date().toISOString();
         save();
@@ -178,6 +180,8 @@ export async function runNativeGraph(args: {
         work.status = "running";
         work.step = "execute";
         work.baseSha = itemBase;
+        work.executionBaseSha = itemBase;
+        work.integratedShaAtStart = state.integratedSha ?? null;
         work.attempt = randomUUID();
         work.startedAt = new Date().toISOString();
         save();

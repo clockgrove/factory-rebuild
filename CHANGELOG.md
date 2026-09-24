@@ -2,6 +2,12 @@
 
 This file records public releases of Factory. See [BUILD-STATUS.md](docs/BUILD-STATUS.md) for development acceptance evidence.
 
+## 0.1.5 — 2026-09-23
+
+- Persist the immutable worker execution base and integration head observed at attempt start; native replay advances only the mutable validation and delivery base.
+- Label legacy missing start provenance explicitly in Work Item review observations instead of inferring it from later delivery state.
+- Add a focused replay-versus-attempt unit regression and a staggered native temporary-Git scenario in which one concurrent root integrates before its peer is reviewed.
+
 ## 0.1.4 — 2026-09-23
 
 - Supply Work Item result review with a bounded scheduling-provenance packet derived from the authoritative atomic snapshot and accepted graph.

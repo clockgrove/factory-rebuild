@@ -24,6 +24,11 @@ export interface WorkState {
   attempt?: string;
   waitingReason?: string;
   execution?: ExecutionHandle;
+  /** Immutable base supplied to the worker for this attempt. */
+  executionBaseSha?: string;
+  /** Integrated default-branch head observed when this attempt started. */
+  integratedShaAtStart?: string | null;
+  /** Mutable validation/delivery base; native replay may advance it. */
   baseSha?: string;
   changeRef?: string;
   treeSha?: string;
@@ -265,8 +270,13 @@ export function parseFactoryState(
       throw new Error(`Work Item ${id} has an invalid status`);
     if (item.step !== undefined && !steps.has(item.step as WorkStep))
       throw new Error(`Work Item ${id} has an invalid step`);
-    for (const key of ["baseSha", "treeSha", "changeRef"])
+    for (const key of ["baseSha", "executionBaseSha", "treeSha", "changeRef"])
       if (item[key] !== undefined) sha(item[key], `${id}.${key}`);
+    if (
+      item.integratedShaAtStart !== undefined &&
+      item.integratedShaAtStart !== null
+    )
+      sha(item.integratedShaAtStart, `${id}.integratedShaAtStart`);
     if (item.integratedSha !== undefined)
       sha(item.integratedSha, `${id}.integratedSha`);
     if (
