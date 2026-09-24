@@ -2,6 +2,12 @@
 
 This file records public releases of Factory. See [BUILD-STATUS.md](docs/BUILD-STATUS.md) for development acceptance evidence.
 
+## Unreleased
+
+- Bind every ordered validation-command receipt to its exact result tree, stable index, and successful exit code for Work Item and final Objective review.
+- Name result and integrated commit/tree identities separately in reviewer observations, and explicitly teach the reviewer that Git commits and trees are different object types.
+- Move durable run state to schemaVersion 2 and reject missing, misordered, cross-tree, or command-substituted receipts before resumed state can be trusted.
+
 ## 0.1.8 — 2026-09-23
 
 - Review the complete proposed plan, including command-authority receipts and exact final integrated-head commands, rather than only the inner Work Item graph.

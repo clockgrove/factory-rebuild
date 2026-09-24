@@ -796,12 +796,22 @@ test("result review auto-accepts sourced evidence, otherwise asks one exact-tree
       treeSha,
       ["test -f result.txt"],
     );
+    assert.deepEqual(resultEvidence.commands, [
+      {
+        index: 0,
+        command: "test -f result.txt",
+        passed: true,
+        exitCode: 0,
+        treeSha,
+      },
+    ]);
     const packetGrounded = await reviewAcceptance({
       ...request,
       evidence: resultEvidence,
       criteria: ["result.txt exists", "The declared validation succeeds."],
       model: {
-        async reviewResult() {
+        async reviewResult(review) {
+          assert.deepEqual(review.commands, resultEvidence.commands);
           return {
             findings: [
               {
@@ -816,7 +826,7 @@ test("result review auto-accepts sourced evidence, otherwise asks one exact-tree
                 criterion: "The declared validation succeeds.",
                 verdict: "pass",
                 source: "Command pass evidence",
-                quote: '"command":"test -f result.txt","passed":true',
+                quote: `"index":0,"command":"test -f result.txt","passed":true,"exitCode":0,"treeSha":"${treeSha}"`,
                 detail: "The exact-tree command completed successfully.",
                 question: "",
               },
@@ -829,11 +839,37 @@ test("result review auto-accepts sourced evidence, otherwise asks one exact-tree
       packetGrounded.criteria.map((criterion) => criterion.verdict),
       ["pass", "pass"],
     );
+    let invalidReceiptReviewCalls = 0;
+    for (const invalidEvidence of [
+      {
+        ...structuredClone(resultEvidence),
+        commands: [{ ...resultEvidence.commands[0], treeSha: target.baseSha }],
+      },
+      {
+        ...structuredClone(resultEvidence),
+        commands: [{ ...resultEvidence.commands[0], index: 1 }],
+      },
+    ]) {
+      await assert.rejects(
+        reviewAcceptance({
+          ...request,
+          evidence: invalidEvidence,
+          model: {
+            async reviewResult() {
+              invalidReceiptReviewCalls++;
+              return { findings: [] };
+            },
+          },
+        }),
+        /not bound to the exact result tree and order/,
+      );
+    }
+    assert.equal(invalidReceiptReviewCalls, 0);
     const provenanceCriterion =
       "The dependency-free attempt started at the Objective base before either result integrated.";
     const missingProvenance = JSON.stringify({
-      objectiveBaseSha: target.baseSha,
-      currentIntegratedSha: null,
+      objectiveBaseCommitSha: target.baseSha,
+      currentIntegratedCommitSha: null,
       reviewedItemId: "result",
       attempts: [],
       selectedAsset: null,
@@ -886,8 +922,8 @@ test("result review auto-accepts sourced evidence, otherwise asks one exact-tree
     );
     const contradictoryBase = "0".repeat(40);
     const contradictoryProvenance = JSON.stringify({
-      objectiveBaseSha: target.baseSha,
-      currentIntegratedSha: null,
+      objectiveBaseCommitSha: target.baseSha,
+      currentIntegratedCommitSha: null,
       reviewedItemId: "result",
       attempts: [
         {
@@ -895,8 +931,8 @@ test("result review auto-accepts sourced evidence, otherwise asks one exact-tree
           declaredDependencies: [],
           attemptId: "11111111-1111-4111-8111-111111111111",
           startedAt: "2026-09-23T00:00:00.000Z",
-          executionBaseSha: contradictoryBase,
-          integratedSha: null,
+          executionBaseCommitSha: contradictoryBase,
+          integratedCommitSha: null,
         },
       ],
       selectedAsset: null,
@@ -929,7 +965,7 @@ test("result review auto-accepts sourced evidence, otherwise asks one exact-tree
                   criterion: provenanceCriterion,
                   verdict: "needs-human",
                   source: "Delivery observations",
-                  quote: `"executionBaseSha":"${contradictoryBase}"`,
+                  quote: `"executionBaseCommitSha":"${contradictoryBase}"`,
                   detail:
                     "The authoritative attempt base contradicts the Objective base.",
                   question:
@@ -1245,7 +1281,7 @@ test("operator decision records criterion and exact tree before resuming validat
       const treeSha = git(target.checkout, "rev-parse", "HEAD^{tree}");
       const config = factoryConfig(target.checkout, "example/acceptance");
       const state = {
-        schemaVersion: 1,
+        schemaVersion: 2,
         repository: config.repository,
         objective: 1,
         runId: "acceptance-test",
