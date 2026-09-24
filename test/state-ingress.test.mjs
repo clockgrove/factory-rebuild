@@ -124,12 +124,15 @@ test("legacy attempts expose missing immutable start provenance explicitly", () 
   };
   const parsed = parseFactoryState(legacy, repository, objective);
   const observations = JSON.parse(
-    workItemReviewObservations(parsed, parsed.graph.items[0]),
+    workItemReviewObservations(parsed, parsed.graph.items[0], {
+      kind: "regular",
+    }),
   );
   assert.equal(observations.attempts[0].executionBaseSha, null);
   assert.deepEqual(observations.attempts[0].integrationAtStart, {
     recorded: false,
   });
+  assert.equal(observations.attempts[0].resultHeadSha, null);
 });
 
 test("review observations do not confuse a replay base with attempt provenance", () => {
@@ -155,6 +158,7 @@ test("review observations do not confuse a replay base with attempt provenance",
     executionBaseSha: sha,
     integratedShaAtStart: null,
     baseSha: replayBase,
+    changeRef: "d".repeat(40),
   };
   replayed.work.peer = {
     status: "done",
@@ -163,11 +167,14 @@ test("review observations do not confuse a replay base with attempt provenance",
     executionBaseSha: sha,
     integratedShaAtStart: null,
     baseSha: sha,
+    changeRef: "e".repeat(40),
     integratedSha: replayBase,
   };
   const parsed = parseFactoryState(replayed, repository, objective);
   const observations = JSON.parse(
-    workItemReviewObservations(parsed, parsed.graph.items[0]),
+    workItemReviewObservations(parsed, parsed.graph.items[0], {
+      kind: "regular",
+    }),
   );
   const attempts = Object.fromEntries(
     observations.attempts.map((attempt) => [attempt.id, attempt]),
@@ -179,12 +186,81 @@ test("review observations do not confuse a replay base with attempt provenance",
     integratedSha: null,
   });
   assert.equal(attempts.asset.integratedSha, null);
+  assert.equal(attempts.asset.resultHeadSha, "d".repeat(40));
   assert.equal(attempts.peer.executionBaseSha, sha);
   assert.deepEqual(attempts.peer.integrationAtStart, {
     recorded: true,
     integratedSha: null,
   });
   assert.equal(attempts.peer.integratedSha, replayBase);
+  assert.equal(attempts.peer.resultHeadSha, "e".repeat(40));
+  assert.ok(!("baseSha" in attempts.asset));
+});
+
+test("review observations expose the exact dependency result head", () => {
+  const predecessor = state();
+  const predecessorHead = "f".repeat(40);
+  predecessor.graph.items[0].dependencies = ["foundation"];
+  predecessor.graph.items[0].acceptance = [
+    "asset uses foundation as its exact predecessor base",
+  ];
+  predecessor.graph.items.unshift({
+    ...structuredClone(predecessor.graph.items[0]),
+    id: "foundation",
+    title: "Create foundation",
+    acceptance: ["Foundation exists"],
+    dependencies: [],
+    ownedPaths: ["approved/foundation.txt"],
+  });
+  predecessor.graph.items.push({
+    ...structuredClone(predecessor.graph.items[0]),
+    id: "unrelated",
+    title: "Create unrelated",
+    acceptance: ["Unrelated exists"],
+    dependencies: [],
+    ownedPaths: ["approved/unrelated.txt"],
+  });
+  predecessor.issueByItemId = { foundation: 43, asset: 44, unrelated: 45 };
+  predecessor.work = {
+    foundation: {
+      status: "published",
+      attempt: "11111111-1111-4111-8111-111111111111",
+      startedAt: "2026-09-24T00:00:00.000Z",
+      executionBaseSha: sha,
+      integratedShaAtStart: null,
+      baseSha: sha,
+      changeRef: predecessorHead,
+      pullRequest: 46,
+    },
+    asset: {
+      status: "running",
+      step: "validate",
+      attempt: "22222222-2222-4222-8222-222222222222",
+      startedAt: "2026-09-24T00:00:01.000Z",
+      executionBaseSha: predecessorHead,
+      integratedShaAtStart: null,
+      baseSha: predecessorHead,
+      changeRef: "1".repeat(40),
+    },
+    unrelated: { status: "pending" },
+  };
+  const parsed = parseFactoryState(predecessor, repository, objective);
+  const reviewed = parsed.graph.items.find((item) => item.id === "asset");
+  const observations = JSON.parse(
+    workItemReviewObservations(parsed, reviewed, {
+      kind: "native-stack",
+      unitId: "foundation",
+      layerNumber: 2,
+      layerCount: 2,
+      predecessorItemId: "foundation",
+    }),
+  );
+  const attempts = Object.fromEntries(
+    observations.attempts.map((attempt) => [attempt.id, attempt]),
+  );
+  assert.deepEqual(Object.keys(attempts).sort(), ["asset", "foundation"]);
+  assert.equal(attempts.foundation.resultHeadSha, predecessorHead);
+  assert.equal(attempts.asset.executionBaseSha, predecessorHead);
   assert.ok(!("baseSha" in attempts.asset));
 });
 

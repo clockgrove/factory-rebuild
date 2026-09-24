@@ -2,6 +2,12 @@
 
 This file records public releases of Factory. See [BUILD-STATUS.md](docs/BUILD-STATUS.md) for development acceptance evidence.
 
+## 0.1.6 — 2026-09-23
+
+- Supply Work Item review with each relevant attempt's validated result head so a native successor can prove its exact predecessor base before the stack is integrated.
+- Add bounded runner-derived delivery context: regular delivery, or native unit identity, one-based layer number/count, and immediate predecessor item.
+- Add focused observation coverage and a three-layer temporary-Git regression that proves the second and third native layers without result decisions.
+
 ## 0.1.5 — 2026-09-23
 
 - Persist the immutable worker execution base and integration head observed at attempt start; native replay advances only the mutable validation and delivery base.

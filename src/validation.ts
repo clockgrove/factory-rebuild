@@ -53,6 +53,16 @@ export interface ValidationEvidence {
   criteria?: CriterionEvidence[];
 }
 
+export type ReviewDeliveryObservation =
+  | { kind: "regular" }
+  | {
+      kind: "native-stack";
+      unitId: string;
+      layerNumber: number;
+      layerCount: number;
+      predecessorItemId: string | null;
+    };
+
 /**
  * Give result review the minimum authoritative run facts needed to evaluate
  * source-declared scheduling and predecessor criteria. The atomic snapshot and
@@ -61,6 +71,7 @@ export interface ValidationEvidence {
 export function workItemReviewObservations(
   state: FactoryState,
   item: WorkItem,
+  delivery: ReviewDeliveryObservation,
   selectedAsset?: CapturedAssetSet,
 ): string {
   const criterionText = item.acceptance.join("\n");
@@ -81,6 +92,7 @@ export function workItemReviewObservations(
     objectiveBaseSha: state.baseSha,
     currentIntegratedSha: state.integratedSha ?? null,
     reviewedItemId: item.id,
+    delivery,
     attempts: relevant.map((candidate) => {
       const work = state.work[candidate.id]!;
       return {
@@ -96,6 +108,7 @@ export function workItemReviewObservations(
                 recorded: true,
                 integratedSha: work.integratedShaAtStart,
               },
+        resultHeadSha: work.changeRef ?? null,
         integratedSha: work.integratedSha ?? null,
       };
     }),
