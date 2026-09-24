@@ -84,3 +84,7 @@ The clean implementation extends `src/compiler.ts`, `src/validation.ts`, and the
 ## Explicit Codex phase selection follow-up
 
 After the v0.1.6 public gate exposed ambient Codex reasoning inheritance, the archived `src/protocol/policy.ts` at commit `994bbfcadb317aed2dfa932ec9d128e7d0d8c7a8` was inspected for its named model-profile behavior. The archive bound `compile`, `implement`, `review`, and `recover` phases to explicit model/reasoning profiles, but its shipped run policy constrained new runs to one shared profile and included broader provider/economics machinery. No archived implementation was copied. The clean correction keeps model policy inside the current Codex SDK adapters, exposes independent planner, reviewer, and worker selections, writes explicit Factory defaults, and retains the generic `AgentHarness` and execution contracts unchanged.
+
+## Role-specific Factory defaults (#59)
+
+Issue #59 and the current explicit-selection implementation supplied this change. No additional archived source or provider policy was inspected or copied. Factory now resolves planner, reviewer, and worker defaults separately at installation, persists the resulting explicit values, and keeps provider-neutral harness work in issue #55.

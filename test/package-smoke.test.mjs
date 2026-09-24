@@ -113,7 +113,7 @@ test("fresh packed artifact installs and exposes documented install/status/plan 
     });
     assert.deepEqual(installedConfig.execution.harness, {
       kind: "codex-sdk",
-      model: "gpt-5.6-sol",
+      model: "gpt-5.6-luna",
       reasoningEffort: "medium",
     });
     const status = execFileSync(
