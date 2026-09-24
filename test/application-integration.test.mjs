@@ -1050,6 +1050,17 @@ test("clean accepted plan activates without planning calls and rejects config dr
     assert.equal(reviewCount, 1);
 
     config.planning.reviewer.reasoningEffort = "medium";
+    config.execution.harness.model = "worker-choice";
+    await assert.rejects(
+      application.runObjective(objective, candidate),
+      /differs from the current Objective/,
+    );
+    assert.equal(Object.keys(github.state().issues).length, 0);
+    assert.equal(existsSync(statePath(config.repository, objective)), false);
+    assert.equal(generationCount, 1);
+    assert.equal(reviewCount, 1);
+
+    config.execution.harness.model = "gpt-5.6-sol";
     const completed = await application.runObjective(objective, candidate);
     assert.equal(completed.finalValidation.passed, true);
     assert.equal(generationCount, 1);

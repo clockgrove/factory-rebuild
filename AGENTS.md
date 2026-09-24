@@ -8,7 +8,7 @@ Read [the public implementation plan](docs/IMPLEMENTATION-PLAN.md), [current bui
 
 Ship the trunk through one path: Objective → Work Item DAG → local execution → exact validation → GitHub delivery → Objective final validation. Trunk includes native linear PR stacks, media assets, large content, Git LFS, restart/cancel/status, and packaging. Private adopter pilots follow the disposable release gate built from public fixtures and use the public plugin surface exactly as a third party would.
 
-After the trunk, add the managed cloud agent driver, then the sandbox driver and BYO harness, then Daytona. Bursting, mixed modes, live migration, adaptive pressure, distributed controllers, and compounded fault matrices are leaves.
+The installed local harness seam and its second-provider proof are trunk issue #55. After trunk and the public pilot, add `ManagedExecutionDriver`, then `SandboxExecutionDriver` using the already-landed harness seam, then Daytona as the first `SandboxProvider`. Bursting, mixed modes, live migration, adaptive pressure, distributed controllers, and compounded fault matrices are leaves.
 
 ## Scope
 

@@ -123,7 +123,7 @@ test("fresh packed artifact composes a registered harness through the package ro
     });
     assert.deepEqual(installedConfig.execution.harness, {
       kind: "codex-sdk",
-      model: "gpt-5.6-sol",
+      model: "gpt-5.6-luna",
       reasoningEffort: "medium",
     });
     const status = execFileSync(
