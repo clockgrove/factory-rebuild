@@ -105,6 +105,17 @@ test("fresh packed artifact installs and exposes documented install/status/plan 
       { encoding: "utf8", env: environment },
     );
     assert.match(installed, /Installed Factory for example\/package-smoke/);
+    const installedConfig = JSON.parse(readFileSync(config, "utf8"));
+    assert.deepEqual(installedConfig.planning, {
+      kind: "codex-sdk",
+      planner: { model: "gpt-5.6-sol", reasoningEffort: "medium" },
+      reviewer: { model: "gpt-5.6-sol", reasoningEffort: "medium" },
+    });
+    assert.deepEqual(installedConfig.execution.harness, {
+      kind: "codex-sdk",
+      model: "gpt-5.6-sol",
+      reasoningEffort: "medium",
+    });
     const status = execFileSync(
       cli,
       ["status", "--objective", "1", "--config", config],

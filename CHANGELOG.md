@@ -2,6 +2,12 @@
 
 This file records public releases of Factory. See [BUILD-STATUS.md](docs/BUILD-STATUS.md) for development acceptance evidence.
 
+## 0.1.7 — 2026-09-23
+
+- Persist explicit, independently selectable Codex model and reasoning choices for planning, review, and Work Item execution instead of inheriting ambient user configuration.
+- Supply result review with the accepted graph's owned paths and named resources for each relevant attempt, so disjoint scheduling criteria can be proved from bounded authoritative observations.
+- Add installed-package, adapter-routing, configuration-validation, and exact resource-observation regressions for the v0.1.6 public-gate failures.
+
 ## 0.1.6 — 2026-09-23
 
 - Supply Work Item review with each relevant attempt's validated result head so a native successor can prove its exact predecessor base before the stack is integrated.

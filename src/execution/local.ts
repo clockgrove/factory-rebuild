@@ -38,6 +38,7 @@ import {
   processGroupExists,
   sanitizedWorkerEnvironment,
 } from "../process.js";
+import type { CodexModelSelection } from "../config.js";
 
 type Active = {
   request: ExecutionRequest;
@@ -58,6 +59,7 @@ export class CodexHarness implements AgentHarness {
   constructor(
     private credentialDirectory: string,
     private network: "host" | "off",
+    private model: CodexModelSelection,
     private allowedSecretNames: string[] = [],
   ) {}
 
@@ -70,7 +72,7 @@ export class CodexHarness implements AgentHarness {
     const logPath = join(root, `${identity}.log`);
     writeFileSync(
       requestPath,
-      `${JSON.stringify({ request, network: this.network, redactionValues: this.allowedSecretNames.map((name) => process.env[name]).filter((value): value is string => Boolean(value)) })}\n`,
+      `${JSON.stringify(codexWorkerInput(request, this.network, this.allowedSecretNames, this.model))}\n`,
       { flag: "wx", mode: 0o600 },
     );
     const log = openSync(logPath, "a", 0o600);
@@ -177,6 +179,30 @@ export class CodexHarness implements AgentHarness {
       return { evidence: value.evidence, assets };
     }
   }
+}
+
+export function codexWorkerInput(
+  request: HarnessRequest,
+  network: "host" | "off",
+  allowedSecretNames: string[],
+  model: CodexModelSelection,
+): {
+  request: HarnessRequest;
+  network: "host" | "off";
+  redactionValues: string[];
+  model: CodexModelSelection;
+} {
+  return {
+    request,
+    network,
+    redactionValues: allowedSecretNames
+      .map((name) => process.env[name])
+      .filter((value): value is string => Boolean(value)),
+    model: {
+      model: model.model,
+      reasoningEffort: model.reasoningEffort,
+    },
+  };
 }
 
 async function verifyBoundInput(path: string, ref: ContentRef): Promise<void> {

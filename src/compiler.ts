@@ -10,6 +10,7 @@ import {
   PINNED_PNPM_BOOTSTRAP,
 } from "./validation.js";
 import type { PlanningModel, PlanningRequest, WorkGraph } from "./contracts.js";
+import type { CodexModelSelection } from "./config.js";
 
 export const graphSchema = {
   type: "object",
@@ -106,15 +107,25 @@ export const graphSchema = {
 };
 
 export class CodexPlanningModel implements PlanningModel {
-  constructor(private checkout: string) {}
+  constructor(
+    private checkout: string,
+    private planner: CodexModelSelection,
+    private reviewer: CodexModelSelection,
+  ) {}
 
-  async generateStructured<T>(request: PlanningRequest<T>): Promise<T> {
+  private startThread(selection: CodexModelSelection) {
     const codex = new Codex();
-    const thread = codex.startThread({
+    return codex.startThread({
       workingDirectory: this.checkout,
       sandboxMode: "read-only",
       approvalPolicy: "never",
+      model: selection.model,
+      modelReasoningEffort: selection.reasoningEffort,
     });
+  }
+
+  async generateStructured<T>(request: PlanningRequest<T>): Promise<T> {
+    const thread = this.startThread(this.planner);
     const prompt = `Compile this human Objective into the smallest complete dependency-aware Work Item graph. Use parallel lanes only when ownership and resources allow them. Return the requested JSON only. Use exact supplied base SHA and Objective number. Cite only supplied source paths. Give each item explicit non-goals. Choose observable acceptance and owned paths. For every validation command, set provenance to base-observed or source-declared and name its exact source path. A source-declared command must be an exact command line in a supplied source (OBJECTIVE or a pinned source). A base-observed command must identify a tracked file in the exact base containing that command as an exact line, or a package.json script invoked by npm test/npm run NAME/pnpm test/pnpm check/pnpm run NAME. The exact source-declared command pnpm install --frozen-lockfile --ignore-scripts may precede pnpm checks in a fresh validation worktree when supplied; plain install is unsupported. Do not invent commands or use a vague source. For each source asset, bind its path, role, media type, visibility, and kind: repository for a pinned checkout path, local for an explicitly approved absolute private file, or github-attachment for a recognized URL literally present in the Objective. Use an explicitly declared media type when available, otherwise application/octet-stream; never infer format from an extension. List expected output roles for media work; use empty arrays for ordinary work. Set minimumAssetSets from the Objective candidate count, or 1 for unspecified media and 0 for ordinary work. List requiredLfsRoles only when a supplied source requires them; the target repository .gitattributes is authoritative. Do not add deployment, paid services, providers, recovery, or later scope.\n\nObjective:\n${request.objective}\n\nBase: ${request.baseSha}\n\nSources:\n${request.sources.map((s) => `--- ${s.path} ---\n${s.content}`).join("\n")}`;
     const result = await thread.run(prompt, { outputSchema: request.schema });
     return JSON.parse(result.finalResponse) as T;
@@ -133,12 +144,7 @@ export class CodexPlanningModel implements PlanningModel {
       question: string;
     }[];
   }> {
-    const codex = new Codex();
-    const thread = codex.startThread({
-      workingDirectory: this.checkout,
-      sandboxMode: "read-only",
-      approvalPolicy: "never",
-    });
+    const thread = this.startThread(this.reviewer);
     const prompt = `Independently review this proposed Factory Work Item graph against the exact pinned Objective and source packet. Check every Objective obligation, unsupported scope, citations, dependencies, path/resource ownership, and observable acceptance. Return only material findings with the supplied source path and a short exact quote from that source. Give a specific operator question for unresolved authority. Do not edit the graph or grant authority. A clean graph has an empty findings array.\n\nObjective:\n${request.objective}\nBase: ${request.baseSha}\nSources:\n${request.sources.map((s) => `--- ${s.path} ---\n${s.content}`).join("\n")}\nGraph:\n${JSON.stringify(request.graph)}`;
     const result = await thread.run(prompt, {
       outputSchema: {
@@ -184,12 +190,7 @@ export class CodexPlanningModel implements PlanningModel {
       question: string;
     }[];
   }> {
-    const codex = new Codex();
-    const thread = codex.startThread({
-      workingDirectory: this.checkout,
-      sandboxMode: "read-only",
-      approvalPolicy: "never",
-    });
+    const thread = this.startThread(this.reviewer);
     const result = await thread.run(
       `Independently review the exact result of a Factory Objective. Decide each criterion only from the supplied pinned source, command pass evidence, delivery observations when supplied, and exact Git change packet. The packet has bounded text patch excerpts, explicit truncation flags, line counts, and exact blob identities/sizes. Never pass a criterion when relevant text is truncated or omitted unless other supplied evidence independently proves it. Blob identity alone does not prove opaque content semantics; ask for a focused human decision when missing evidence matters. A shell exit code alone proves only that command's assertion. Return one finding per criterion in the given order. Pass only when the evidence proves that criterion; otherwise needs-human with one specific question. Use refuse for a directly disproved criterion. For source, use exactly a supplied pinned source path, or exactly one of "Exact Git change packet", "Command pass evidence", or "Delivery observations". For quote, copy an exact contiguous fragment from that named input. Never invent a source label or paraphrase a quote. Never edit or run commands.\n\nBase: ${request.baseSha}\nResult tree: ${request.treeSha}\nCriteria: ${JSON.stringify(request.criteria)}\nCommands: ${JSON.stringify(request.commands)}\nDelivery observations: ${request.observations ?? "none"}\nSources: ${request.sources.map((s) => `--- ${s.path} ---\n${s.content}`).join("\n")}\nChange packet:\n${request.change}`,
       {

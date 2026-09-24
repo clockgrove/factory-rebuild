@@ -405,6 +405,8 @@ test("Work Item review receives exact concurrent-attempt provenance from run sta
               "id",
               "integratedSha",
               "integrationAtStart",
+              "ownedPaths",
+              "resources",
               "resultHeadSha",
               "startedAt",
             ]);

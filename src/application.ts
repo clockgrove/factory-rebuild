@@ -105,7 +105,11 @@ export function composePlanning(
 ): Pick<FactoryApplication, "planObjective" | "decidePlan"> {
   validateTarget(config.repository, config.checkout);
   const services = {
-    planningModel: new CodexPlanningModel(config.checkout),
+    planningModel: new CodexPlanningModel(
+      config.checkout,
+      config.planning.planner,
+      config.planning.reviewer,
+    ),
     github: new RealGitHubGateway(
       config.repository,
       new NativeStackDelivery(config.repository),
@@ -139,13 +143,18 @@ export function compose(config: FactoryConfig): FactoryApplication {
     new CodexHarness(
       credentials,
       config.policy.network,
+      config.execution.harness,
       config.policy.allowedSecretNames,
     ),
     config.execution.concurrency,
     contentStore,
   );
   return createApplication(config, {
-    planningModel: new CodexPlanningModel(config.checkout),
+    planningModel: new CodexPlanningModel(
+      config.checkout,
+      config.planning.planner,
+      config.planning.reviewer,
+    ),
     driver,
     github,
     delivery: new RegularDelivery(config.checkout, github),

@@ -72,11 +72,19 @@ export function factoryConfig(
     schemaVersion: 1,
     repository,
     checkout,
-    planning: { kind: "codex-sdk" },
+    planning: {
+      kind: "codex-sdk",
+      planner: { model: "gpt-5.6-sol", reasoningEffort: "medium" },
+      reviewer: { model: "gpt-5.6-sol", reasoningEffort: "medium" },
+    },
     execution: {
       kind: "local",
       concurrency,
-      harness: { kind: "codex-sdk" },
+      harness: {
+        kind: "codex-sdk",
+        model: "gpt-5.6-sol",
+        reasoningEffort: "medium",
+      },
     },
     delivery: { kind: delivery },
     contentStore: { kind: "local" },

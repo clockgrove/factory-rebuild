@@ -264,6 +264,64 @@ test("review observations expose the exact dependency result head", () => {
   assert.ok(!("baseSha" in attempts.asset));
 });
 
+test("review observations expose declared ownership and resources for named peers", () => {
+  const concurrent = state();
+  concurrent.graph.items[0].id = "rc-lfs-policy";
+  concurrent.graph.items[0].title = "Verify LFS policy";
+  concurrent.graph.items[0].acceptance = [
+    "rc-lfs-policy may run in parallel with rc-stack-foundation because their ownership and resources are disjoint",
+  ];
+  concurrent.graph.items[0].ownedPaths = [".gitattributes"];
+  concurrent.graph.items[0].resources = ["git-lfs-policy"];
+  concurrent.graph.items.push({
+    ...structuredClone(concurrent.graph.items[0]),
+    id: "rc-stack-foundation",
+    title: "Build stack foundation",
+    acceptance: ["Foundation exists"],
+    ownedPaths: ["stack/foundation.txt"],
+    resources: ["stack-foundation"],
+  });
+  concurrent.graph.items.push({
+    ...structuredClone(concurrent.graph.items[0]),
+    id: "unrelated",
+    title: "Unrelated",
+    acceptance: ["Unrelated exists"],
+    ownedPaths: ["unrelated.txt"],
+    resources: ["unrelated-resource"],
+  });
+  concurrent.issueByItemId = {
+    "rc-lfs-policy": 43,
+    "rc-stack-foundation": 44,
+    unrelated: 45,
+  };
+  concurrent.work = {
+    "rc-lfs-policy": { status: "pending" },
+    "rc-stack-foundation": { status: "pending" },
+    unrelated: { status: "pending" },
+  };
+  const parsed = parseFactoryState(concurrent, repository, objective);
+  const observations = JSON.parse(
+    workItemReviewObservations(parsed, parsed.graph.items[0], {
+      kind: "regular",
+    }),
+  );
+  const attempts = Object.fromEntries(
+    observations.attempts.map((attempt) => [attempt.id, attempt]),
+  );
+  assert.deepEqual(Object.keys(attempts).sort(), [
+    "rc-lfs-policy",
+    "rc-stack-foundation",
+  ]);
+  assert.deepEqual(attempts["rc-lfs-policy"].ownedPaths, [".gitattributes"]);
+  assert.deepEqual(attempts["rc-lfs-policy"].resources, ["git-lfs-policy"]);
+  assert.deepEqual(attempts["rc-stack-foundation"].ownedPaths, [
+    "stack/foundation.txt",
+  ]);
+  assert.deepEqual(attempts["rc-stack-foundation"].resources, [
+    "stack-foundation",
+  ]);
+});
+
 test("completed replayed item can retain its original worker base in legacy state", () => {
   const completed = state();
   completed.work.asset = {

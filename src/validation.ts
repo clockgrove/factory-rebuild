@@ -98,6 +98,8 @@ export function workItemReviewObservations(
       return {
         id: candidate.id,
         declaredDependencies: candidate.dependencies,
+        ownedPaths: candidate.ownedPaths,
+        resources: candidate.resources ?? [],
         attemptId: work.attempt ?? null,
         startedAt: work.startedAt ?? null,
         executionBaseSha: work.executionBaseSha ?? null,
