@@ -678,9 +678,22 @@ test("GitHub Copilot adapter uses local auth with a bounded empty-mode capabilit
       () => validateConfig(wrongAdapter),
       /adapter is not the pinned GitHub Copilot SDK/,
     );
-    const shell = structuredClone(config);
-    shell.execution.harness.availableTools.push("bash");
-    assert.throws(() => validateConfig(shell), /cannot expose bash/);
+    for (const tool of [
+      "bash",
+      "*",
+      "builtin:*",
+      "mcp:*",
+      "custom:*",
+      "view:*",
+      "future-tool",
+    ]) {
+      const unsafeTool = structuredClone(config);
+      unsafeTool.execution.harness.availableTools.push(tool);
+      assert.throws(
+        () => validateConfig(unsafeTool),
+        /supports only view, create, edit, grep, and glob/,
+      );
+    }
     const unknownPermission = structuredClone(config);
     unknownPermission.execution.harness.permissionKinds.push("shell");
     assert.throws(

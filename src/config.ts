@@ -138,6 +138,7 @@ const claudeSettingSources = new Set<ClaudeSettingSource>([
   "local",
 ]);
 const claudeFileTools = new Set(["Read", "Edit", "Write", "Glob", "Grep"]);
+const copilotFileTools = new Set(["view", "create", "edit", "grep", "glob"]);
 
 const factoryRepositories = new Set([
   "clockgrove/factory",
@@ -436,14 +437,12 @@ export function validateConfig(value: unknown): FactoryConfig {
       throw new Error(
         "execution.harness.availableTools must name bounded SDK tools",
       );
-    const forbiddenTool = availableTools.find((tool) =>
-      /^(?:builtin:)?(?:bash|shell|powershell|task|web|mcp|gh|github)$/i.test(
-        tool,
-      ),
+    const unsupportedTool = availableTools.find(
+      (tool) => !copilotFileTools.has(tool),
     );
-    if (forbiddenTool)
+    if (unsupportedTool)
       throw new Error(
-        `execution.harness.availableTools cannot expose ${forbiddenTool}`,
+        `execution.harness.availableTools supports only view, create, edit, grep, and glob; received ${unsupportedTool}`,
       );
     const permissionKinds = assertUniqueStrings(
       value.execution.harness.permissionKinds,

@@ -45,8 +45,7 @@ import { parseAuthenticationRequest } from "./harness-support.js";
 type Active = {
   request: ExecutionRequest;
   worktree: string;
-  /** Missing only on pre-#55 schemaVersion 2 Codex handles. */
-  adapterIdentity?: string;
+  adapterIdentity: string;
   handle: HarnessHandle;
   failure?: string;
 };
@@ -315,11 +314,6 @@ export class LocalExecutionDriver implements ExecutionDriver {
       this.active.get(handle.identity) ?? (handle.data as Active | undefined);
     if (!active || handle.provider !== "local")
       throw new Error("Unknown local execution handle");
-    if (
-      active.adapterIdentity === undefined &&
-      this.adapterIdentity === "codex-sdk"
-    )
-      active.adapterIdentity = "codex-sdk";
     if (
       !resolve(active.worktree).startsWith(`${resolve(this.workRoot)}${sep}`) ||
       active.request.attemptId !== handle.identity ||

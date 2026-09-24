@@ -117,12 +117,11 @@ test("unrelated existing symlink, submodule, and .gitmodules do not block an own
   assert.match(result.changeRef, /^[a-f0-9]{40}$/);
 });
 
-test("legacy schemaVersion 2 Codex handles gain the stable adapter identity on reattach", async () => {
-  const root = mkdtempSync(join(tmpdir(), "factory-local-legacy-handle-"));
+test("missing adapter identities fail closed on local reattach", async () => {
+  const root = mkdtempSync(join(tmpdir(), "factory-local-missing-adapter-"));
   try {
     const worktree = join(root, "worktrees", "attempt");
     mkdirSync(worktree, { recursive: true });
-    const observed = [];
     const harness = {
       capabilities: {
         protocolVersion: 1,
@@ -137,7 +136,7 @@ test("legacy schemaVersion 2 Codex handles gain the stable adapter identity on r
         throw new Error("not used");
       },
       async observe(handle) {
-        observed.push(handle.identity);
+        void handle;
         return { state: "running" };
       },
       async cancel() {},
@@ -158,30 +157,11 @@ test("legacy schemaVersion 2 Codex handles gain the stable adapter identity on r
       worktree,
       handle: { identity: "worker-1", data: {} },
     };
-    assert.deepEqual(
-      await driver.observe({
+    await assert.rejects(
+      driver.observe({
         provider: "local",
         identity: "attempt",
         data: active,
-      }),
-      { state: "running" },
-    );
-    assert.equal(active.adapterIdentity, "codex-sdk");
-    assert.deepEqual(observed, ["worker-1"]);
-
-    const registered = new LocalExecutionDriver(
-      root,
-      join(root, "worktrees"),
-      harness,
-      1,
-      new LocalContentStore(join(root, "content-registered")),
-      "example/registered@1",
-    );
-    await assert.rejects(
-      registered.observe({
-        provider: "local",
-        identity: "attempt",
-        data: { ...active, adapterIdentity: undefined },
       }),
       /uses another adapter/,
     );

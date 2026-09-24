@@ -543,12 +543,11 @@ test("persisted asset and active harness identities fail closed", () => {
       .handle.data,
     "opaque-json-handle",
   );
-  const legacyCodex = structuredClone(running);
-  delete legacyCodex.work.asset.execution.data.adapterIdentity;
-  assert.equal(
-    parseFactoryState(legacyCodex, repository, objective).work.asset.execution
-      .data.adapterIdentity,
-    undefined,
+  const missingAdapter = structuredClone(running);
+  delete missingAdapter.work.asset.execution.data.adapterIdentity;
+  assert.throws(
+    () => parseFactoryState(missingAdapter, repository, objective),
+    /active attempt handle is invalid/,
   );
 });
 

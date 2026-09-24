@@ -656,9 +656,8 @@ export function parseFactoryState(
         const handle = record(active.handle, `work.${id}.harness`);
         if (
           typeof active.worktree !== "string" ||
-          (active.adapterIdentity !== undefined &&
-            (typeof active.adapterIdentity !== "string" ||
-              !active.adapterIdentity)) ||
+          typeof active.adapterIdentity !== "string" ||
+          !active.adapterIdentity ||
           attemptedItem.id !== id ||
           (request.baseSha !== item.baseSha &&
             item.status !== "done" &&
