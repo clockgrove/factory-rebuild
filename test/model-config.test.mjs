@@ -156,6 +156,12 @@ test("Codex adapter passes phase selections to every planning and review thread"
       treeSha,
       sources: [],
       change: "{}",
+      evidence: [
+        {
+          path: "Work Item Git delta: one",
+          content: "supervisor item delta",
+        },
+      ],
       commands: [
         {
           index: 0,
@@ -179,6 +185,8 @@ test("Codex adapter passes phase selections to every planning and review thread"
     );
     assert.match(captured[2].prompt, /result identity is a Git tree/);
     assert.match(captured[2].prompt, /stable zero-based index/);
+    assert.match(captured[2].prompt, /Work Item Git delta: one/);
+    assert.match(captured[2].prompt, /supervisor item delta/);
     assert.match(captured[2].prompt, new RegExp(treeSha));
   } finally {
     Codex.prototype.startThread = original;

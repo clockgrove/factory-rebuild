@@ -336,6 +336,15 @@ export function statusDocument(
           source: pending.source,
           question: redactDiagnosticDetail(pending.question, secrets),
           detail: redactDiagnosticDetail(pending.detail, secrets),
+          reviewFinding: pending.reviewFinding
+            ? Object.fromEntries(
+                Object.entries(pending.reviewFinding).map(([key, value]) => [
+                  key,
+                  redactDiagnosticDetail(value, secrets),
+                ]),
+              )
+            : null,
+          reviewRejection: pending.reviewRejection ?? null,
         }
       : null;
   const activeCount = Object.values(state.work).filter(
@@ -470,7 +479,12 @@ export class StateDiagnostics {
           operation: "acceptance-pending",
           outcome: before ? "waiting" : "observed",
           metadata: { treeSha: work.acceptancePending.treeSha },
-          detail: work.acceptancePending.question,
+          detail: JSON.stringify({
+            question: work.acceptancePending.question,
+            detail: work.acceptancePending.detail,
+            reviewFinding: work.acceptancePending.reviewFinding ?? null,
+            reviewRejection: work.acceptancePending.reviewRejection ?? null,
+          }),
         });
       }
       if (
@@ -559,7 +573,16 @@ export class StateDiagnostics {
         outcome:
           this.previousFinalPending === undefined ? "observed" : "waiting",
         metadata: { treeSha: finalPending },
-        detail: this.state.finalAcceptancePending?.question,
+        detail: this.state.finalAcceptancePending
+          ? JSON.stringify({
+              question: this.state.finalAcceptancePending.question,
+              detail: this.state.finalAcceptancePending.detail,
+              reviewFinding:
+                this.state.finalAcceptancePending.reviewFinding ?? null,
+              reviewRejection:
+                this.state.finalAcceptancePending.reviewRejection ?? null,
+            })
+          : undefined,
       });
     this.previousFinalPending = finalPending;
     const view = statusDocument(

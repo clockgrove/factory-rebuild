@@ -2,6 +2,7 @@ import type {
   CapturedAssetSet,
   AssetSelectionDecision,
   ExecutionHandle,
+  ResultReviewCandidate,
   WorkGraph,
 } from "./contracts.js";
 import type { AcceptanceDecision, ValidationEvidence } from "./validation.js";
@@ -18,6 +19,30 @@ export type WorkStatus =
 export type WorkStep =
   "execute" | "validate" | "approve-asset" | "approve-result" | "deliver";
 
+export type ReviewRejectionReason =
+  | "missing-finding"
+  | "criterion-mismatch"
+  | "invalid-verdict"
+  | "empty-detail"
+  | "unknown-source"
+  | "source-truncated"
+  | "empty-quote"
+  | "quote-not-found";
+
+export interface AcceptancePending {
+  criterion: string;
+  treeSha: string;
+  source: string;
+  quote: string;
+  question: string;
+  detail: string;
+  reviewFinding?: ResultReviewCandidate;
+  reviewRejection?: {
+    field: "finding" | "criterion" | "verdict" | "detail" | "source" | "quote";
+    reason: ReviewRejectionReason;
+  };
+}
+
 export interface WorkState {
   status: WorkStatus;
   step?: WorkStep;
@@ -33,14 +58,7 @@ export interface WorkState {
   changeRef?: string;
   treeSha?: string;
   validation?: ValidationEvidence;
-  acceptancePending?: {
-    criterion: string;
-    treeSha: string;
-    source: string;
-    quote: string;
-    question: string;
-    detail: string;
-  };
+  acceptancePending?: AcceptancePending;
   acceptanceDecisions?: AcceptanceDecision[];
   assets?: CapturedAssetSet[];
   selectedAssetSet?: string;
@@ -72,14 +90,7 @@ export interface FactoryState {
   >;
   integratedSha?: string;
   finalValidation?: ValidationEvidence & { passed: boolean; detail?: string };
-  finalAcceptancePending?: {
-    criterion: string;
-    treeSha: string;
-    source: string;
-    quote: string;
-    question: string;
-    detail: string;
-  };
+  finalAcceptancePending?: AcceptancePending;
   finalAcceptanceDecisions?: AcceptanceDecision[];
   objectiveBodyDigest?: string;
   objectiveClosure?: "pending" | "complete";
@@ -137,6 +148,47 @@ function acceptancePending(value: unknown, label: string): void {
   for (const key of ["criterion", "source", "quote", "question", "detail"])
     string(pending[key], `${label}.${key}`);
   sha(pending.treeSha, `${label}.treeSha`);
+  if (pending.reviewFinding !== undefined) {
+    const finding = record(pending.reviewFinding, `${label}.reviewFinding`);
+    for (const key of [
+      "criterion",
+      "verdict",
+      "source",
+      "quote",
+      "detail",
+      "question",
+    ]) {
+      if (typeof finding[key] !== "string" || finding[key].length > 4_096)
+        throw new Error(`${label}.reviewFinding.${key} is invalid`);
+    }
+  }
+  if (pending.reviewRejection !== undefined) {
+    const rejection = record(
+      pending.reviewRejection,
+      `${label}.reviewRejection`,
+    );
+    if (
+      ![
+        "finding",
+        "criterion",
+        "verdict",
+        "detail",
+        "source",
+        "quote",
+      ].includes(String(rejection.field)) ||
+      ![
+        "missing-finding",
+        "criterion-mismatch",
+        "invalid-verdict",
+        "empty-detail",
+        "unknown-source",
+        "source-truncated",
+        "empty-quote",
+        "quote-not-found",
+      ].includes(String(rejection.reason))
+    )
+      throw new Error(`${label}.reviewRejection is invalid`);
+  }
 }
 
 function validationEvidence(value: unknown, label: string): string[] {
