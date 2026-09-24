@@ -56,6 +56,10 @@ export interface ApplicationServices {
   contentStore: ContentStore;
 }
 
+function configDigest(config: FactoryConfig): string {
+  return createHash("sha256").update(JSON.stringify(config)).digest("hex");
+}
+
 /** Read-only preflight: no controller lock, issue projection, or run state. */
 export async function planObjective(
   config: FactoryConfig,
@@ -75,6 +79,7 @@ export async function planObjective(
       baseSha,
       config.checkout,
       services.planningModel,
+      configDigest(config),
     );
     diagnostics.emit({
       operation: "planning-preview",
@@ -101,7 +106,7 @@ export async function planObjective(
 export async function decidePlan(
   config: FactoryConfig,
   objective: number,
-  services: Pick<ApplicationServices, "planningModel" | "github">,
+  services: Pick<ApplicationServices, "github">,
   candidate: PlanCandidate,
   input: {
     actor: string;
@@ -123,8 +128,8 @@ export async function decidePlan(
       issue.body,
       baseSha,
       config.checkout,
-      services.planningModel,
       input,
+      configDigest(config),
     );
     diagnostics.emit({
       operation: "planning-decision",
@@ -197,15 +202,13 @@ export async function runObjective(
   try {
     diagnostics.emit({ operation: "objective-run", outcome: "started" });
     const issue = await github.objective(objective);
-    const configDigest = createHash("sha256")
-      .update(JSON.stringify(config))
-      .digest("hex");
+    const installationConfigDigest = configDigest(config);
     let state = readState(config.repository, objective);
     if (state) {
       if (
         state.schemaVersion !== 1 ||
         state.repository !== config.repository ||
-        state.configDigest !== configDigest
+        state.configDigest !== installationConfigDigest
       ) {
         throw new Error(
           "Existing Objective state does not match this Factory installation",
@@ -218,6 +221,7 @@ export async function runObjective(
           issue.body,
           state.baseSha,
           config.checkout,
+          installationConfigDigest,
         );
         if (JSON.stringify(acceptedPlan.graph) !== JSON.stringify(state.graph))
           throw new Error(
@@ -284,6 +288,7 @@ export async function runObjective(
               baseSha,
               config.checkout,
               planningModel,
+              installationConfigDigest,
             ));
           verifyPlanCandidate(
             candidate,
@@ -291,19 +296,8 @@ export async function runObjective(
             issue.body,
             baseSha,
             config.checkout,
+            installationConfigDigest,
           );
-          if (acceptedPlan && candidate.review.status === "clean") {
-            const freshReview = await planningModel.reviewGraph({
-              objective: issue.body,
-              baseSha,
-              sources: candidate.sources,
-              graph: candidate.graph,
-            });
-            if (freshReview.findings.length)
-              throw new Error(
-                `Accepted plan no longer passes independent review: ${freshReview.findings[0]!.question}`,
-              );
-          }
           return candidate;
         },
         (candidate) => ({ itemCount: candidate.graph.items.length }),
@@ -321,7 +315,7 @@ export async function runObjective(
         repository: config.repository,
         objective,
         runId: randomUUID(),
-        configDigest,
+        configDigest: installationConfigDigest,
         baseSha,
         graph,
         objectiveCommands: finalObjectiveCommands(issue.body),
