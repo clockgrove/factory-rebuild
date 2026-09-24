@@ -62,9 +62,9 @@ function assertInitialization(
     throw new Error(
       `Claude SDK selected permission mode ${message.permissionMode}, expected ${config.permissionMode}`,
     );
-  if (message.effort !== undefined && message.effort !== config.effort)
+  if (message.effort !== undefined && message.effort !== config.reasoningEffort)
     throw new Error(
-      `Claude SDK selected effort ${String(message.effort)}, expected ${config.effort}`,
+      `Claude SDK selected reasoning effort ${String(message.effort)}, expected ${config.reasoningEffort}`,
     );
   const configuredTools = new Set(config.tools);
   const unexpectedTool = message.tools.find(
@@ -148,7 +148,7 @@ async function main(): Promise<void> {
         sessionId: result.session_id,
         configuredModel: input.config.model,
         observedModel: initialization.model,
-        effort: input.config.effort,
+        reasoningEffort: input.config.reasoningEffort,
         permissionMode: initialization.permissionMode,
         settingSources: input.config.settingSources,
         finalResponse: result.subtype === "success" ? result.result : "",

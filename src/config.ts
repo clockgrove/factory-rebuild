@@ -37,14 +37,15 @@ export const CLAUDE_AGENT_SDK_ADAPTER_IDENTITY =
   "@anthropic-ai/claude-agent-sdk@0.3.281";
 export const GITHUB_COPILOT_SDK_ADAPTER_IDENTITY = "@github/copilot-sdk@1.0.13";
 
-export type ClaudeEffort = "low" | "medium" | "high" | "xhigh" | "max";
+export type HarnessReasoningEffort =
+  "low" | "medium" | "high" | "xhigh" | "max";
 export type ClaudeSettingSource = "user" | "project" | "local";
 
 export interface ClaudeAgentSdkConfig {
   kind: "claude-agent-sdk";
   adapter: typeof CLAUDE_AGENT_SDK_ADAPTER_IDENTITY;
   model: string;
-  effort: ClaudeEffort;
+  reasoningEffort: HarnessReasoningEffort;
   permissionMode: "acceptEdits" | "dontAsk";
   session: "new-per-attempt";
   settingSources: ClaudeSettingSource[];
@@ -58,7 +59,7 @@ export interface GitHubCopilotSdkConfig {
   kind: "github-copilot-sdk";
   adapter: typeof GITHUB_COPILOT_SDK_ADAPTER_IDENTITY;
   model: string;
-  reasoningEffort: ClaudeEffort;
+  reasoningEffort: HarnessReasoningEffort;
   session: "new-per-attempt";
   availableTools: string[];
   permissionKinds: ("read" | "write")[];
@@ -124,7 +125,7 @@ const codexReasoningEfforts = new Set<CodexReasoningEffort>([
   "ultra",
   "persistent",
 ]);
-const claudeEfforts = new Set<ClaudeEffort>([
+const harnessReasoningEfforts = new Set<HarnessReasoningEffort>([
   "low",
   "medium",
   "high",
@@ -324,7 +325,7 @@ export function validateConfig(value: unknown): FactoryConfig {
         "kind",
         "adapter",
         "model",
-        "effort",
+        "reasoningEffort",
         "permissionMode",
         "session",
         "settingSources",
@@ -343,10 +344,12 @@ export function validateConfig(value: unknown): FactoryConfig {
     )
       throw new Error("execution.harness.model must be a non-empty string");
     if (
-      typeof value.execution.harness.effort !== "string" ||
-      !claudeEfforts.has(value.execution.harness.effort as ClaudeEffort)
+      typeof value.execution.harness.reasoningEffort !== "string" ||
+      !harnessReasoningEfforts.has(
+        value.execution.harness.reasoningEffort as HarnessReasoningEffort,
+      )
     )
-      throw new Error("execution.harness.effort is unsupported");
+      throw new Error("execution.harness.reasoningEffort is unsupported");
     if (
       value.execution.harness.permissionMode !== "acceptEdits" &&
       value.execution.harness.permissionMode !== "dontAsk"
@@ -418,8 +421,8 @@ export function validateConfig(value: unknown): FactoryConfig {
       throw new Error("execution.harness.model must be a non-empty string");
     if (
       typeof value.execution.harness.reasoningEffort !== "string" ||
-      !claudeEfforts.has(
-        value.execution.harness.reasoningEffort as ClaudeEffort,
+      !harnessReasoningEfforts.has(
+        value.execution.harness.reasoningEffort as HarnessReasoningEffort,
       )
     )
       throw new Error("execution.harness.reasoningEffort is unsupported");

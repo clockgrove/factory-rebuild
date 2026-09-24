@@ -95,7 +95,7 @@ for (const harness of [
     kind: "claude-agent-sdk",
     adapter: CLAUDE_AGENT_SDK_ADAPTER_IDENTITY,
     model: "missing-optional-sdk",
-    effort: "medium",
+    reasoningEffort: "medium",
     permissionMode: "acceptEdits",
     session: "new-per-attempt",
     settingSources: [],

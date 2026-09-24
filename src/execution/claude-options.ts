@@ -104,7 +104,9 @@ export function claudeQueryOptions(
     abortController,
     cwd: request.worktree,
     model: config.model,
-    effort: config.effort,
+    // Factory calls this reasoningEffort across all harnesses; the Claude SDK
+    // names the equivalent provider option `effort`.
+    effort: config.reasoningEffort,
     tools: [...config.tools],
     // Bare allowedTools bypass canUseTool in the Claude SDK. Keep Factory's
     // configured allow-list in the host policy below, never in this SDK field.

@@ -115,7 +115,7 @@ async function main(): Promise<void> {
                 kind: "claude-agent-sdk",
                 adapter: CLAUDE_AGENT_SDK_ADAPTER_IDENTITY,
                 model: option(args, "worker-model"),
-                effort: option(args, "worker-reasoning") ?? "medium",
+                reasoningEffort: option(args, "worker-reasoning") ?? "medium",
                 permissionMode:
                   option(args, "claude-permission") ?? "acceptEdits",
                 session: "new-per-attempt",

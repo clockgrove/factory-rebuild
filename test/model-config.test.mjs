@@ -269,7 +269,7 @@ test("Claude adapter configuration is exact, isolated, and bound to the pinned S
       kind: "claude-agent-sdk",
       adapter: CLAUDE_AGENT_SDK_ADAPTER_IDENTITY,
       model: "claude-explicit-model",
-      effort: "high",
+      reasoningEffort: "high",
       permissionMode: "acceptEdits",
       session: "new-per-attempt",
       settingSources: [],
@@ -453,11 +453,11 @@ test("Claude adapter configuration is exact, isolated, and bound to the pinned S
       () => validateConfig(wrongAdapter),
       /adapter is not the pinned Claude SDK/,
     );
-    const leakedCodexField = structuredClone(config);
-    leakedCodexField.execution.harness.reasoningEffort = "medium";
+    const leakedProviderField = structuredClone(config);
+    leakedProviderField.execution.harness.effort = "medium";
     assert.throws(
-      () => validateConfig(leakedCodexField),
-      /reasoningEffort is unsupported/,
+      () => validateConfig(leakedProviderField),
+      /effort is unsupported/,
     );
     const unexpectedTool = structuredClone(config);
     unexpectedTool.execution.harness.allowedTools.push("WebSearch");
@@ -819,7 +819,7 @@ test("install selects the pinned optional Claude adapter without changing planni
       kind: "claude-agent-sdk",
       adapter: CLAUDE_AGENT_SDK_ADAPTER_IDENTITY,
       model: "claude-explicit-model",
-      effort: "xhigh",
+      reasoningEffort: "xhigh",
       permissionMode: "dontAsk",
       session: "new-per-attempt",
       settingSources: [],
