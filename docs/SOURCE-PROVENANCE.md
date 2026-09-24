@@ -87,4 +87,4 @@ After the v0.1.6 public gate exposed ambient Codex reasoning inheritance, the ar
 
 ## Role-specific Factory defaults (#59)
 
-Issue #59 and the current explicit-selection implementation supplied this change. No additional archived source or provider policy was inspected or copied. Factory now resolves planner, reviewer, and worker defaults separately at installation, persists the resulting explicit values, and keeps provider-neutral harness work in issue #55.
+Issue #59 and the current explicit-selection implementation supplied this change. No additional archived source or provider policy was inspected or copied. Factory now resolves planner, reviewer, and worker defaults separately at installation, persists the resulting explicit values, and keeps provider-neutral harness work in issue #55. A post-merge boundary audit rejected a shared-default compatibility alias that was not required by #59; the package root exposes only the role-specific defaults.
