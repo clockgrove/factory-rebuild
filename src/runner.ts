@@ -35,6 +35,7 @@ import { git, linuxProcessIdentity, pinnedGit } from "./process.js";
 import {
   AcceptanceDecisionRequired,
   assertPinnedNpmScripts,
+  objectiveReviewEvidence,
   reviewAcceptance,
   validateTree,
 } from "./validation.js";
@@ -202,7 +203,7 @@ export async function runObjective(
     let state = readState(config.repository, objective);
     if (state) {
       if (
-        state.schemaVersion !== 1 ||
+        state.schemaVersion !== 2 ||
         state.repository !== config.repository ||
         state.configDigest !== installationConfigDigest
       ) {
@@ -307,7 +308,7 @@ export async function runObjective(
         () => github.projectGraph({ graph, objectiveIssue: objective }),
       );
       state = {
-        schemaVersion: 1,
+        schemaVersion: 2,
         repository: config.repository,
         objective,
         runId: randomUUID(),
@@ -434,6 +435,12 @@ export async function runObjective(
     );
     let finalEvidence;
     try {
+      const objectiveEvidence = objectiveReviewEvidence({
+        state,
+        checkout: config.checkout,
+        integratedCommitSha: integratedSha,
+        integratedTreeSha: finalTree,
+      });
       const reviewFinal = () =>
         reviewAcceptance({
           model: planningModel,
@@ -443,26 +450,9 @@ export async function runObjective(
           evidence: commandEvidence,
           criteria: objectiveCriteria(issue.body),
           sources: planningSources(issue.body, state.baseSha, config.checkout),
+          evidenceSources: objectiveEvidence.evidence,
           decisions: state.finalAcceptanceDecisions,
-          observations: JSON.stringify({
-            integratedSha,
-            work: graph.items.map((item) => {
-              const work = state.work[item.id]!;
-              return {
-                id: item.id,
-                status: work.status,
-                treeSha: work.treeSha,
-                validation: work.validation,
-                pullRequest: work.pullRequest,
-                integratedSha: work.integratedSha,
-                selectedAssetSet: work.selectedAssetSet,
-                selectedAsset: work.assets?.find(
-                  (set) => set.id === work.selectedAssetSet,
-                ),
-                selection: work.selection,
-              };
-            }),
-          }),
+          observations: objectiveEvidence.observations,
         });
       finalEvidence = await diagnostics.span(
         {
@@ -486,7 +476,12 @@ export async function runObjective(
           outcome: "waiting",
           durationMs: Date.now() - finalValidationStarted,
           metadata: { treeSha: finalTree },
-          detail: error.pending.question,
+          detail: JSON.stringify({
+            question: error.pending.question,
+            detail: error.pending.detail,
+            reviewFinding: error.pending.reviewFinding ?? null,
+            reviewRejection: error.pending.reviewRejection ?? null,
+          }),
         });
         return state;
       }

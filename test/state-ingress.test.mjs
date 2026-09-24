@@ -13,7 +13,7 @@ const sha = "a".repeat(40);
 
 function state() {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     repository,
     objective,
     runId: "run-1",
@@ -90,7 +90,116 @@ test("persisted state validates identities and graph/work keys before use", () =
   );
 });
 
-test("schemaVersion 1 state rejects legacy source paths and accepts explicit bindings", () => {
+test("schemaVersion 2 state requires ordered exact-tree command receipts", () => {
+  const legacyVersion = state();
+  legacyVersion.schemaVersion = 1;
+  assert.throws(
+    () => parseFactoryState(legacyVersion, repository, objective),
+    /schema version/,
+  );
+
+  const treeSha = "c".repeat(40);
+  const valid = state();
+  valid.work.asset = {
+    status: "running",
+    step: "deliver",
+    baseSha: sha,
+    treeSha,
+    validation: {
+      treeSha,
+      commands: [
+        {
+          index: 0,
+          command: "test -s approved/image.png",
+          passed: true,
+          exitCode: 0,
+          treeSha,
+        },
+      ],
+    },
+  };
+  assert.equal(
+    parseFactoryState(valid, repository, objective).work.asset.validation
+      .commands[0].treeSha,
+    treeSha,
+  );
+
+  for (const mutate of [
+    (receipt) => delete receipt.index,
+    (receipt) => {
+      receipt.index = 1;
+    },
+    (receipt) => {
+      receipt.treeSha = "d".repeat(40);
+    },
+    (receipt) => delete receipt.exitCode,
+  ]) {
+    const invalid = structuredClone(valid);
+    mutate(invalid.work.asset.validation.commands[0]);
+    assert.throws(
+      () => parseFactoryState(invalid, repository, objective),
+      /not bound to the exact tree and order/,
+    );
+  }
+
+  const legacyReceipt = structuredClone(valid);
+  legacyReceipt.work.asset.validation.commands = [
+    { command: "test -s approved/image.png", passed: true },
+  ];
+  assert.throws(
+    () => parseFactoryState(legacyReceipt, repository, objective),
+    /not bound to the exact tree and order/,
+  );
+
+  const substitutedCommand = structuredClone(valid);
+  substitutedCommand.work.asset.validation.commands[0].command = "true";
+  assert.throws(
+    () => parseFactoryState(substitutedCommand, repository, objective),
+    /validation receipts differ from declared commands/,
+  );
+
+  const mismatchedResultTree = structuredClone(valid);
+  mismatchedResultTree.work.asset.treeSha = "e".repeat(40);
+  assert.throws(
+    () => parseFactoryState(mismatchedResultTree, repository, objective),
+    /validation tree differs from result tree/,
+  );
+  const missingResultTree = structuredClone(valid);
+  delete missingResultTree.work.asset.treeSha;
+  assert.throws(
+    () => parseFactoryState(missingResultTree, repository, objective),
+    /validation tree differs from result tree/,
+  );
+
+  const final = state();
+  final.objectiveCommands = ["test -s approved/image.png"];
+  final.finalValidation = {
+    treeSha,
+    commands: [
+      {
+        index: 0,
+        command: "test -s approved/image.png",
+        passed: true,
+        exitCode: 0,
+        treeSha,
+      },
+    ],
+    passed: true,
+  };
+  assert.equal(
+    parseFactoryState(final, repository, objective).finalValidation.commands[0]
+      .command,
+    "test -s approved/image.png",
+  );
+  const substitutedFinalCommand = structuredClone(final);
+  substitutedFinalCommand.finalValidation.commands[0].command = "true";
+  assert.throws(
+    () => parseFactoryState(substitutedFinalCommand, repository, objective),
+    /Final validation receipts differ from declared Objective commands/,
+  );
+});
+
+test("schemaVersion 2 state rejects legacy source paths and accepts explicit bindings", () => {
   const legacy = state();
   legacy.graph.items[0].sourceAssets = ["assets/source.png"];
   assert.throws(
@@ -128,11 +237,12 @@ test("legacy attempts expose missing immutable start provenance explicitly", () 
       kind: "regular",
     }),
   );
-  assert.equal(observations.attempts[0].executionBaseSha, null);
+  assert.equal(observations.attempts[0].executionBaseCommitSha, null);
   assert.deepEqual(observations.attempts[0].integrationAtStart, {
     recorded: false,
   });
-  assert.equal(observations.attempts[0].resultHeadSha, null);
+  assert.equal(observations.attempts[0].resultCommitSha, null);
+  assert.equal(observations.attempts[0].resultTreeSha, null);
 });
 
 test("review observations do not confuse a replay base with attempt provenance", () => {
@@ -179,21 +289,23 @@ test("review observations do not confuse a replay base with attempt provenance",
   const attempts = Object.fromEntries(
     observations.attempts.map((attempt) => [attempt.id, attempt]),
   );
-  assert.equal(observations.currentIntegratedSha, replayBase);
-  assert.equal(attempts.asset.executionBaseSha, sha);
+  assert.equal(observations.currentIntegratedCommitSha, replayBase);
+  assert.equal(attempts.asset.executionBaseCommitSha, sha);
   assert.deepEqual(attempts.asset.integrationAtStart, {
     recorded: true,
-    integratedSha: null,
+    integratedCommitSha: null,
   });
-  assert.equal(attempts.asset.integratedSha, null);
-  assert.equal(attempts.asset.resultHeadSha, "d".repeat(40));
-  assert.equal(attempts.peer.executionBaseSha, sha);
+  assert.equal(attempts.asset.integratedCommitSha, null);
+  assert.equal(attempts.asset.resultCommitSha, "d".repeat(40));
+  assert.equal(attempts.asset.resultTreeSha, null);
+  assert.equal(attempts.peer.executionBaseCommitSha, sha);
   assert.deepEqual(attempts.peer.integrationAtStart, {
     recorded: true,
-    integratedSha: null,
+    integratedCommitSha: null,
   });
-  assert.equal(attempts.peer.integratedSha, replayBase);
-  assert.equal(attempts.peer.resultHeadSha, "e".repeat(40));
+  assert.equal(attempts.peer.integratedCommitSha, replayBase);
+  assert.equal(attempts.peer.resultCommitSha, "e".repeat(40));
+  assert.equal(attempts.peer.resultTreeSha, null);
   assert.ok(!("baseSha" in attempts.asset));
 });
 
@@ -259,8 +371,9 @@ test("review observations expose the exact dependency result head", () => {
     observations.attempts.map((attempt) => [attempt.id, attempt]),
   );
   assert.deepEqual(Object.keys(attempts).sort(), ["asset", "foundation"]);
-  assert.equal(attempts.foundation.resultHeadSha, predecessorHead);
-  assert.equal(attempts.asset.executionBaseSha, predecessorHead);
+  assert.equal(attempts.foundation.resultCommitSha, predecessorHead);
+  assert.equal(attempts.foundation.resultTreeSha, null);
+  assert.equal(attempts.asset.executionBaseCommitSha, predecessorHead);
   assert.ok(!("baseSha" in attempts.asset));
 });
 

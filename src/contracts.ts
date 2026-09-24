@@ -63,6 +63,34 @@ export interface PlanReviewRequest {
   finalCommands: string[];
 }
 
+export interface ValidationCommandReceipt {
+  index: number;
+  command: string;
+  passed: true;
+  exitCode: 0;
+  treeSha: string;
+}
+
+export interface ResultReviewEvidenceSource {
+  path: string;
+  content: string;
+  /** False when this source contains only bounded partial text evidence. */
+  complete?: boolean;
+}
+
+export interface ResultReviewCandidate {
+  criterion: string;
+  verdict: string;
+  source: string;
+  quote: string;
+  detail: string;
+  question: string;
+}
+
+export interface ResultReviewFinding extends ResultReviewCandidate {
+  verdict: "pass" | "needs-human" | "refuse";
+}
+
 export interface PlanningModel {
   generateStructured<T>(request: PlanningRequest<T>): Promise<T>;
   reviewGraph(request: PlanReviewRequest): Promise<{
@@ -79,17 +107,11 @@ export interface PlanningModel {
     treeSha: string;
     sources: { path: string; content: string }[];
     change: string;
-    commands: { command: string; passed: true }[];
+    commands: ValidationCommandReceipt[];
+    evidence?: ResultReviewEvidenceSource[];
     observations?: string;
   }): Promise<{
-    findings: {
-      criterion: string;
-      verdict: "pass" | "needs-human" | "refuse";
-      source: string;
-      quote: string;
-      detail: string;
-      question: string;
-    }[];
+    findings: ResultReviewFinding[];
   }>;
 }
 
