@@ -4,7 +4,9 @@ import { dirname, resolve, sep } from "node:path";
 import type { PlanCandidate } from "./compiler.js";
 import {
   configPath,
-  DEFAULT_CODEX_MODEL_SELECTION,
+  DEFAULT_PLANNER_MODEL_SELECTION,
+  DEFAULT_REVIEWER_MODEL_SELECTION,
+  DEFAULT_WORKER_MODEL_SELECTION,
   readConfig,
   stateRoot,
   validateConfig,
@@ -59,17 +61,18 @@ async function main(): Promise<void> {
         planner: {
           model:
             option(args, "planning-model") ??
-            DEFAULT_CODEX_MODEL_SELECTION.model,
+            DEFAULT_PLANNER_MODEL_SELECTION.model,
           reasoningEffort:
             option(args, "planning-reasoning") ??
-            DEFAULT_CODEX_MODEL_SELECTION.reasoningEffort,
+            DEFAULT_PLANNER_MODEL_SELECTION.reasoningEffort,
         },
         reviewer: {
           model:
-            option(args, "review-model") ?? DEFAULT_CODEX_MODEL_SELECTION.model,
+            option(args, "review-model") ??
+            DEFAULT_REVIEWER_MODEL_SELECTION.model,
           reasoningEffort:
             option(args, "review-reasoning") ??
-            DEFAULT_CODEX_MODEL_SELECTION.reasoningEffort,
+            DEFAULT_REVIEWER_MODEL_SELECTION.reasoningEffort,
         },
       },
       execution: {
@@ -78,10 +81,11 @@ async function main(): Promise<void> {
         harness: {
           kind: "codex-sdk",
           model:
-            option(args, "worker-model") ?? DEFAULT_CODEX_MODEL_SELECTION.model,
+            option(args, "worker-model") ??
+            DEFAULT_WORKER_MODEL_SELECTION.model,
           reasoningEffort:
             option(args, "worker-reasoning") ??
-            DEFAULT_CODEX_MODEL_SELECTION.reasoningEffort,
+            DEFAULT_WORKER_MODEL_SELECTION.reasoningEffort,
         },
       },
       delivery: { kind: option(args, "delivery") ?? "regular" },

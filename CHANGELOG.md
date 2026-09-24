@@ -2,6 +2,10 @@
 
 This file records public releases of Factory. See [BUILD-STATUS.md](docs/BUILD-STATUS.md) for development acceptance evidence.
 
+## Unreleased
+
+- Default planner and reviewer execution to `gpt-5.6-sol` with medium reasoning, and Work Item execution to `gpt-5.6-luna` with medium reasoning, while preserving independent explicit overrides for every role.
+
 ## 0.1.10 — 2026-09-24
 
 - Ground final Objective acceptance in bounded, supervisor-generated per-Work-Item Git deltas tied to exact result and integration identities.

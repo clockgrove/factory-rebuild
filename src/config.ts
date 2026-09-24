@@ -17,10 +17,23 @@ export interface CodexModelSelection {
   reasoningEffort: CodexReasoningEffort;
 }
 
-export const DEFAULT_CODEX_MODEL_SELECTION: CodexModelSelection = {
+export const DEFAULT_PLANNER_MODEL_SELECTION: CodexModelSelection = {
   model: "gpt-5.6-sol",
   reasoningEffort: "medium",
 };
+
+export const DEFAULT_REVIEWER_MODEL_SELECTION: CodexModelSelection = {
+  model: "gpt-5.6-sol",
+  reasoningEffort: "medium",
+};
+
+export const DEFAULT_WORKER_MODEL_SELECTION: CodexModelSelection = {
+  model: "gpt-5.6-luna",
+  reasoningEffort: "medium",
+};
+
+/** @deprecated Use the role-specific default constants. */
+export const DEFAULT_CODEX_MODEL_SELECTION = DEFAULT_PLANNER_MODEL_SELECTION;
 
 export type ExecutionConfig =
   | {
