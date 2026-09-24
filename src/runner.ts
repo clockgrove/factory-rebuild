@@ -35,6 +35,7 @@ import { git, linuxProcessIdentity, pinnedGit } from "./process.js";
 import {
   AcceptanceDecisionRequired,
   assertPinnedNpmScripts,
+  objectiveReviewEvidence,
   reviewAcceptance,
   validateTree,
 } from "./validation.js";
@@ -438,6 +439,12 @@ export async function runObjective(
     );
     let finalEvidence;
     try {
+      const objectiveEvidence = objectiveReviewEvidence({
+        state,
+        checkout: config.checkout,
+        integratedCommitSha: integratedSha,
+        integratedTreeSha: finalTree,
+      });
       const reviewFinal = () =>
         reviewAcceptance({
           model: planningModel,
@@ -447,28 +454,9 @@ export async function runObjective(
           evidence: commandEvidence,
           criteria: objectiveCriteria(issue.body),
           sources: planningSources(issue.body, state.baseSha, config.checkout),
+          evidenceSources: objectiveEvidence.evidence,
           decisions: state.finalAcceptanceDecisions,
-          observations: JSON.stringify({
-            integratedCommitSha: integratedSha,
-            integratedTreeSha: finalTree,
-            work: graph.items.map((item) => {
-              const work = state.work[item.id]!;
-              return {
-                id: item.id,
-                status: work.status,
-                resultCommitSha: work.changeRef,
-                resultTreeSha: work.treeSha,
-                validation: work.validation,
-                pullRequest: work.pullRequest,
-                integratedCommitSha: work.integratedSha,
-                selectedAssetSet: work.selectedAssetSet,
-                selectedAsset: work.assets?.find(
-                  (set) => set.id === work.selectedAssetSet,
-                ),
-                selection: work.selection,
-              };
-            }),
-          }),
+          observations: objectiveEvidence.observations,
         });
       finalEvidence = await diagnostics.span(
         {
@@ -492,7 +480,12 @@ export async function runObjective(
           outcome: "waiting",
           durationMs: Date.now() - finalValidationStarted,
           metadata: { treeSha: finalTree },
-          detail: error.pending.question,
+          detail: JSON.stringify({
+            question: error.pending.question,
+            detail: error.pending.detail,
+            reviewFinding: error.pending.reviewFinding ?? null,
+            reviewRejection: error.pending.reviewRejection ?? null,
+          }),
         });
         return state;
       }

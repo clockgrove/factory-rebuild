@@ -433,6 +433,23 @@ ${commands.map((command) => `- \`${command}\``).join("\n")}
             request.commands[0].treeSha,
           );
           assert.match(observations.work[0].resultCommitSha, /^[0-9a-f]{40}$/);
+          assert.deepEqual(
+            observations.work[0].validationCommands,
+            request.commands,
+          );
+          assert.equal(observations.work[0].validation, undefined);
+          assert.equal(request.evidence.length, 1);
+          assert.equal(
+            request.evidence[0].path,
+            "Work Item Git delta: pnpm-workspace-bootstrap",
+          );
+          assert.equal(request.evidence[0].complete, true);
+          assert.match(
+            request.evidence[0].content,
+            /Factory supervisor exact Git evidence/,
+          );
+          assert.doesNotMatch(request.evidence[0].content, /"criteria":/);
+          assert.doesNotMatch(request.observations, /"criteria":/);
         }
         return {
           findings: request.criteria.map((reviewedCriterion) => ({

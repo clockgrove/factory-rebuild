@@ -14,6 +14,8 @@ import type {
   PlanningModel,
   PlanningRequest,
   PlanReviewRequest,
+  ResultReviewEvidenceSource,
+  ResultReviewFinding,
   ValidationCommandReceipt,
   WorkGraph,
 } from "./contracts.js";
@@ -181,20 +183,14 @@ export class CodexPlanningModel implements PlanningModel {
     sources: { path: string; content: string }[];
     change: string;
     commands: ValidationCommandReceipt[];
+    evidence?: ResultReviewEvidenceSource[];
     observations?: string;
-  }): Promise<{
-    findings: {
-      criterion: string;
-      verdict: "pass" | "needs-human" | "refuse";
-      source: string;
-      quote: string;
-      detail: string;
-      question: string;
-    }[];
-  }> {
+  }): Promise<{ findings: ResultReviewFinding[] }> {
     const thread = this.startThread(this.reviewer);
+    const promptSources = [...request.sources, ...(request.evidence ?? [])];
+    request = { ...request, sources: promptSources };
     const identityInstructions =
-      "The result identity is a Git tree. Delivery observations separately name every Git commit and Git tree; never compare them as the same object type. Command pass evidence is an ordered array of canonical receipts. Each receipt names its stable zero-based index, command, successful exit code 0, and exact result tree, produced only after Factory verified the result commit resolves to that tree. ";
+      "The result identity is a Git tree. Delivery observations separately name every Git commit and Git tree; never compare them as the same object type. Command pass evidence is an ordered array of canonical receipts. Each receipt names its stable zero-based index, command, successful exit code 0, and exact result tree, produced only after Factory verified the result commit resolves to that tree. Sources whose path begins with Work Item Git delta are supervisor-generated exact result evidence: they bind accepted path ownership and that item's execution base, actual result base, result commit/tree, integrated commit/tree, changed paths, and raw patch excerpts. Treat each such path as an allowed supplied source path. Use those sources for criteria about one Work Item's exact delta or its relationship to another item's owned paths. Copy quotes exactly as serialized; never decode an escaped string into a quote. ";
     const result = await thread.run(
       identityInstructions +
         `Independently review the exact result of a Factory Objective. Decide each criterion only from the supplied pinned source, command pass evidence, delivery observations when supplied, and exact Git change packet. The packet has bounded text patch excerpts, explicit truncation flags, line counts, and exact blob identities/sizes. Never pass a criterion when relevant text is truncated or omitted unless other supplied evidence independently proves it. Blob identity alone does not prove opaque content semantics; ask for a focused human decision when missing evidence matters. A shell exit code alone proves only that command's assertion. Return one finding per criterion in the given order. Pass only when the evidence proves that criterion; otherwise needs-human with one specific question. Use refuse for a directly disproved criterion. For source, use exactly a supplied pinned source path, or exactly one of "Exact Git change packet", "Command pass evidence", or "Delivery observations". For quote, copy an exact contiguous fragment from that named input. Never invent a source label or paraphrase a quote. Never edit or run commands.\n\nBase: ${request.baseSha}\nResult tree: ${request.treeSha}\nCriteria: ${JSON.stringify(request.criteria)}\nCommands: ${JSON.stringify(request.commands)}\nDelivery observations: ${request.observations ?? "none"}\nSources: ${request.sources.map((s) => `--- ${s.path} ---\n${s.content}`).join("\n")}\nChange packet:\n${request.change}`,

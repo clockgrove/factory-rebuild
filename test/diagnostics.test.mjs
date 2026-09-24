@@ -17,6 +17,7 @@ import {
   readAgentTimeline,
   readWorkerOutput,
   redactDiagnosticDetail,
+  StateDiagnostics,
 } from "../dist/diagnostics.js";
 import { validateTree } from "../dist/validation.js";
 import { stateRoot } from "../dist/config.js";
@@ -68,6 +69,55 @@ test("private diagnostics redact secrets and validation streams command output",
     assert.equal(
       statSync(diagnosticPath("example/diagnostics", 1)).mode & 0o777,
       0o600,
+    );
+    const pendingTree = "a".repeat(40);
+    const stateDiagnostics = new StateDiagnostics(
+      emitter,
+      {
+        schemaVersion: 2,
+        repository: "example/diagnostics",
+        objective: 1,
+        runId: "run-review",
+        configDigest: "b".repeat(64),
+        baseSha: "c".repeat(40),
+        graph: { objective: 1, baseSha: "c".repeat(40), items: [] },
+        issueByItemId: {},
+        work: {},
+        finalAcceptancePending: {
+          criterion: "criterion",
+          treeSha: pendingTree,
+          source: "OBJECTIVE",
+          quote: "missing quote",
+          question: "Inspect the result",
+          detail: "Reviewer evidence was rejected",
+          reviewFinding: {
+            criterion: "criterion",
+            verdict: "pass",
+            source: "OBJECTIVE",
+            quote: "missing quote",
+            detail: "Unsupported",
+            question: "",
+          },
+          reviewRejection: {
+            field: "quote",
+            reason: "quote-not-found",
+          },
+        },
+      },
+      "regular",
+      1,
+    );
+    stateDiagnostics.observe();
+    const pendingDiagnostic = readDiagnostics("example/diagnostics", 1).find(
+      (event) => event.operation === "objective-acceptance-pending",
+    );
+    assert.deepEqual(JSON.parse(pendingDiagnostic.detail).reviewRejection, {
+      field: "quote",
+      reason: "quote-not-found",
+    });
+    assert.equal(
+      JSON.parse(pendingDiagnostic.detail).reviewFinding.quote,
+      "missing quote",
     );
     const tree = execFileSync(
       "git",
