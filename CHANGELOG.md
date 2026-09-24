@@ -2,6 +2,12 @@
 
 This file records public releases of Factory. See [BUILD-STATUS.md](docs/BUILD-STATUS.md) for development acceptance evidence.
 
+## 0.1.8 — 2026-09-23
+
+- Review the complete proposed plan, including command-authority receipts and exact final integrated-head commands, rather than only the inner Work Item graph.
+- Bind the canonical plan packet, independent review result, and installation configuration to schemaVersion 2 planning candidates and exact-digest human decisions.
+- Activate an unchanged accepted preview with deterministic verification and no second planning-review model call; reject stale, configuration-drifted, or review-tampered candidates before GitHub projection.
+
 ## 0.1.7 — 2026-09-23
 
 - Persist explicit, independently selectable Codex model and reasoning choices for planning, review, and Work Item execution instead of inheriting ambient user configuration.
