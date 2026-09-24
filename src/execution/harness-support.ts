@@ -13,8 +13,12 @@ import {
   renameSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, join, resolve } from "node:path";
-import type { HarnessRequest, ProducedAssetSet } from "../contracts.js";
+import { dirname, isAbsolute, join, resolve, sep } from "node:path";
+import type {
+  AuthenticationRequest,
+  HarnessRequest,
+  ProducedAssetSet,
+} from "../contracts.js";
 import { parseProducedAssetSets } from "../media.js";
 
 export function privateProgress(path: string, event: unknown): void {
@@ -65,7 +69,7 @@ export function authenticationFailure(
   const commands = {
     codex: "codex login",
     claude: "claude auth login",
-    "github-copilot": "copilot auth login",
+    "github-copilot": "copilot",
   } as const;
   const command = commands[provider];
   return {
@@ -73,6 +77,81 @@ export function authenticationFailure(
     error: `Authentication required for ${provider}; run \`${command}\` in the developer environment, then retry the Work Item`,
     authentication: { provider, command },
   };
+}
+
+export function parseAuthenticationRequest(
+  value: unknown,
+): AuthenticationRequest | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    return undefined;
+  const request = value as Record<string, unknown>;
+  return typeof request.provider === "string" &&
+    request.provider.length > 0 &&
+    typeof request.command === "string" &&
+    request.command.length > 0
+    ? { provider: request.provider, command: request.command }
+    : undefined;
+}
+
+export function harnessFailure(
+  provider: "codex" | "claude" | "github-copilot",
+  error: unknown,
+  secrets: string[],
+): {
+  state: "failed";
+  error: string;
+  authentication?: { provider: string; command: string };
+} {
+  const failure = authenticationFailure(provider, error) ?? {
+    state: "failed" as const,
+    error: error instanceof Error ? error.message : String(error),
+  };
+  return { ...failure, error: redact(failure.error, secrets) };
+}
+
+function inside(root: string, path: string): boolean {
+  return path === root || path.startsWith(`${root}${sep}`);
+}
+
+/**
+ * Follow a path one component at a time so symlink/.. cannot escape and a
+ * dangling final symlink cannot be mistaken for a safe new file.
+ */
+export function pathInsideRoot(path: string, root: string): boolean {
+  try {
+    if (!path || path.includes("\0")) return false;
+    const lexicalRoot = resolve(root);
+    const realRoot = realpathSync(root);
+    let remainder = path;
+    if (isAbsolute(path)) {
+      const prefix = [lexicalRoot, realRoot]
+        .filter((candidate) => inside(candidate, path))
+        .sort((left, right) => right.length - left.length)[0];
+      if (!prefix) return false;
+      remainder = path.slice(prefix.length);
+    }
+    let current = realRoot;
+    for (const component of remainder.split(sep)) {
+      if (!component || component === ".") continue;
+      if (component === "..") {
+        current = dirname(current);
+      } else {
+        const next = join(current, component);
+        const entry = lstatSync(next, { throwIfNoEntry: false });
+        if (entry?.isSymbolicLink()) {
+          // realpathSync intentionally rejects dangling symlinks, including a
+          // final Write destination that would otherwise redirect later.
+          current = realpathSync(next);
+        } else {
+          current = next;
+        }
+      }
+      if (!inside(realRoot, current)) return false;
+    }
+    return inside(realRoot, current);
+  } catch {
+    return false;
+  }
 }
 
 export function writeHarnessResult(path: string, value: unknown): void {

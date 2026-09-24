@@ -17,6 +17,7 @@ import type {
   HarnessRequest,
   HarnessResult,
 } from "../contracts.js";
+import { AuthenticationRequiredError } from "../contracts.js";
 import type { ClaudeAgentSdkConfig } from "../config.js";
 import { parseProducedAssetSets } from "../media.js";
 import {
@@ -24,6 +25,7 @@ import {
   processGroupExists,
   sanitizedWorkerEnvironment,
 } from "../process.js";
+import { parseAuthenticationRequest } from "./harness-support.js";
 
 interface ClaudeWorkerHandleData {
   pid: number;
@@ -72,7 +74,7 @@ export function claudeWorkerEnvironment(
     credentialDirectory,
     claudeLocalAuthenticationEnvironment,
   );
-  environment.CLAUDE_AGENT_SDK_CLIENT_APP = "clockgrove-factory/0.1.7";
+  environment.CLAUDE_AGENT_SDK_CLIENT_APP = "clockgrove-factory/0.1.10";
   return environment;
 }
 
@@ -167,10 +169,16 @@ export class ClaudeAgentSdkHarness implements AgentHarness {
       const result = JSON.parse(readFileSync(data.resultPath, "utf8")) as {
         state: "complete" | "failed";
         error?: string;
+        authentication?: unknown;
       };
+      const authentication = parseAuthenticationRequest(result.authentication);
       return result.state === "complete"
         ? { state: "complete" }
-        : { state: "failed", detail: result.error };
+        : {
+            state: "failed",
+            detail: result.error,
+            ...(authentication && { authentication }),
+          };
     }
     const current = linuxProcessIdentity(data.pid);
     return current?.startTime === data.startTime &&
@@ -224,8 +232,14 @@ export class ClaudeAgentSdkHarness implements AgentHarness {
         );
         continue;
       }
-      if (observed.state !== "complete")
+      if (observed.state !== "complete") {
+        if (observed.authentication)
+          throw new AuthenticationRequiredError(
+            observed.detail ?? "Claude authentication required",
+            observed.authentication,
+          );
         throw new Error(observed.detail ?? "Claude harness worker failed");
+      }
       const result: unknown = JSON.parse(readFileSync(data.resultPath, "utf8"));
       if (!result || typeof result !== "object" || Array.isArray(result))
         throw new Error("Claude harness result is not an object");

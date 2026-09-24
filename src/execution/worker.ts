@@ -5,7 +5,7 @@ import type { HarnessRequest } from "../contracts.js";
 import type { ThreadEvent } from "@openai/codex-sdk";
 import type { CodexModelSelection } from "../config.js";
 import {
-  authenticationFailure,
+  harnessFailure,
   privateProgress,
   readProducedAssets,
   redact,
@@ -143,10 +143,7 @@ async function main(): Promise<void> {
   } catch (error) {
     writeHarnessResult(
       resultPath,
-      authenticationFailure("codex", error) ?? {
-        state: "failed",
-        error: error instanceof Error ? error.message : String(error),
-      },
+      harnessFailure("codex", error, redactionValues),
     );
     process.exitCode = 1;
   }

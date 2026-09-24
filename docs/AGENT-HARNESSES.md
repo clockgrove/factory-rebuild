@@ -24,6 +24,19 @@ Every harness must declare this exact capability record before composition:
 }
 ```
 
+At runtime, `observe` may return a typed local-login request alongside the
+failure detail. Built-in `collect` implementations propagate that request and
+the runners persist it in Work Item state, so both human-readable and JSON
+`factory status` output identify the provider and login command:
+
+```ts
+{
+  state: "failed",
+  detail: "Authentication required ...",
+  authentication: { provider: "...", command: "..." }
+}
+```
+
 Factory rejects a harness with incompatible capabilities. A conforming harness:
 
 - operates only in the supplied Factory-owned worktree and leaves `HEAD`
@@ -142,7 +155,7 @@ request to authenticate in the developer environment:
 ```sh
 codex login
 claude auth login
-copilot auth login
+copilot
 ```
 
 After login, the operator explicitly starts a fresh unpublished attempt:

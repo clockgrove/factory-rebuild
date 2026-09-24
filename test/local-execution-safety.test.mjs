@@ -117,6 +117,79 @@ test("unrelated existing symlink, submodule, and .gitmodules do not block an own
   assert.match(result.changeRef, /^[a-f0-9]{40}$/);
 });
 
+test("legacy schemaVersion 2 Codex handles gain the stable adapter identity on reattach", async () => {
+  const root = mkdtempSync(join(tmpdir(), "factory-local-legacy-handle-"));
+  try {
+    const worktree = join(root, "worktrees", "attempt");
+    mkdirSync(worktree, { recursive: true });
+    const observed = [];
+    const harness = {
+      capabilities: {
+        protocolVersion: 1,
+        worktree: "factory-owned-read-write",
+        head: "preserve",
+        lifecycle: "restart-safe-durable-handle",
+        publication: "controller-only",
+        assetSets: true,
+        authentication: "local-environment",
+      },
+      async start() {
+        throw new Error("not used");
+      },
+      async observe(handle) {
+        observed.push(handle.identity);
+        return { state: "running" };
+      },
+      async cancel() {},
+      async collect() {
+        return {};
+      },
+    };
+    const driver = new LocalExecutionDriver(
+      root,
+      join(root, "worktrees"),
+      harness,
+      1,
+      new LocalContentStore(join(root, "content")),
+      "codex-sdk",
+    );
+    const active = {
+      request: { attemptId: "attempt", baseSha: "a".repeat(40), item: {} },
+      worktree,
+      handle: { identity: "worker-1", data: {} },
+    };
+    assert.deepEqual(
+      await driver.observe({
+        provider: "local",
+        identity: "attempt",
+        data: active,
+      }),
+      { state: "running" },
+    );
+    assert.equal(active.adapterIdentity, "codex-sdk");
+    assert.deepEqual(observed, ["worker-1"]);
+
+    const registered = new LocalExecutionDriver(
+      root,
+      join(root, "worktrees"),
+      harness,
+      1,
+      new LocalContentStore(join(root, "content-registered")),
+      "example/registered@1",
+    );
+    await assert.rejects(
+      registered.observe({
+        provider: "local",
+        identity: "attempt",
+        data: { ...active, adapterIdentity: undefined },
+      }),
+      /uses another adapter/,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("new symlink and path escape stop collection", async () => {
   await assert.rejects(
     runCandidate((worktree, root) => {

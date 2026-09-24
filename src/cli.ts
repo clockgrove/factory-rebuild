@@ -314,6 +314,10 @@ async function main(): Promise<void> {
         `Objective #${objective}: ${state.graph.items.map((item) => describe(item.id)).join(", ")}; final validation ${state.finalValidation?.passed ? "passed" : state.cancelledAt ? "cancelled" : state.error ? "failed" : "pending"}${state.finalValidation?.passed && state.objectiveClosure !== "complete" ? "; Objective GitHub close pending" : ""}${state.error ? `; error: ${state.error}` : ""}${state.githubClosureError ? `; GitHub: ${state.githubClosureError}` : ""}`,
       );
       for (const [id, work] of Object.entries(state.work)) {
+        if (work.authentication)
+          console.log(
+            `Work Item ${id} requires ${work.authentication.provider} authentication; run \`${work.authentication.command}\` in the developer environment, then retry it.`,
+          );
         if (
           work.status === "waiting" &&
           work.step === "approve-result" &&

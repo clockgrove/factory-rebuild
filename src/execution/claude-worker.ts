@@ -11,7 +11,7 @@ import {
   type ClaudeWorkerInput,
 } from "./claude.js";
 import {
-  authenticationFailure,
+  harnessFailure,
   privateProgress,
   readProducedAssets,
   redact,
@@ -158,14 +158,10 @@ async function main(): Promise<void> {
       },
     });
   } catch (error) {
-    const failure = authenticationFailure("claude", error) ?? {
-      state: "failed" as const,
-      error: error instanceof Error ? error.message : String(error),
-    };
-    writeHarnessResult(resultPath, {
-      ...failure,
-      error: redact(failure.error, redactionValues),
-    });
+    writeHarnessResult(
+      resultPath,
+      harnessFailure("claude", error, redactionValues),
+    );
     process.exitCode = 1;
   }
 }

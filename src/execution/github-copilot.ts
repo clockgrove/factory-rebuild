@@ -18,12 +18,14 @@ import type {
   HarnessRequest,
   HarnessResult,
 } from "../contracts.js";
+import { AuthenticationRequiredError } from "../contracts.js";
 import { parseProducedAssetSets } from "../media.js";
 import {
   linuxProcessIdentity,
   processGroupExists,
   sanitizedWorkerEnvironment,
 } from "../process.js";
+import { parseAuthenticationRequest } from "./harness-support.js";
 
 interface GitHubCopilotWorkerHandleData {
   pid: number;
@@ -81,6 +83,8 @@ export function githubCopilotWorkerEnvironment(
   if (process.env.GH_CONFIG_DIR)
     environment.GH_CONFIG_DIR = process.env.GH_CONFIG_DIR;
   else delete environment.GH_CONFIG_DIR;
+  if (process.env.COPILOT_HOME)
+    environment.COPILOT_HOME = process.env.COPILOT_HOME;
   environment.COPILOT_SDK_DEFAULT_CONNECTION = "stdio";
   return environment;
 }
@@ -176,10 +180,16 @@ export class GitHubCopilotSdkHarness implements AgentHarness {
       const result = JSON.parse(readFileSync(data.resultPath, "utf8")) as {
         state: "complete" | "failed";
         error?: string;
+        authentication?: unknown;
       };
+      const authentication = parseAuthenticationRequest(result.authentication);
       return result.state === "complete"
         ? { state: "complete" }
-        : { state: "failed", detail: result.error };
+        : {
+            state: "failed",
+            detail: result.error,
+            ...(authentication && { authentication }),
+          };
     }
     const current = linuxProcessIdentity(data.pid);
     return current?.startTime === data.startTime &&
@@ -235,10 +245,16 @@ export class GitHubCopilotSdkHarness implements AgentHarness {
         );
         continue;
       }
-      if (observed.state !== "complete")
+      if (observed.state !== "complete") {
+        if (observed.authentication)
+          throw new AuthenticationRequiredError(
+            observed.detail ?? "GitHub Copilot authentication required",
+            observed.authentication,
+          );
         throw new Error(
           observed.detail ?? "GitHub Copilot harness worker failed",
         );
+      }
       const result: unknown = JSON.parse(readFileSync(data.resultPath, "utf8"));
       if (!result || typeof result !== "object" || Array.isArray(result))
         throw new Error("GitHub Copilot harness result is not an object");

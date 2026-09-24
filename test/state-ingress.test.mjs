@@ -88,6 +88,22 @@ test("persisted state validates identities and graph/work keys before use", () =
     () => parseFactoryState(invalidIntegratedStart, repository, objective),
     /integratedShaAtStart must be a SHA-1/,
   );
+  const authenticationRequired = state();
+  authenticationRequired.work.asset = {
+    status: "failed",
+    error: "Authentication required",
+    authentication: { provider: "codex", command: "codex login" },
+  };
+  assert.deepEqual(
+    parseFactoryState(authenticationRequired, repository, objective).work.asset
+      .authentication,
+    { provider: "codex", command: "codex login" },
+  );
+  authenticationRequired.work.asset.status = "pending";
+  assert.throws(
+    () => parseFactoryState(authenticationRequired, repository, objective),
+    /authentication request requires failed status/,
+  );
 });
 
 test("schemaVersion 2 state requires ordered exact-tree command receipts", () => {
@@ -526,6 +542,13 @@ test("persisted asset and active harness identities fail closed", () => {
     parseFactoryState(running, repository, objective).work.asset.execution.data
       .handle.data,
     "opaque-json-handle",
+  );
+  const legacyCodex = structuredClone(running);
+  delete legacyCodex.work.asset.execution.data.adapterIdentity;
+  assert.equal(
+    parseFactoryState(legacyCodex, repository, objective).work.asset.execution
+      .data.adapterIdentity,
+    undefined,
   );
 });
 

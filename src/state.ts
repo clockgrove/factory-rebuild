@@ -1,5 +1,6 @@
 import type {
   CapturedAssetSet,
+  AuthenticationRequest,
   AssetSelectionDecision,
   ExecutionHandle,
   ResultReviewCandidate,
@@ -66,6 +67,7 @@ export interface WorkState {
   selection?: AssetSelectionDecision;
   pullRequest?: number;
   error?: string;
+  authentication?: AuthenticationRequest;
   startedAt?: string;
   completedAt?: string;
   integratedSha?: string;
@@ -378,6 +380,18 @@ export function parseFactoryState(
       throw new Error(`Work Item ${id} has an invalid status`);
     if (item.step !== undefined && !steps.has(item.step as WorkStep))
       throw new Error(`Work Item ${id} has an invalid step`);
+    if (item.authentication !== undefined) {
+      const authentication = record(
+        item.authentication,
+        `work.${id}.authentication`,
+      );
+      string(authentication.provider, `${id}.authentication.provider`);
+      string(authentication.command, `${id}.authentication.command`);
+      if (item.status !== "failed")
+        throw new Error(
+          `Work Item ${id} authentication request requires failed status`,
+        );
+    }
     for (const key of ["baseSha", "executionBaseSha", "treeSha", "changeRef"])
       if (item[key] !== undefined) sha(item[key], `${id}.${key}`);
     if (
@@ -642,8 +656,9 @@ export function parseFactoryState(
         const handle = record(active.handle, `work.${id}.harness`);
         if (
           typeof active.worktree !== "string" ||
-          typeof active.adapterIdentity !== "string" ||
-          !active.adapterIdentity ||
+          (active.adapterIdentity !== undefined &&
+            (typeof active.adapterIdentity !== "string" ||
+              !active.adapterIdentity)) ||
           attemptedItem.id !== id ||
           (request.baseSha !== item.baseSha &&
             item.status !== "done" &&

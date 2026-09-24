@@ -315,7 +315,7 @@ export function compose(input: FactoryConfig): FactoryApplication {
     return composeLocal(
       config,
       new ClaudeAgentSdkHarness(
-        join(stateRoot(config.repository), "harness", "claude"),
+        join(stateRoot(config.repository), "harness"),
         config.execution.harness,
       ),
       CLAUDE_AGENT_SDK_ADAPTER_IDENTITY,
@@ -333,7 +333,7 @@ export function compose(input: FactoryConfig): FactoryApplication {
     return composeLocal(
       config,
       new GitHubCopilotSdkHarness(
-        join(stateRoot(config.repository), "harness", "github-copilot"),
+        join(stateRoot(config.repository), "harness"),
         config.execution.harness,
       ),
       GITHUB_COPILOT_SDK_ADAPTER_IDENTITY,

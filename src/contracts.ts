@@ -128,9 +128,26 @@ export interface ExecutionHandle {
   identity: string;
   data?: unknown;
 }
+export interface AuthenticationRequest {
+  /** Adapter/provider whose developer-local login is missing or expired. */
+  provider: string;
+  /** Interactive command the operator runs outside the detached worker. */
+  command: string;
+}
+export class AuthenticationRequiredError extends Error {
+  override readonly name = "AuthenticationRequiredError";
+
+  constructor(
+    message: string,
+    readonly authentication: AuthenticationRequest,
+  ) {
+    super(message);
+  }
+}
 export interface ExecutionObservation {
   state: "running" | "complete" | "failed" | "cancelled";
   detail?: string;
+  authentication?: AuthenticationRequest;
 }
 export interface ExecutionResult {
   treeSha: string;
@@ -167,6 +184,8 @@ export interface HarnessHandle {
 export interface HarnessObservation {
   state: "running" | "complete" | "failed" | "cancelled";
   detail?: string;
+  /** Present when the attempt is paused on a developer-local login. */
+  authentication?: AuthenticationRequest;
 }
 export interface HarnessResult {
   assets?: ProducedAssetSet[];

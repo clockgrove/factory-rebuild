@@ -1,16 +1,10 @@
-import { resolve, sep } from "node:path";
 import type {
   CopilotClientOptions,
   PermissionHandler,
   SessionConfig,
 } from "@github/copilot-sdk";
 import type { GitHubCopilotWorkerInput } from "./github-copilot.js";
-
-function isInsideWorktree(path: string, worktree: string): boolean {
-  const root = resolve(worktree);
-  const target = resolve(root, path);
-  return target === root || target.startsWith(`${root}${sep}`);
-}
+import { pathInsideRoot } from "./harness-support.js";
 
 function permissionHandler(input: GitHubCopilotWorkerInput): PermissionHandler {
   const allowed = new Set(input.config.permissionKinds);
@@ -30,7 +24,7 @@ function permissionHandler(input: GitHubCopilotWorkerInput): PermissionHandler {
         feedback: "Factory does not grant sandbox bypass",
       };
     const path = request.kind === "read" ? request.path : request.fileName;
-    return isInsideWorktree(path, input.request.worktree)
+    return pathInsideRoot(path, input.request.worktree)
       ? { kind: "approve-once" }
       : {
           kind: "reject",
@@ -56,7 +50,7 @@ export function githubCopilotClientOptions(
     enableRemoteSessions: false,
     clientInfo: {
       applicationName: "clockgrove-factory",
-      applicationVersion: "0.1.7",
+      applicationVersion: "0.1.10",
       integrationName: "github-copilot-agent-harness",
       integrationVersion: "1",
     },

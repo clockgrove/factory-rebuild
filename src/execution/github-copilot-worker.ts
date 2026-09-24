@@ -7,7 +7,7 @@ import {
   type GitHubCopilotWorkerInput,
 } from "./github-copilot.js";
 import {
-  authenticationFailure,
+  harnessFailure,
   privateProgress,
   readProducedAssets,
   redact,
@@ -18,6 +18,7 @@ import {
   githubCopilotClientOptions,
   githubCopilotSessionOptions,
 } from "./github-copilot-options.js";
+import { cleanupCopilotClient } from "./github-copilot-lifecycle.js";
 
 function progressEvent(
   event: SessionEvent,
@@ -45,27 +46,6 @@ function progressEvent(
   return observation;
 }
 
-async function stopClient(
-  client: import("@github/copilot-sdk").CopilotClient,
-): Promise<void> {
-  let timeout: ReturnType<typeof setTimeout> | undefined;
-  try {
-    await Promise.race([
-      client.stop(),
-      new Promise<never>((_, reject) => {
-        timeout = setTimeout(
-          () => reject(new Error("Copilot client stop timed out")),
-          2_000,
-        );
-      }),
-    ]);
-  } catch {
-    await client.forceStop();
-  } finally {
-    if (timeout) clearTimeout(timeout);
-  }
-}
-
 async function main(): Promise<void> {
   const [inputPath, resultPath] = process.argv.slice(2);
   if (!inputPath || !resultPath)
@@ -81,6 +61,7 @@ async function main(): Promise<void> {
   let progressLost = false;
   let client: import("@github/copilot-sdk").CopilotClient | undefined;
   let session: import("@github/copilot-sdk").CopilotSession | undefined;
+  let outcome: Record<string, unknown> | undefined;
   let sessionStart:
     Extract<SessionEvent, { type: "session.start" }>["data"] | undefined;
   try {
@@ -141,7 +122,7 @@ async function main(): Promise<void> {
         `GitHub Copilot SDK selected reasoning effort ${sessionStart.reasoningEffort}, expected ${input.config.reasoningEffort}`,
       );
     const assets = readProducedAssets(input.request);
-    writeHarnessResult(resultPath, {
+    outcome = {
       state: "complete",
       assets,
       evidence: {
@@ -155,25 +136,20 @@ async function main(): Promise<void> {
         authenticationType: authentication.authType,
         finalResponse: response?.data.content ?? "",
       },
-    });
-  } catch (error) {
-    const failure = authenticationFailure("github-copilot", error) ?? {
-      state: "failed" as const,
-      error: error instanceof Error ? error.message : String(error),
     };
-    writeHarnessResult(resultPath, {
-      ...failure,
-      error: redact(failure.error, redactionValues),
-    });
+  } catch (error) {
+    outcome = harnessFailure("github-copilot", error, redactionValues);
     process.exitCode = 1;
   } finally {
-    if (session && client) {
-      const sessionId = session.sessionId;
-      await session.disconnect().catch(() => undefined);
-      await client.deleteSession(sessionId).catch(() => undefined);
+    try {
+      if (client) await cleanupCopilotClient(client, session);
+    } catch (error) {
+      outcome = harnessFailure("github-copilot", error, redactionValues);
+      process.exitCode = 1;
     }
-    if (client) await stopClient(client);
   }
+  if (!outcome) throw new Error("GitHub Copilot worker produced no outcome");
+  writeHarnessResult(resultPath, outcome);
 }
 
 main().catch((error: unknown) => {

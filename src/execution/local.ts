@@ -29,6 +29,7 @@ import type {
   HarnessRequest,
   HarnessResult,
 } from "../contracts.js";
+import { AuthenticationRequiredError } from "../contracts.js";
 import { captureAssetSets, importSourceAssets } from "../media.js";
 import { parseProducedAssetSets } from "../media.js";
 import { checkStagedCandidate } from "./staged-candidate.js";
@@ -39,11 +40,13 @@ import {
   sanitizedWorkerEnvironment,
 } from "../process.js";
 import type { CodexModelSelection } from "../config.js";
+import { parseAuthenticationRequest } from "./harness-support.js";
 
 type Active = {
   request: ExecutionRequest;
   worktree: string;
-  adapterIdentity: string;
+  /** Missing only on pre-#55 schemaVersion 2 Codex handles. */
+  adapterIdentity?: string;
   handle: HarnessHandle;
   failure?: string;
 };
@@ -149,10 +152,16 @@ export class CodexHarness implements AgentHarness {
       const result = JSON.parse(readFileSync(data.resultPath, "utf8")) as {
         state: "complete" | "failed";
         error?: string;
+        authentication?: unknown;
       };
+      const authentication = parseAuthenticationRequest(result.authentication);
       return result.state === "complete"
         ? { state: "complete" }
-        : { state: "failed", detail: result.error };
+        : {
+            state: "failed",
+            detail: result.error,
+            ...(authentication && { authentication }),
+          };
     }
     const current = linuxProcessIdentity(data.pid);
     return current?.startTime === data.startTime &&
@@ -191,8 +200,14 @@ export class CodexHarness implements AgentHarness {
         await new Promise<void>((resolve) => setTimeout(resolve, 100));
         continue;
       }
-      if (observed.state !== "complete")
+      if (observed.state !== "complete") {
+        if (observed.authentication)
+          throw new AuthenticationRequiredError(
+            observed.detail ?? "Codex authentication required",
+            observed.authentication,
+          );
         throw new Error(observed.detail ?? "Codex harness worker failed");
+      }
       const result: unknown = JSON.parse(readFileSync(data.resultPath, "utf8"));
       if (!result || typeof result !== "object" || Array.isArray(result))
         throw new Error("Harness result is not an object");
@@ -300,6 +315,11 @@ export class LocalExecutionDriver implements ExecutionDriver {
       this.active.get(handle.identity) ?? (handle.data as Active | undefined);
     if (!active || handle.provider !== "local")
       throw new Error("Unknown local execution handle");
+    if (
+      active.adapterIdentity === undefined &&
+      this.adapterIdentity === "codex-sdk"
+    )
+      active.adapterIdentity = "codex-sdk";
     if (
       !resolve(active.worktree).startsWith(`${resolve(this.workRoot)}${sep}`) ||
       active.request.attemptId !== handle.identity ||

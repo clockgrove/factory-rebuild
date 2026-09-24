@@ -126,6 +126,7 @@ const claudeSettingSources = new Set<ClaudeSettingSource>([
   "project",
   "local",
 ]);
+const claudeFileTools = new Set(["Read", "Edit", "Write", "Glob", "Grep"]);
 
 const factoryRepositories = new Set([
   "clockgrove/factory",
@@ -359,6 +360,10 @@ export function validateConfig(value: unknown): FactoryConfig {
     );
     if (!tools.length)
       throw new Error("execution.harness.tools must name bounded SDK tools");
+    if (tools.some((tool) => !claudeFileTools.has(tool)))
+      throw new Error(
+        "execution.harness.tools supports only Read, Edit, Write, Glob, and Grep",
+      );
     const allowedTools = assertUniqueStrings(
       value.execution.harness.allowedTools,
       "execution.harness.allowedTools",

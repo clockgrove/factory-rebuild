@@ -10,6 +10,7 @@ import type {
   PlanningModel,
   WorkItem,
 } from "../contracts.js";
+import { AuthenticationRequiredError } from "../contracts.js";
 import { materializeAssetSet, selectedInputsForItem } from "../media.js";
 import { closeWorkItem } from "../completion.js";
 import { git } from "../process.js";
@@ -285,6 +286,12 @@ export async function runRegularGraph(args: {
       if (work.status !== "done")
         work.status = args.cancelled() ? "cancelled" : "failed";
       work.error = error instanceof Error ? error.message : String(error);
+      if (
+        error instanceof AuthenticationRequiredError &&
+        work.status === "failed"
+      )
+        work.authentication = error.authentication;
+      else delete work.authentication;
       save();
       throw error;
     }
