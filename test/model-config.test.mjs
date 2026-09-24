@@ -6,14 +6,36 @@ import { join, resolve } from "node:path";
 import test from "node:test";
 import { Codex } from "@openai/codex-sdk";
 import { CodexPlanningModel } from "../dist/compiler.js";
-import {
+import * as configModule from "../dist/config.js";
+import { codexWorkerInput } from "../dist/execution/local.js";
+import * as publicModule from "../dist/index.js";
+import { createTarget, factoryConfig } from "./support/integration-fixture.mjs";
+
+const {
   DEFAULT_PLANNER_MODEL_SELECTION,
   DEFAULT_REVIEWER_MODEL_SELECTION,
   DEFAULT_WORKER_MODEL_SELECTION,
   validateConfig,
-} from "../dist/config.js";
-import { codexWorkerInput } from "../dist/execution/local.js";
-import { createTarget, factoryConfig } from "./support/integration-fixture.mjs";
+} = configModule;
+
+test("package root exports only role-specific model defaults", () => {
+  assert.equal(
+    Object.hasOwn(publicModule, "DEFAULT_CODEX_MODEL_SELECTION"),
+    false,
+  );
+  assert.equal(
+    publicModule.DEFAULT_PLANNER_MODEL_SELECTION,
+    DEFAULT_PLANNER_MODEL_SELECTION,
+  );
+  assert.equal(
+    publicModule.DEFAULT_REVIEWER_MODEL_SELECTION,
+    DEFAULT_REVIEWER_MODEL_SELECTION,
+  );
+  assert.equal(
+    publicModule.DEFAULT_WORKER_MODEL_SELECTION,
+    DEFAULT_WORKER_MODEL_SELECTION,
+  );
+});
 
 test("configuration requires explicit selectable Codex models and reasoning", () => {
   const root = mkdtempSync(join(tmpdir(), "factory-model-config-"));
