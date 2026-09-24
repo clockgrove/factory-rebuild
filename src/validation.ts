@@ -4,7 +4,8 @@ import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { spawn, spawnSync } from "node:child_process";
 import { StringDecoder } from "node:string_decoder";
-import type { PlanningModel, WorkItem } from "./contracts.js";
+import type { CapturedAssetSet, PlanningModel, WorkItem } from "./contracts.js";
+import type { FactoryState } from "./state.js";
 import {
   pinnedGit,
   pinnedGitRaw,
@@ -50,6 +51,49 @@ export interface ValidationEvidence {
   treeSha: string;
   commands: { command: string; passed: true }[];
   criteria?: CriterionEvidence[];
+}
+
+/**
+ * Give result review the minimum authoritative run facts needed to evaluate
+ * source-declared scheduling and predecessor criteria. The atomic snapshot and
+ * accepted graph are lifecycle authority; diagnostics and worker prose are not.
+ */
+export function workItemReviewObservations(
+  state: FactoryState,
+  item: WorkItem,
+  selectedAsset?: CapturedAssetSet,
+): string {
+  const criterionText = item.acceptance.join("\n");
+  const namedByCriterion = (id: string): boolean => {
+    const escaped = id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    return new RegExp(
+      `(?:^|[^A-Za-z0-9_-])${escaped}(?:$|[^A-Za-z0-9_-])`,
+    ).test(criterionText);
+  };
+  const relevant = state.graph.items.filter((candidate) => {
+    return (
+      candidate.id === item.id ||
+      item.dependencies.includes(candidate.id) ||
+      namedByCriterion(candidate.id)
+    );
+  });
+  return JSON.stringify({
+    objectiveBaseSha: state.baseSha,
+    currentIntegratedSha: state.integratedSha ?? null,
+    reviewedItemId: item.id,
+    attempts: relevant.map((candidate) => {
+      const work = state.work[candidate.id]!;
+      return {
+        id: candidate.id,
+        declaredDependencies: candidate.dependencies,
+        attemptId: work.attempt ?? null,
+        startedAt: work.startedAt ?? null,
+        executionBaseSha: work.baseSha ?? null,
+        integratedSha: work.integratedSha ?? null,
+      };
+    }),
+    selectedAsset: selectedAsset ?? null,
+  });
 }
 
 function resultChangePacket(

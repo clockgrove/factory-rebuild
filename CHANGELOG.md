@@ -2,6 +2,12 @@
 
 This file records public releases of Factory. See [BUILD-STATUS.md](docs/BUILD-STATUS.md) for development acceptance evidence.
 
+## 0.1.4 — 2026-09-23
+
+- Supply Work Item result review with a bounded scheduling-provenance packet derived from the authoritative atomic snapshot and accepted graph.
+- Ground exact attempt, start-time, execution-base, dependency, peer-start, and integration-state findings in `Delivery observations`, while preserving criterion-specific human fallback for missing or contradictory evidence.
+- Add temporary-Git concurrent-root and negative provenance regressions, plus persisted attempt start-time validation.
+
 ## 0.1.3 — 2026-09-23
 
 - Turn an invalid independent graph-review response into an explicit planning decision on the pinned graph, never a clean automated pass.

@@ -69,6 +69,12 @@ test("persisted state validates identities and graph/work keys before use", () =
     () => parseFactoryState(wrongWork, repository, objective),
     /work\.asset/,
   );
+  const invalidStart = state();
+  invalidStart.work.asset.startedAt = "not-a-time";
+  assert.throws(
+    () => parseFactoryState(invalidStart, repository, objective),
+    /invalid startedAt/,
+  );
 });
 
 test("schemaVersion 1 state rejects legacy source paths and accepts explicit bindings", () => {
