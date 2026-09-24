@@ -2,7 +2,7 @@
 
 This file records public releases of Factory. See [BUILD-STATUS.md](docs/BUILD-STATUS.md) for development acceptance evidence.
 
-## Unreleased
+## 0.1.9 — 2026-09-24
 
 - Bind every ordered validation-command receipt to its exact result tree, stable index, and successful exit code for Work Item and final Objective review.
 - Name result and integrated commit/tree identities separately in reviewer observations, and explicitly teach the reviewer that Git commits and trees are different object types.
