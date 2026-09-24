@@ -4,7 +4,12 @@ import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { spawn, spawnSync } from "node:child_process";
 import { StringDecoder } from "node:string_decoder";
-import type { CapturedAssetSet, PlanningModel, WorkItem } from "./contracts.js";
+import type {
+  CapturedAssetSet,
+  PlanningModel,
+  ValidationCommandReceipt,
+  WorkItem,
+} from "./contracts.js";
 import type { FactoryState } from "./state.js";
 import {
   pinnedGit,
@@ -49,7 +54,7 @@ export class AcceptanceDecisionRequired extends Error {
 
 export interface ValidationEvidence {
   treeSha: string;
-  commands: { command: string; passed: true }[];
+  commands: ValidationCommandReceipt[];
   criteria?: CriterionEvidence[];
 }
 
@@ -89,8 +94,8 @@ export function workItemReviewObservations(
     );
   });
   return JSON.stringify({
-    objectiveBaseSha: state.baseSha,
-    currentIntegratedSha: state.integratedSha ?? null,
+    objectiveBaseCommitSha: state.baseSha,
+    currentIntegratedCommitSha: state.integratedSha ?? null,
     reviewedItemId: item.id,
     delivery,
     attempts: relevant.map((candidate) => {
@@ -102,16 +107,17 @@ export function workItemReviewObservations(
         resources: candidate.resources ?? [],
         attemptId: work.attempt ?? null,
         startedAt: work.startedAt ?? null,
-        executionBaseSha: work.executionBaseSha ?? null,
+        executionBaseCommitSha: work.executionBaseSha ?? null,
         integrationAtStart:
           work.integratedShaAtStart === undefined
             ? { recorded: false }
             : {
                 recorded: true,
-                integratedSha: work.integratedShaAtStart,
+                integratedCommitSha: work.integratedShaAtStart,
               },
-        resultHeadSha: work.changeRef ?? null,
-        integratedSha: work.integratedSha ?? null,
+        resultCommitSha: work.changeRef ?? null,
+        resultTreeSha: work.treeSha ?? null,
+        integratedCommitSha: work.integratedSha ?? null,
       };
     }),
     selectedAsset: selectedAsset ?? null,
@@ -250,6 +256,18 @@ export async function reviewAcceptance(args: {
   const observedTree = pinnedGit(checkout, "rev-parse", `${commit}^{tree}`);
   if (observedTree !== evidence.treeSha)
     throw new Error("Acceptance result tree differs from command evidence");
+  for (const [index, receipt] of evidence.commands.entries()) {
+    if (
+      receipt.index !== index ||
+      !receipt.command ||
+      receipt.passed !== true ||
+      receipt.exitCode !== 0 ||
+      receipt.treeSha !== evidence.treeSha
+    )
+      throw new Error(
+        `Acceptance command receipt ${index} is not bound to the exact result tree and order`,
+      );
+  }
   const { change, truncatedPaths } = resultChangePacket(
     checkout,
     baseSha,
@@ -456,7 +474,13 @@ export async function validateTree(
         throw new Error(
           `Validation command failed (${result.status}): ${check}: ${output}`,
         );
-      evidence.commands.push({ command: check, passed: true });
+      evidence.commands.push({
+        index,
+        command: check,
+        passed: true,
+        exitCode: 0,
+        treeSha,
+      });
     }
     if (pinnedGit(worktree, "status", "--porcelain"))
       throw new Error("Validation command modified the result tree");

@@ -206,7 +206,7 @@ export async function runObjective(
     let state = readState(config.repository, objective);
     if (state) {
       if (
-        state.schemaVersion !== 1 ||
+        state.schemaVersion !== 2 ||
         state.repository !== config.repository ||
         state.configDigest !== installationConfigDigest
       ) {
@@ -311,7 +311,7 @@ export async function runObjective(
         () => github.projectGraph({ graph, objectiveIssue: objective }),
       );
       state = {
-        schemaVersion: 1,
+        schemaVersion: 2,
         repository: config.repository,
         objective,
         runId: randomUUID(),
@@ -449,16 +449,18 @@ export async function runObjective(
           sources: planningSources(issue.body, state.baseSha, config.checkout),
           decisions: state.finalAcceptanceDecisions,
           observations: JSON.stringify({
-            integratedSha,
+            integratedCommitSha: integratedSha,
+            integratedTreeSha: finalTree,
             work: graph.items.map((item) => {
               const work = state.work[item.id]!;
               return {
                 id: item.id,
                 status: work.status,
-                treeSha: work.treeSha,
+                resultCommitSha: work.changeRef,
+                resultTreeSha: work.treeSha,
                 validation: work.validation,
                 pullRequest: work.pullRequest,
-                integratedSha: work.integratedSha,
+                integratedCommitSha: work.integratedSha,
                 selectedAssetSet: work.selectedAssetSet,
                 selectedAsset: work.assets?.find(
                   (set) => set.id === work.selectedAssetSet,

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -320,6 +321,195 @@ test("regular application path runs a source-grounded concurrent DAG with stable
   });
 });
 
+test("pnpm Work Item and final review auto-pass from exact-tree command receipts", async () => {
+  await fixture("pnpm-receipt-integration", async (root) => {
+    const target = createTarget(root);
+    const fakeRoot = join(root, "fake");
+    const bin = join(root, "bin");
+    mkdirSync(bin);
+    writeFileSync(
+      join(bin, "pnpm"),
+      '#!/bin/sh\nif [ "$1" = install ]; then test -f pnpm-lock.yaml && test -f pnpm-workspace.yaml; exit $?; fi\nexec npm run "$1" --ignore-scripts\n',
+    );
+    chmodSync(join(bin, "pnpm"), 0o755);
+    const commands = [
+      "pnpm install --frozen-lockfile --ignore-scripts",
+      "pnpm check",
+      "pnpm test",
+    ];
+    const criterion =
+      "The ordered frozen, lifecycle-disabled install, check, and test commands pass at the exact result tree.";
+    const bootstrap = item("pnpm-workspace-bootstrap", {
+      path: "package.json",
+      command: commands[0],
+    });
+    bootstrap.acceptance = [criterion];
+    bootstrap.ownedPaths = [
+      ".gitignore",
+      "package.json",
+      "pnpm-lock.yaml",
+      "pnpm-workspace.yaml",
+      "src/index.js",
+      "test/index.test.js",
+    ];
+    bootstrap.validation = commands.map((command) => ({
+      command,
+      provenance: "source-declared",
+      source: "OBJECTIVE",
+    }));
+    const graph = {
+      objective,
+      baseSha: target.baseSha,
+      items: [bootstrap],
+    };
+    const objectiveBody = `# Exact-tree pnpm receipt integration
+
+## Work Item
+
+- ${criterion}
+- ${commands.map((command) => `\`${command}\``).join("\n- ")}
+
+## Acceptance
+
+- ${criterion}
+
+## Final validation
+
+${commands.map((command) => `- \`${command}\``).join("\n")}
+`;
+    const reviewedScopes = new Set();
+    const planningModel = {
+      async generateStructured() {
+        return structuredClone(graph);
+      },
+      async reviewGraph() {
+        return { findings: [] };
+      },
+      async reviewResult(request) {
+        assert.deepEqual(
+          request.commands.map((receipt) => receipt.index),
+          [0, 1, 2],
+        );
+        assert.deepEqual(
+          request.commands.map((receipt) => receipt.command),
+          commands,
+        );
+        assert.ok(
+          request.commands.every(
+            (receipt) =>
+              receipt.passed === true &&
+              receipt.exitCode === 0 &&
+              receipt.treeSha === request.treeSha,
+          ),
+        );
+        const observations = JSON.parse(request.observations);
+        if (observations.reviewedItemId) {
+          reviewedScopes.add("work-item");
+          const attempt = observations.attempts[0];
+          assert.match(attempt.resultCommitSha, /^[0-9a-f]{40}$/);
+          assert.equal(attempt.resultTreeSha, request.treeSha);
+          assert.equal(
+            git(
+              target.checkout,
+              "rev-parse",
+              `${attempt.resultCommitSha}^{tree}`,
+            ),
+            attempt.resultTreeSha,
+          );
+        } else {
+          reviewedScopes.add("objective");
+          assert.match(observations.integratedCommitSha, /^[0-9a-f]{40}$/);
+          assert.equal(observations.integratedTreeSha, request.treeSha);
+          assert.equal(
+            git(
+              target.checkout,
+              "rev-parse",
+              `${observations.integratedCommitSha}^{tree}`,
+            ),
+            observations.integratedTreeSha,
+          );
+          assert.equal(
+            observations.work[0].resultTreeSha,
+            request.commands[0].treeSha,
+          );
+          assert.match(observations.work[0].resultCommitSha, /^[0-9a-f]{40}$/);
+        }
+        return {
+          findings: request.criteria.map((reviewedCriterion) => ({
+            criterion: reviewedCriterion,
+            verdict: "pass",
+            source: "Command pass evidence",
+            quote: JSON.stringify(request.commands[0]),
+            detail:
+              "The canonical receipts prove the ordered commands passed at the exact result tree.",
+            question: "",
+          })),
+        };
+      },
+    };
+    const descriptor = {
+      config: factoryConfig(
+        target.checkout,
+        "example/pnpm-receipt-integration",
+        "regular",
+        1,
+      ),
+      graph,
+      objectiveBody,
+      fakeRoot,
+      planningModel,
+      actions: {
+        "pnpm-workspace-bootstrap": {
+          files: [
+            { path: ".gitignore", text: "node_modules/\n" },
+            {
+              path: "package.json",
+              text: `${JSON.stringify(
+                {
+                  name: "factory-pnpm-receipt-fixture",
+                  private: true,
+                  scripts: {
+                    check: "node --check src/index.js",
+                    test: "node --test",
+                  },
+                },
+                null,
+                2,
+              )}\n`,
+            },
+            {
+              path: "pnpm-lock.yaml",
+              text: "lockfileVersion: '9.0'\n\nsettings:\n  autoInstallPeers: true\n  excludeLinksFromLockfile: false\n\nimporters:\n\n  .: {}\n",
+            },
+            { path: "pnpm-workspace.yaml", text: "packages: []\n" },
+            { path: "src/index.js", text: "export const value = 42;\n" },
+            {
+              path: "test/index.test.js",
+              text: "import assert from 'node:assert/strict';\nimport test from 'node:test';\nimport { value } from '../src/index.js';\ntest('value', () => assert.equal(value, 42));\n",
+            },
+          ],
+        },
+      },
+    };
+    const previousPath = process.env.PATH;
+    process.env.PATH = `${bin}:${previousPath}`;
+    try {
+      const { application } = makeApplication(descriptor);
+      const acceptedPlan = await application.planObjective(objective);
+      const completed = await application.runObjective(objective, acceptedPlan);
+      assert.equal(completed.finalValidation.passed, true);
+      assert.equal(completed.finalAcceptancePending, undefined);
+      assert.equal(
+        completed.work["pnpm-workspace-bootstrap"].acceptancePending,
+        undefined,
+      );
+      assert.deepEqual(reviewedScopes, new Set(["work-item", "objective"]));
+    } finally {
+      process.env.PATH = previousPath;
+    }
+  });
+});
+
 test("Work Item review receives exact concurrent-attempt provenance from run state", async () => {
   await fixture("result-provenance", async (root) => {
     const target = createTarget(root);
@@ -387,7 +577,7 @@ test("Work Item review receives exact concurrent-attempt provenance from run sta
         let observations;
         if (provenanceCriterion) {
           observations = JSON.parse(request.observations);
-          assert.equal(observations.objectiveBaseSha, target.baseSha);
+          assert.equal(observations.objectiveBaseCommitSha, target.baseSha);
           const attempts = Object.fromEntries(
             observations.attempts.map((attempt) => [attempt.id, attempt]),
           );
@@ -401,36 +591,41 @@ test("Work Item review receives exact concurrent-attempt provenance from run sta
             assert.deepEqual(Object.keys(attempts[id]).sort(), [
               "attemptId",
               "declaredDependencies",
-              "executionBaseSha",
+              "executionBaseCommitSha",
               "id",
-              "integratedSha",
+              "integratedCommitSha",
               "integrationAtStart",
               "ownedPaths",
               "resources",
-              "resultHeadSha",
+              "resultCommitSha",
+              "resultTreeSha",
               "startedAt",
             ]);
             assert.match(attempts[id].attemptId, /^[0-9a-f-]{36}$/);
-            assert.equal(attempts[id].executionBaseSha, target.baseSha);
+            assert.equal(attempts[id].executionBaseCommitSha, target.baseSha);
             assert.deepEqual(attempts[id].integrationAtStart, {
               recorded: true,
-              integratedSha: null,
+              integratedCommitSha: null,
             });
-            assert.match(attempts[id].resultHeadSha, /^[0-9a-f]{40}$/);
+            assert.match(attempts[id].resultCommitSha, /^[0-9a-f]{40}$/);
+            assert.match(attempts[id].resultTreeSha, /^[0-9a-f]{40}$/);
             assert.ok(Number.isFinite(Date.parse(attempts[id].startedAt)));
           }
           if (observations.reviewedItemId === "rc-left") {
-            assert.equal(observations.currentIntegratedSha, null);
-            assert.equal(attempts["rc-left"].integratedSha, null);
-            assert.equal(attempts["rc-right"].integratedSha, null);
+            assert.equal(observations.currentIntegratedCommitSha, null);
+            assert.equal(attempts["rc-left"].integratedCommitSha, null);
+            assert.equal(attempts["rc-right"].integratedCommitSha, null);
           } else {
             assert.equal(observations.reviewedItemId, "rc-right");
-            assert.match(observations.currentIntegratedSha, /^[0-9a-f]{40}$/);
-            assert.equal(
-              attempts["rc-left"].integratedSha,
-              observations.currentIntegratedSha,
+            assert.match(
+              observations.currentIntegratedCommitSha,
+              /^[0-9a-f]{40}$/,
             );
-            assert.equal(attempts["rc-right"].integratedSha, null);
+            assert.equal(
+              attempts["rc-left"].integratedCommitSha,
+              observations.currentIntegratedCommitSha,
+            );
+            assert.equal(attempts["rc-right"].integratedCommitSha, null);
           }
           reviewed.add(observations.reviewedItemId);
         }
@@ -612,14 +807,14 @@ test("native successor review receives its exact predecessor result head", async
                 [currentId, predecessorId].sort(),
               );
               assert.match(
-                attempts[predecessorId].resultHeadSha,
+                attempts[predecessorId].resultCommitSha,
                 /^[0-9a-f]{40}$/,
               );
               assert.equal(
-                attempts[currentId].executionBaseSha,
-                attempts[predecessorId].resultHeadSha,
+                attempts[currentId].executionBaseCommitSha,
+                attempts[predecessorId].resultCommitSha,
               );
-              assert.equal(attempts[predecessorId].integratedSha, null);
+              assert.equal(attempts[predecessorId].integratedCommitSha, null);
               observedProofs.add(criterion);
               return {
                 criterion,

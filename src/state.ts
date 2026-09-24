@@ -55,7 +55,7 @@ export interface WorkState {
 }
 
 export interface FactoryState {
-  schemaVersion: 1;
+  schemaVersion: 2;
   repository: string;
   objective: number;
   runId: string;
@@ -139,6 +139,29 @@ function acceptancePending(value: unknown, label: string): void {
   sha(pending.treeSha, `${label}.treeSha`);
 }
 
+function validationEvidence(value: unknown, label: string): string[] {
+  const evidence = record(value, label);
+  const treeSha = sha(evidence.treeSha, `${label}.treeSha`);
+  if (!Array.isArray(evidence.commands))
+    throw new Error(`${label}.commands must be an array`);
+  for (const [index, raw] of evidence.commands.entries()) {
+    const receipt = record(raw, `${label}.commands[${index}]`);
+    string(receipt.command, `${label}.commands[${index}].command`);
+    if (
+      receipt.index !== index ||
+      receipt.passed !== true ||
+      receipt.exitCode !== 0 ||
+      sha(receipt.treeSha, `${label}.commands[${index}].treeSha`) !== treeSha
+    )
+      throw new Error(
+        `${label}.commands[${index}] is not bound to the exact tree and order`,
+      );
+  }
+  return evidence.commands.map(
+    (raw) => (raw as Record<string, unknown>).command as string,
+  );
+}
+
 const statuses = new Set<WorkStatus>([
   "pending",
   "running",
@@ -164,7 +187,7 @@ export function parseFactoryState(
 ): FactoryState {
   const state = record(value, "state");
   if (
-    state.schemaVersion !== 1 ||
+    state.schemaVersion !== 2 ||
     state.repository !== repository ||
     state.objective !== objective
   )
@@ -302,6 +325,25 @@ export function parseFactoryState(
         item.acceptanceDecisions,
         `${id}.acceptanceDecisions`,
       );
+    if (item.validation !== undefined) {
+      const receiptCommands = validationEvidence(
+        item.validation,
+        `${id}.validation`,
+      );
+      const declaredCommands = (
+        (graph.items as Record<string, unknown>[]).find(
+          (candidate) => candidate.id === id,
+        )!.validation as { command: string }[]
+      ).map((check) => check.command);
+      if (JSON.stringify(receiptCommands) !== JSON.stringify(declaredCommands))
+        throw new Error(
+          `Work Item ${id} validation receipts differ from declared commands`,
+        );
+      if ((item.validation as { treeSha: string }).treeSha !== item.treeSha)
+        throw new Error(
+          `Work Item ${id} validation tree differs from result tree`,
+        );
+    }
     if (
       item.status === "published" &&
       (!Number.isSafeInteger(item.pullRequest) || !item.changeRef)
@@ -554,14 +596,16 @@ export function parseFactoryState(
   }
   if (state.finalValidation !== undefined) {
     const final = record(state.finalValidation, "finalValidation");
-    sha(final.treeSha, "final validation tree");
+    const receiptCommands = validationEvidence(final, "finalValidation");
     if (
-      final.passed !== true ||
-      !Array.isArray(final.commands) ||
-      !final.commands.every(
-        (check) => typeof check?.command === "string" && check.passed === true,
-      )
+      !Array.isArray(state.objectiveCommands) ||
+      JSON.stringify(receiptCommands) !==
+        JSON.stringify(state.objectiveCommands)
     )
+      throw new Error(
+        "Final validation receipts differ from declared Objective commands",
+      );
+    if (final.passed !== true)
       throw new Error("Final validation evidence is invalid");
   }
   if (state.finalAcceptancePending !== undefined)

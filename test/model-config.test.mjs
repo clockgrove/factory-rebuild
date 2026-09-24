@@ -117,7 +117,8 @@ test("Codex adapter passes phase selections to every planning and review thread"
   Codex.prototype.startThread = function (options) {
     captured.push(options);
     return {
-      async run() {
+      async run(prompt) {
+        captured.at(-1).prompt = prompt;
         return {
           finalResponse:
             captured.length === 1
@@ -148,13 +149,22 @@ test("Codex adapter passes phase selections to every planning and review thread"
       commands: [],
       finalCommands: [],
     });
+    const treeSha = "b".repeat(40);
     await model.reviewResult({
       criteria: ["Criterion"],
       baseSha,
-      treeSha: "b".repeat(40),
+      treeSha,
       sources: [],
       change: "{}",
-      commands: [],
+      commands: [
+        {
+          index: 0,
+          command: "test -f result.txt",
+          passed: true,
+          exitCode: 0,
+          treeSha,
+        },
+      ],
     });
     assert.deepEqual(
       captured.map(({ model, modelReasoningEffort }) => ({
@@ -167,6 +177,9 @@ test("Codex adapter passes phase selections to every planning and review thread"
         { model: "reviewer-choice", modelReasoningEffort: "medium" },
       ],
     );
+    assert.match(captured[2].prompt, /result identity is a Git tree/);
+    assert.match(captured[2].prompt, /stable zero-based index/);
+    assert.match(captured[2].prompt, new RegExp(treeSha));
   } finally {
     Codex.prototype.startThread = original;
   }

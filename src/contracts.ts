@@ -63,6 +63,14 @@ export interface PlanReviewRequest {
   finalCommands: string[];
 }
 
+export interface ValidationCommandReceipt {
+  index: number;
+  command: string;
+  passed: true;
+  exitCode: 0;
+  treeSha: string;
+}
+
 export interface PlanningModel {
   generateStructured<T>(request: PlanningRequest<T>): Promise<T>;
   reviewGraph(request: PlanReviewRequest): Promise<{
@@ -79,7 +87,7 @@ export interface PlanningModel {
     treeSha: string;
     sources: { path: string; content: string }[];
     change: string;
-    commands: { command: string; passed: true }[];
+    commands: ValidationCommandReceipt[];
     observations?: string;
   }): Promise<{
     findings: {
