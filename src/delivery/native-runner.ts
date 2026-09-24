@@ -16,6 +16,7 @@ import {
   AcceptanceDecisionRequired,
   reviewAcceptance,
   validateWorkItem,
+  workItemReviewObservations,
 } from "../validation.js";
 import { planningSources } from "../compiler.js";
 import { linearDeliveryUnits } from "./plan.js";
@@ -326,11 +327,11 @@ export async function runNativeGraph(args: {
               config.checkout,
             ),
             decisions: work.acceptanceDecisions,
-            observations: JSON.stringify({
-              selectedAsset: work.assets?.find(
-                (set) => set.id === work.selectedAssetSet,
-              ),
-            }),
+            observations: workItemReviewObservations(
+              state,
+              item,
+              work.assets?.find((set) => set.id === work.selectedAssetSet),
+            ),
           });
         work.validation = args.diagnostics
           ? await args.diagnostics.span(

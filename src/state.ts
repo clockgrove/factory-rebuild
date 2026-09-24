@@ -269,6 +269,11 @@ export function parseFactoryState(
       if (item[key] !== undefined) sha(item[key], `${id}.${key}`);
     if (item.integratedSha !== undefined)
       sha(item.integratedSha, `${id}.integratedSha`);
+    if (
+      item.startedAt !== undefined &&
+      Number.isNaN(Date.parse(string(item.startedAt, `${id}.startedAt`)))
+    )
+      throw new Error(`Work Item ${id} has an invalid startedAt`);
     if (item.status === "running" && (!item.step || !item.baseSha))
       throw new Error(`Running Work Item ${id} lacks step or base`);
     if (

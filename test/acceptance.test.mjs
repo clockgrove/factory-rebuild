@@ -829,6 +829,124 @@ test("result review auto-accepts sourced evidence, otherwise asks one exact-tree
       packetGrounded.criteria.map((criterion) => criterion.verdict),
       ["pass", "pass"],
     );
+    const provenanceCriterion =
+      "The dependency-free attempt started at the Objective base before either result integrated.";
+    const missingProvenance = JSON.stringify({
+      objectiveBaseSha: target.baseSha,
+      currentIntegratedSha: null,
+      reviewedItemId: "result",
+      attempts: [],
+      selectedAsset: null,
+    });
+    await assert.rejects(
+      reviewAcceptance({
+        ...request,
+        evidence: resultEvidence,
+        criteria: ["result.txt exists", provenanceCriterion],
+        sources: [
+          {
+            path: "OBJECTIVE",
+            content: `result.txt exists\n${provenanceCriterion}`,
+          },
+        ],
+        observations: missingProvenance,
+        model: {
+          async reviewResult() {
+            return {
+              findings: [
+                {
+                  criterion: "result.txt exists",
+                  verdict: "pass",
+                  source: "Exact Git change packet",
+                  quote: "diff --git a/result.txt b/result.txt\nnew file mode",
+                  detail: "The complete patch adds result.txt.",
+                  question: "",
+                },
+                {
+                  criterion: provenanceCriterion,
+                  verdict: "needs-human",
+                  source: "Delivery observations",
+                  quote: '"attempts":[]',
+                  detail:
+                    "The authoritative observation packet has no attempt provenance.",
+                  question:
+                    "Can you provide the exact attempt and integration timing evidence?",
+                },
+              ],
+            };
+          },
+        },
+      }),
+      (error) => {
+        assert.ok(error instanceof AcceptanceDecisionRequired);
+        assert.equal(error.pending.criterion, provenanceCriterion);
+        assert.match(error.pending.detail, /no attempt provenance/);
+        return true;
+      },
+    );
+    const contradictoryBase = "0".repeat(40);
+    const contradictoryProvenance = JSON.stringify({
+      objectiveBaseSha: target.baseSha,
+      currentIntegratedSha: null,
+      reviewedItemId: "result",
+      attempts: [
+        {
+          id: "result",
+          declaredDependencies: [],
+          attemptId: "11111111-1111-4111-8111-111111111111",
+          startedAt: "2026-09-23T00:00:00.000Z",
+          executionBaseSha: contradictoryBase,
+          integratedSha: null,
+        },
+      ],
+      selectedAsset: null,
+    });
+    await assert.rejects(
+      reviewAcceptance({
+        ...request,
+        evidence: resultEvidence,
+        criteria: ["result.txt exists", provenanceCriterion],
+        sources: [
+          {
+            path: "OBJECTIVE",
+            content: `result.txt exists\n${provenanceCriterion}`,
+          },
+        ],
+        observations: contradictoryProvenance,
+        model: {
+          async reviewResult() {
+            return {
+              findings: [
+                {
+                  criterion: "result.txt exists",
+                  verdict: "pass",
+                  source: "Exact Git change packet",
+                  quote: "diff --git a/result.txt b/result.txt\nnew file mode",
+                  detail: "The complete patch adds result.txt.",
+                  question: "",
+                },
+                {
+                  criterion: provenanceCriterion,
+                  verdict: "needs-human",
+                  source: "Delivery observations",
+                  quote: `"executionBaseSha":"${contradictoryBase}"`,
+                  detail:
+                    "The authoritative attempt base contradicts the Objective base.",
+                  question:
+                    "Which exact accepted base should govern this attempt?",
+                },
+              ],
+            };
+          },
+        },
+      }),
+      (error) => {
+        assert.ok(error instanceof AcceptanceDecisionRequired);
+        assert.equal(error.pending.criterion, provenanceCriterion);
+        assert.match(error.pending.detail, /contradicts the Objective base/);
+        return true;
+      },
+    );
     await assert.rejects(
       reviewAcceptance({
         ...request,
