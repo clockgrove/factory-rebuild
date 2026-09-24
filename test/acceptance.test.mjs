@@ -1202,10 +1202,26 @@ test("final review uses bounded authoritative per-Work-Item Git deltas without p
       "user.email=factory-test@example.com",
       "commit",
       "-m",
-      "Bootstrap",
+      "Factory: Bootstrap",
     );
     const bootstrapCommit = git(target.checkout, "rev-parse", "HEAD");
     const bootstrapTree = git(target.checkout, "rev-parse", "HEAD^{tree}");
+    const bootstrapIntegrated = git(
+      target.checkout,
+      "-c",
+      "user.name=Factory Test",
+      "-c",
+      "user.email=factory-test@example.com",
+      "commit-tree",
+      bootstrapTree,
+      "-p",
+      target.baseSha,
+      "-p",
+      bootstrapCommit,
+      "-m",
+      "Merge bootstrap",
+    );
+    git(target.checkout, "checkout", "--detach", bootstrapIntegrated);
     writeFileSync(join(target.checkout, "intervening.txt"), "intervening\n");
     git(target.checkout, "add", "intervening.txt");
     git(
@@ -1216,10 +1232,26 @@ test("final review uses bounded authoritative per-Work-Item Git deltas without p
       "user.email=factory-test@example.com",
       "commit",
       "-m",
-      "Intervening integration",
+      "Factory: Intervening",
     );
     const interveningCommit = git(target.checkout, "rev-parse", "HEAD");
     const interveningTree = git(target.checkout, "rev-parse", "HEAD^{tree}");
+    const interveningIntegrated = git(
+      target.checkout,
+      "-c",
+      "user.name=Factory Test",
+      "-c",
+      "user.email=factory-test@example.com",
+      "commit-tree",
+      interveningTree,
+      "-p",
+      bootstrapIntegrated,
+      "-p",
+      interveningCommit,
+      "-m",
+      "Merge intervening",
+    );
+    git(target.checkout, "checkout", "--detach", interveningIntegrated);
     writeFileSync(
       join(target.checkout, "proof-follow-up.txt"),
       "greenfield pnpm follow-up\n",
@@ -1233,25 +1265,43 @@ test("final review uses bounded authoritative per-Work-Item Git deltas without p
       "user.email=factory-test@example.com",
       "commit",
       "-m",
-      "Follow up",
+      "Factory: replay independently prepared Work Item",
     );
-    const finalCommit = git(target.checkout, "rev-parse", "HEAD");
+    const followUpCommit = git(target.checkout, "rev-parse", "HEAD");
     const finalTree = git(target.checkout, "rev-parse", "HEAD^{tree}");
+    const finalIntegrated = git(
+      target.checkout,
+      "-c",
+      "user.name=Factory Test",
+      "-c",
+      "user.email=factory-test@example.com",
+      "commit-tree",
+      finalTree,
+      "-p",
+      interveningIntegrated,
+      "-p",
+      followUpCommit,
+      "-m",
+      "Merge follow-up",
+    );
     const bootstrap = structuredClone(item(target.baseSha, []).items[0]);
     Object.assign(bootstrap, {
       id: "bootstrap",
+      title: "Bootstrap",
       ownedPaths: ["bootstrap.txt"],
       acceptance: ["bootstrap.txt exists"],
     });
     const intervening = structuredClone(item(target.baseSha, []).items[0]);
     Object.assign(intervening, {
       id: "intervening",
+      title: "Intervening",
       ownedPaths: ["intervening.txt"],
       acceptance: ["intervening.txt exists"],
     });
     const followUp = structuredClone(item(target.baseSha, []).items[0]);
     Object.assign(followUp, {
       id: "follow-up",
+      title: "Follow up",
       dependencies: ["bootstrap"],
       ownedPaths: ["proof-follow-up.txt"],
       acceptance: ["follow-up is exact and preserves bootstrap paths"],
@@ -1269,7 +1319,7 @@ test("final review uses bounded authoritative per-Work-Item Git deltas without p
         items: [bootstrap, intervening, followUp],
       },
       issueByItemId: { bootstrap: 2, intervening: 3, "follow-up": 4 },
-      integratedSha: finalCommit,
+      integratedSha: finalIntegrated,
       work: {
         bootstrap: {
           status: "done",
@@ -1278,7 +1328,7 @@ test("final review uses bounded authoritative per-Work-Item Git deltas without p
           baseSha: target.baseSha,
           changeRef: bootstrapCommit,
           treeSha: bootstrapTree,
-          integratedSha: bootstrapCommit,
+          integratedSha: bootstrapIntegrated,
           validation: {
             treeSha: bootstrapTree,
             commands: [],
@@ -1295,12 +1345,12 @@ test("final review uses bounded authoritative per-Work-Item Git deltas without p
         },
         intervening: {
           status: "done",
-          executionBaseSha: bootstrapCommit,
-          integratedShaAtStart: bootstrapCommit,
-          baseSha: bootstrapCommit,
+          executionBaseSha: bootstrapIntegrated,
+          integratedShaAtStart: bootstrapIntegrated,
+          baseSha: bootstrapIntegrated,
           changeRef: interveningCommit,
           treeSha: interveningTree,
-          integratedSha: interveningCommit,
+          integratedSha: interveningIntegrated,
           validation: {
             treeSha: interveningTree,
             commands: [],
@@ -1308,12 +1358,12 @@ test("final review uses bounded authoritative per-Work-Item Git deltas without p
         },
         "follow-up": {
           status: "done",
-          executionBaseSha: bootstrapCommit,
-          integratedShaAtStart: bootstrapCommit,
-          baseSha: interveningCommit,
-          changeRef: finalCommit,
+          executionBaseSha: bootstrapIntegrated,
+          integratedShaAtStart: bootstrapIntegrated,
+          baseSha: interveningIntegrated,
+          changeRef: followUpCommit,
           treeSha: finalTree,
-          integratedSha: finalCommit,
+          integratedSha: finalIntegrated,
           validation: {
             treeSha: finalTree,
             commands: [],
@@ -1333,12 +1383,15 @@ test("final review uses bounded authoritative per-Work-Item Git deltas without p
     const objectiveEvidence = objectiveReviewEvidence({
       state,
       checkout: target.checkout,
-      integratedCommitSha: finalCommit,
+      integratedCommitSha: finalIntegrated,
       integratedTreeSha: finalTree,
     });
     const observations = JSON.parse(objectiveEvidence.observations);
     assert.equal(observations.work.length, 3);
-    assert.equal(observations.work[2].resultBaseCommitSha, interveningCommit);
+    assert.equal(
+      observations.work[2].resultBaseCommitSha,
+      interveningIntegrated,
+    );
     assert.deepEqual(observations.work[2].validationCommands, []);
     assert.equal(observations.work[2].validation, undefined);
     assert.doesNotMatch(objectiveEvidence.observations, /model-generated/);
@@ -1375,11 +1428,11 @@ test("final review uses bounded authoritative per-Work-Item Git deltas without p
       },
       checkout: target.checkout,
       baseSha: target.baseSha,
-      commit: finalCommit,
+      commit: finalIntegrated,
       evidence: await validateTree(
         target.checkout,
         join(root, "final-validation"),
-        finalCommit,
+        finalIntegrated,
         finalTree,
         [],
       ),
@@ -1401,10 +1454,17 @@ test("final review uses bounded authoritative per-Work-Item Git deltas without p
       [
         "result base ancestry",
         (candidate) => {
-          candidate.work.bootstrap.baseSha = finalCommit;
-          candidate.work.bootstrap.executionBaseSha = finalCommit;
+          candidate.work.bootstrap.baseSha = finalIntegrated;
+          candidate.work.bootstrap.executionBaseSha = finalIntegrated;
         },
         /result base is not an ancestor relationship/,
+      ],
+      [
+        "earlier valid result base",
+        (candidate) => {
+          candidate.work["follow-up"].baseSha = bootstrapIntegrated;
+        },
+        /result commit is not rooted at its recorded result base/,
       ],
       [
         "result integration ancestry",
@@ -1412,6 +1472,20 @@ test("final review uses bounded authoritative per-Work-Item Git deltas without p
           candidate.work.bootstrap.integratedSha = target.baseSha;
         },
         /result integration is not an ancestor relationship/,
+      ],
+      [
+        "later descendant integration",
+        (candidate) => {
+          candidate.work.bootstrap.integratedSha = finalIntegrated;
+        },
+        /Native integration group .* is not rooted at its first result base/,
+      ],
+      [
+        "wrong changed path set",
+        (candidate) => {
+          candidate.graph.items[2].ownedPaths = ["not-proof.txt"];
+        },
+        /final delta contains paths outside accepted ownership: proof-follow-up.txt/,
       ],
       [
         "foreign ancestor",
@@ -1424,7 +1498,9 @@ test("final review uses bounded authoritative per-Work-Item Git deltas without p
       [
         "replay start snapshot",
         (candidate) => {
-          candidate.work["follow-up"].integratedShaAtStart = interveningCommit;
+          candidate.work["follow-up"].executionBaseSha = bootstrapCommit;
+          candidate.work["follow-up"].integratedShaAtStart =
+            interveningIntegrated;
         },
         /replay base is not bound to its recorded start snapshot/,
       ],
@@ -1436,7 +1512,7 @@ test("final review uses bounded authoritative per-Work-Item Git deltas without p
           objectiveReviewEvidence({
             state: tampered,
             checkout: target.checkout,
-            integratedCommitSha: finalCommit,
+            integratedCommitSha: finalIntegrated,
             integratedTreeSha: finalTree,
           }),
         expected,
@@ -1458,10 +1534,25 @@ test("truncated per-Work-Item evidence cannot ground an automatic pass", async (
       "user.email=factory-test@example.com",
       "commit",
       "-m",
-      "Large result",
+      "Factory: One",
     );
     const commit = git(target.checkout, "rev-parse", "HEAD");
     const treeSha = git(target.checkout, "rev-parse", "HEAD^{tree}");
+    const integrated = git(
+      target.checkout,
+      "-c",
+      "user.name=Factory Test",
+      "-c",
+      "user.email=factory-test@example.com",
+      "commit-tree",
+      treeSha,
+      "-p",
+      target.baseSha,
+      "-p",
+      commit,
+      "-m",
+      "Merge result",
+    );
     const graph = item(target.baseSha, []);
     graph.items[0].ownedPaths = ["result.txt"];
     const state = {
@@ -1473,7 +1564,7 @@ test("truncated per-Work-Item evidence cannot ground an automatic pass", async (
       baseSha: target.baseSha,
       graph,
       issueByItemId: { one: 2 },
-      integratedSha: commit,
+      integratedSha: integrated,
       work: {
         one: {
           status: "done",
@@ -1482,7 +1573,7 @@ test("truncated per-Work-Item evidence cannot ground an automatic pass", async (
           baseSha: target.baseSha,
           changeRef: commit,
           treeSha,
-          integratedSha: commit,
+          integratedSha: integrated,
           validation: { treeSha, commands: [] },
         },
       },
@@ -1493,7 +1584,7 @@ test("truncated per-Work-Item evidence cannot ground an automatic pass", async (
       const objectiveEvidence = objectiveReviewEvidence({
         state,
         checkout: target.checkout,
-        integratedCommitSha: commit,
+        integratedCommitSha: integrated,
         integratedTreeSha: treeSha,
       });
       assert.equal(objectiveEvidence.evidence[0].complete, false);
@@ -1503,7 +1594,7 @@ test("truncated per-Work-Item evidence cannot ground an automatic pass", async (
         reviewAcceptance({
           checkout: target.checkout,
           baseSha: target.baseSha,
-          commit,
+          commit: integrated,
           evidence: { treeSha, commands: [] },
           criteria: ["result is complete"],
           sources: [{ path: "OBJECTIVE", content: "result is complete" }],

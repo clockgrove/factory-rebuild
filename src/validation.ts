@@ -17,6 +17,7 @@ import type {
   AcceptancePending,
   FactoryState,
   ReviewRejectionReason,
+  WorkState,
 } from "./state.js";
 import {
   pinnedGit,
@@ -303,6 +304,107 @@ function assertAncestor(
   }
 }
 
+function commitParents(checkout: string, commit: string): string[] {
+  return pinnedGit(checkout, "rev-list", "--parents", "-n", "1", commit)
+    .split(" ")
+    .slice(1);
+}
+
+function commitMessage(checkout: string, commit: string): string {
+  return pinnedGit(checkout, "log", "-1", "--format=%B", commit);
+}
+
+function assertResultCommitShape(
+  checkout: string,
+  item: WorkItem,
+  current: WorkState & {
+    executionBaseSha: string;
+    baseSha: string;
+    changeRef: string;
+  },
+): void {
+  const parents = commitParents(checkout, current.changeRef);
+  if (parents.length !== 1)
+    throw new Error(
+      `Work Item ${item.id} result is not a single-parent commit`,
+    );
+  const parent = parents[0]!;
+  if (current.selectedAssetSet) {
+    if (current.executionBaseSha !== current.baseSha)
+      throw new Error(`Work Item ${item.id} replayed selected assets`);
+    if (
+      commitMessage(checkout, current.changeRef) !==
+      `Factory: selected ${current.selectedAssetSet} assets`
+    )
+      throw new Error(
+        `Work Item ${item.id} selected-asset result has an unexpected commit identity`,
+      );
+    if (parent === current.baseSha) return;
+    const workerParents = commitParents(checkout, parent);
+    if (
+      workerParents.length !== 1 ||
+      workerParents[0] !== current.baseSha ||
+      commitMessage(checkout, parent) !== `Factory: ${item.title}`
+    )
+      throw new Error(
+        `Work Item ${item.id} selected-asset result is not rooted at its recorded result base`,
+      );
+    return;
+  }
+  if (parent !== current.baseSha)
+    throw new Error(
+      `Work Item ${item.id} result commit is not rooted at its recorded result base`,
+    );
+  const expectedMessage =
+    current.executionBaseSha === current.baseSha
+      ? `Factory: ${item.title}`
+      : "Factory: replay independently prepared Work Item";
+  if (commitMessage(checkout, current.changeRef) !== expectedMessage)
+    throw new Error(
+      `Work Item ${item.id} result has an unexpected controller commit identity`,
+    );
+}
+
+function itemOwnsPath(item: WorkItem, path: string): boolean {
+  return item.ownedPaths.some((scope) =>
+    scope.endsWith("/") ? path.startsWith(scope) : path === scope,
+  );
+}
+
+function assertIntegrationBindings(
+  checkout: string,
+  records: {
+    item: WorkItem;
+    resultBaseSha: string;
+    resultCommitSha: string;
+    integratedCommitSha: string;
+  }[],
+): void {
+  const groups = new Map<string, typeof records>();
+  for (const record of records) {
+    const group = groups.get(record.integratedCommitSha) ?? [];
+    group.push(record);
+    groups.set(record.integratedCommitSha, group);
+  }
+  for (const [integratedCommitSha, group] of groups) {
+    const parents = commitParents(checkout, integratedCommitSha);
+    if (parents.length !== 2 || parents[1] !== group.at(-1)!.resultCommitSha)
+      throw new Error(
+        `Integrated commit ${integratedCommitSha} is not bound to the exact delivered result head`,
+      );
+    if (group.length === 1) continue;
+    if (parents[0] !== group[0]!.resultBaseSha)
+      throw new Error(
+        `Native integration group ${integratedCommitSha} is not rooted at its first result base`,
+      );
+    for (let index = 1; index < group.length; index++)
+      if (group[index]!.resultBaseSha !== group[index - 1]!.resultCommitSha)
+        throw new Error(
+          `Native integration group ${integratedCommitSha} has a non-exact layer base`,
+        );
+  }
+}
+
 function assertCommandReceipts(
   evidence: ValidationEvidence,
   expectedTree: string,
@@ -386,6 +488,10 @@ export function objectiveReviewEvidence(args: {
   evidence: ResultReviewEvidenceSource[];
 } {
   const { state, checkout, integratedCommitSha, integratedTreeSha } = args;
+  if (state.integratedSha !== integratedCommitSha)
+    throw new Error(
+      "Final integrated commit differs from the atomic supervisor snapshot",
+    );
   assertCommitTree(
     checkout,
     integratedCommitSha,
@@ -393,6 +499,12 @@ export function objectiveReviewEvidence(args: {
     "Final integrated",
   );
   const evidence: ResultReviewEvidenceSource[] = [];
+  const integrationRecords: {
+    item: WorkItem;
+    resultBaseSha: string;
+    resultCommitSha: string;
+    integratedCommitSha: string;
+  }[] = [];
   const perItemTextBudget = Math.floor(
     configuredResultReviewTextBudget() / Math.max(1, state.graph.items.length),
   );
@@ -447,6 +559,12 @@ export function objectiveReviewEvidence(args: {
       throw new Error(
         `Work Item ${item.id} replay base is not bound to its recorded start snapshot`,
       );
+    assertResultCommitShape(checkout, item, {
+      ...current,
+      executionBaseSha: current.executionBaseSha,
+      baseSha: current.baseSha,
+      changeRef: current.changeRef,
+    });
     const itemIntegratedTreeSha = pinnedGit(
       checkout,
       "rev-parse",
@@ -475,6 +593,20 @@ export function objectiveReviewEvidence(args: {
       current.changeRef,
       perItemTextBudget,
     );
+    const changePacket = parseResultChangePacket(change);
+    const unownedChanges = changePacket.changes
+      .map((entry) => entry.path)
+      .filter((path) => !itemOwnsPath(item, path));
+    if (unownedChanges.length)
+      throw new Error(
+        `Work Item ${item.id} final delta contains paths outside accepted ownership: ${unownedChanges.join(", ")}`,
+      );
+    integrationRecords.push({
+      item,
+      resultBaseSha: current.baseSha,
+      resultCommitSha: current.changeRef,
+      integratedCommitSha: current.integratedSha,
+    });
     const evidencePath = `Work Item Git delta: ${item.id}`;
     evidence.push({
       path: evidencePath,
@@ -511,6 +643,7 @@ export function objectiveReviewEvidence(args: {
       selection: current.selection,
     };
   });
+  assertIntegrationBindings(checkout, integrationRecords);
   return {
     observations: JSON.stringify({
       integratedCommitSha,
