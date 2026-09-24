@@ -369,11 +369,6 @@ test("Work Item review receives exact concurrent-attempt provenance from run sta
 - \`${commands[1]}\`
 `;
     const reviewed = new Set();
-    let provenanceReviewArrivals = 0;
-    let releaseProvenanceReviews;
-    const provenanceReviewsReady = new Promise((resolve) => {
-      releaseProvenanceReviews = resolve;
-    });
     const planningModel = {
       async generateStructured() {
         return structuredClone(graph);
@@ -393,7 +388,6 @@ test("Work Item review receives exact concurrent-attempt provenance from run sta
         if (provenanceCriterion) {
           observations = JSON.parse(request.observations);
           assert.equal(observations.objectiveBaseSha, target.baseSha);
-          assert.equal(observations.currentIntegratedSha, null);
           const attempts = Object.fromEntries(
             observations.attempts.map((attempt) => [attempt.id, attempt]),
           );
@@ -410,17 +404,31 @@ test("Work Item review receives exact concurrent-attempt provenance from run sta
               "executionBaseSha",
               "id",
               "integratedSha",
+              "integrationAtStart",
               "startedAt",
             ]);
             assert.match(attempts[id].attemptId, /^[0-9a-f-]{36}$/);
             assert.equal(attempts[id].executionBaseSha, target.baseSha);
+            assert.deepEqual(attempts[id].integrationAtStart, {
+              recorded: true,
+              integratedSha: null,
+            });
             assert.ok(Number.isFinite(Date.parse(attempts[id].startedAt)));
-            assert.equal(attempts[id].integratedSha, null);
+          }
+          if (observations.reviewedItemId === "rc-left") {
+            assert.equal(observations.currentIntegratedSha, null);
+            assert.equal(attempts["rc-left"].integratedSha, null);
+            assert.equal(attempts["rc-right"].integratedSha, null);
+          } else {
+            assert.equal(observations.reviewedItemId, "rc-right");
+            assert.match(observations.currentIntegratedSha, /^[0-9a-f]{40}$/);
+            assert.equal(
+              attempts["rc-left"].integratedSha,
+              observations.currentIntegratedSha,
+            );
+            assert.equal(attempts["rc-right"].integratedSha, null);
           }
           reviewed.add(observations.reviewedItemId);
-          provenanceReviewArrivals += 1;
-          if (provenanceReviewArrivals === 2) releaseProvenanceReviews();
-          await provenanceReviewsReady;
         }
         return {
           findings: request.criteria.map((criterion) => {
@@ -431,7 +439,7 @@ test("Work Item review receives exact concurrent-attempt provenance from run sta
                 source: "Delivery observations",
                 quote: request.observations,
                 detail:
-                  "The atomic snapshot proves both named dependency-free attempts started at the Objective base while neither result was integrated.",
+                  "The atomic snapshot proves both named dependency-free attempts started at the Objective base while the integrated head at each start was empty.",
                 question: "",
               };
             }
@@ -453,7 +461,7 @@ test("Work Item review receives exact concurrent-attempt provenance from run sta
       config: factoryConfig(
         target.checkout,
         "example/result-provenance",
-        "regular",
+        "native-stack",
         2,
       ),
       graph,
@@ -485,8 +493,18 @@ test("Work Item review receives exact concurrent-attempt provenance from run sta
     mkdirSync(dirname(barrier), { recursive: true });
     writeFileSync(barrier, "go\n");
     const completed = await running;
+    assert.ok(completed.finalValidation, JSON.stringify(completed, null, 2));
     assert.equal(completed.finalValidation.passed, true);
     assert.deepEqual(reviewed, new Set(["rc-left", "rc-right"]));
+    assert.equal(completed.work["rc-left"].executionBaseSha, target.baseSha);
+    assert.equal(completed.work["rc-right"].executionBaseSha, target.baseSha);
+    assert.equal(completed.work["rc-left"].integratedShaAtStart, null);
+    assert.equal(completed.work["rc-right"].integratedShaAtStart, null);
+    assert.equal(
+      completed.work["rc-right"].baseSha,
+      completed.work["rc-left"].integratedSha,
+    );
+    assert.notEqual(completed.work["rc-right"].baseSha, target.baseSha);
     for (const id of reviewed)
       assert.equal(
         completed.work[id].validation.criteria.at(-1).verdict,

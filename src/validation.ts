@@ -88,7 +88,14 @@ export function workItemReviewObservations(
         declaredDependencies: candidate.dependencies,
         attemptId: work.attempt ?? null,
         startedAt: work.startedAt ?? null,
-        executionBaseSha: work.baseSha ?? null,
+        executionBaseSha: work.executionBaseSha ?? null,
+        integrationAtStart:
+          work.integratedShaAtStart === undefined
+            ? { recorded: false }
+            : {
+                recorded: true,
+                integratedSha: work.integratedShaAtStart,
+              },
         integratedSha: work.integratedSha ?? null,
       };
     }),

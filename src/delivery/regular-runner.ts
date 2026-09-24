@@ -345,6 +345,8 @@ export async function runRegularGraph(args: {
       work.startedAt = new Date().toISOString();
       const itemBase = state.integratedSha ?? baseSha;
       work.baseSha = itemBase;
+      work.executionBaseSha = itemBase;
+      work.integratedShaAtStart = state.integratedSha ?? null;
       save();
       const promise = execute(item, itemBase).finally(() => {
         active.delete(item.id);

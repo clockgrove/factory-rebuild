@@ -5,6 +5,7 @@ import { dirname, join } from "node:path";
 import test from "node:test";
 import { parseFactoryState } from "../dist/state.js";
 import { readState, statePath } from "../dist/state-store.js";
+import { workItemReviewObservations } from "../dist/validation.js";
 
 const repository = "example/disposable";
 const objective = 42;
@@ -75,6 +76,18 @@ test("persisted state validates identities and graph/work keys before use", () =
     () => parseFactoryState(invalidStart, repository, objective),
     /invalid startedAt/,
   );
+  const invalidExecutionBase = state();
+  invalidExecutionBase.work.asset.executionBaseSha = "not-a-sha";
+  assert.throws(
+    () => parseFactoryState(invalidExecutionBase, repository, objective),
+    /executionBaseSha must be a SHA-1/,
+  );
+  const invalidIntegratedStart = state();
+  invalidIntegratedStart.work.asset.integratedShaAtStart = "not-a-sha";
+  assert.throws(
+    () => parseFactoryState(invalidIntegratedStart, repository, objective),
+    /integratedShaAtStart must be a SHA-1/,
+  );
 });
 
 test("schemaVersion 1 state rejects legacy source paths and accepts explicit bindings", () => {
@@ -98,6 +111,81 @@ test("schemaVersion 1 state rejects legacy source paths and accepts explicit bin
       .sourceAssets[0].role,
     "mesh",
   );
+});
+
+test("legacy attempts expose missing immutable start provenance explicitly", () => {
+  const legacy = state();
+  legacy.work.asset = {
+    status: "running",
+    step: "validate",
+    attempt: "11111111-1111-4111-8111-111111111111",
+    startedAt: "2026-09-24T00:00:00.000Z",
+    baseSha: sha,
+  };
+  const parsed = parseFactoryState(legacy, repository, objective);
+  const observations = JSON.parse(
+    workItemReviewObservations(parsed, parsed.graph.items[0]),
+  );
+  assert.equal(observations.attempts[0].executionBaseSha, null);
+  assert.deepEqual(observations.attempts[0].integrationAtStart, {
+    recorded: false,
+  });
+});
+
+test("review observations do not confuse a replay base with attempt provenance", () => {
+  const replayed = state();
+  const replayBase = "c".repeat(40);
+  replayed.integratedSha = replayBase;
+  replayed.graph.items[0].acceptance = [
+    `asset starts at ${sha} independently of peer before either result integrates`,
+  ];
+  replayed.graph.items.push({
+    ...structuredClone(replayed.graph.items[0]),
+    id: "peer",
+    title: "Create peer",
+    acceptance: ["Peer exists"],
+    ownedPaths: ["approved/peer.png"],
+  });
+  replayed.issueByItemId.peer = 44;
+  replayed.work.asset = {
+    status: "running",
+    step: "validate",
+    attempt: "11111111-1111-4111-8111-111111111111",
+    startedAt: "2026-09-24T00:00:00.000Z",
+    executionBaseSha: sha,
+    integratedShaAtStart: null,
+    baseSha: replayBase,
+  };
+  replayed.work.peer = {
+    status: "done",
+    attempt: "22222222-2222-4222-8222-222222222222",
+    startedAt: "2026-09-24T00:00:00.010Z",
+    executionBaseSha: sha,
+    integratedShaAtStart: null,
+    baseSha: sha,
+    integratedSha: replayBase,
+  };
+  const parsed = parseFactoryState(replayed, repository, objective);
+  const observations = JSON.parse(
+    workItemReviewObservations(parsed, parsed.graph.items[0]),
+  );
+  const attempts = Object.fromEntries(
+    observations.attempts.map((attempt) => [attempt.id, attempt]),
+  );
+  assert.equal(observations.currentIntegratedSha, replayBase);
+  assert.equal(attempts.asset.executionBaseSha, sha);
+  assert.deepEqual(attempts.asset.integrationAtStart, {
+    recorded: true,
+    integratedSha: null,
+  });
+  assert.equal(attempts.asset.integratedSha, null);
+  assert.equal(attempts.peer.executionBaseSha, sha);
+  assert.deepEqual(attempts.peer.integrationAtStart, {
+    recorded: true,
+    integratedSha: null,
+  });
+  assert.equal(attempts.peer.integratedSha, replayBase);
+  assert.ok(!("baseSha" in attempts.asset));
 });
 
 test("completed replayed item can retain its original worker base in legacy state", () => {
