@@ -1,6 +1,6 @@
 # Public release checklist
 
-The first release passed [#25](https://github.com/clockgrove/factory-rebuild/issues/25). This checklist now tracks the new immutable artifact required by [#44](https://github.com/clockgrove/factory-rebuild/issues/44) and [#64](https://github.com/clockgrove/factory-rebuild/issues/64) before the Clockgrove pilot. Checking a file into the repository does not satisfy the installed-artifact or live Objective gates.
+The first release passed [#25](https://github.com/clockgrove/factory-rebuild/issues/25). Public v0.1.10 completed the fresh installed-artifact gate for [#44](https://github.com/clockgrove/factory-rebuild/issues/44), [#64](https://github.com/clockgrove/factory-rebuild/issues/64), and [#67](https://github.com/clockgrove/factory-rebuild/issues/67). Reuse this checklist for future immutable releases; checking a file into the repository does not satisfy an installed-artifact or live Objective gate.
 
 ## Repository and package assets
 
@@ -22,8 +22,8 @@ No required asset is intentionally omitted. MCP is not a first-release requireme
 
 ## Exact-artifact acceptance
 
-1. Confirm accepted #19–#24, #28, #46, #48, #51, and #60 behavior plus the #44/#64 candidate behavior in README, skills, and package tests; obtain review of this release candidate against the final CLI.
+1. Confirm accepted #19–#24, #28, #44, #46, #48, #51, #60, #64, and #67 behavior in README, skills, and package tests; obtain review of the release candidate against the final CLI.
 2. Follow [PUBLIC-RELEASE.md](PUBLIC-RELEASE.md) to build a versioned tarball from the accepted commit, record its SHA-256 digest, and attach it to a public release at the pinned marketplace tag. Confirm the package contains manifest, CLI, use skills, license, logo, notices, and the exact bundled production dependency tree. Install it with an empty npm cache and compare installed versions with the accepted lock.
 3. In a clean environment and fresh third-party repository assembled from the public fixture, install only that public artifact. Use documented commands to plan/inspect, run concurrent lanes and native linear delivery, review/select media, inspect status, and validate the final result.
 4. Record package identity and digest, Objective and GitHub issue/PR identities, validated tree, exact final head, and operator acceptance in [BUILD-STATUS.md](BUILD-STATUS.md). Do not use a local source path, source-module import, or private instructions.
-5. Close #44 and #64 only after this evidence is recorded for the new artifact. Run the separate private adopter smoke in #26 with that same published artifact before claiming trunk acceptance. Do not retag an older release.
+5. Treat the recorded v0.1.10 qualification as complete; do not substitute or mutate an older run. Complete #55 and #59 on their separately reviewed source paths before running the private adopter smoke in #26. Any later release repeats this checklist at a new immutable tag; do not retag an older release.
