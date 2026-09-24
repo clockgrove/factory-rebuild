@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import {
+  copyFileSync,
   existsSync,
   mkdtempSync,
   mkdirSync,
@@ -9,11 +10,10 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { pathToFileURL } from "node:url";
 import test from "node:test";
 import { createTarget } from "./support/integration-fixture.mjs";
 
-test("fresh packed artifact installs and exposes documented install/status/plan operations", async () => {
+test("fresh packed artifact composes a registered harness through the package root", () => {
   const root = mkdtempSync(join(tmpdir(), "factory-package-smoke-"));
   try {
     const target = createTarget(root);
@@ -33,6 +33,7 @@ test("fresh packed artifact installs and exposes documented install/status/plan 
       [
         "install",
         "--offline",
+        "--omit=optional",
         "--prefix",
         prefix,
         "--ignore-scripts",
@@ -49,6 +50,13 @@ test("fresh packed artifact installs and exposes documented install/status/plan 
       "@clockgrove",
       "factory",
     );
+    const installedManifest = JSON.parse(
+      readFileSync(join(installedRoot, "package.json"), "utf8"),
+    );
+    assert.deepEqual(installedManifest.optionalDependencies, {
+      "@anthropic-ai/claude-agent-sdk": "0.3.281",
+      "@github/copilot-sdk": "1.0.13",
+    });
     const lock = JSON.parse(
       readFileSync(join(project, "package-lock.json"), "utf8"),
     );
@@ -56,7 +64,8 @@ test("fresh packed artifact installs and exposes documented install/status/plan 
     for (const [path, entry] of Object.entries(lock.packages)) {
       if (!path || entry.dev) continue;
       const installedPath = join(installedRoot, path, "package.json");
-      if (entry.optional && !existsSync(installedPath)) continue;
+      if ((entry.optional || entry.devOptional) && !existsSync(installedPath))
+        continue;
       assert.ok(
         existsSync(installedPath),
         `bundled dependency missing: ${path}`,
@@ -76,6 +85,7 @@ test("fresh packed artifact installs and exposes documented install/status/plan 
       ".codex-plugin/plugin.json",
       "skills/director/SKILL.md",
       "skills/setup/SKILL.md",
+      "docs/AGENT-HARNESSES.md",
       "THIRD_PARTY_NOTICES.md",
     ]) {
       assert.ok(
@@ -122,73 +132,14 @@ test("fresh packed artifact installs and exposes documented install/status/plan 
       { encoding: "utf8", env: environment },
     );
     assert.match(status, /no active Objective/);
-    const installedPackage = await import(
-      pathToFileURL(
-        join(
-          prefix,
-          "node_modules",
-          "@clockgrove",
-          "factory",
-          "dist",
-          "index.js",
-        ),
-      ).href
-    );
-    const body = "# Packed Objective\n\n## Acceptance\n- `test -s one.txt`\n";
-    const graph = {
-      objective: 1,
-      baseSha: target.baseSha,
-      items: [
-        {
-          id: "one",
-          title: "One",
-          goal: "Create one.txt",
-          acceptance: ["one.txt exists"],
-          nonGoals: ["No deployment"],
-          citations: [{ path: "OBJECTIVE", heading: "Acceptance" }],
-          dependencies: [],
-          ownedPaths: ["one.txt"],
-          resources: [],
-          validation: [
-            {
-              command: "test -s one.txt",
-              provenance: "source-declared",
-              source: "OBJECTIVE",
-            },
-          ],
-          brief: "Create one.txt",
-          sourceAssets: [],
-          expectedOutputRoles: [],
-          minimumAssetSets: 0,
-          requiredLfsRoles: [],
-        },
-      ],
-    };
-    const application = installedPackage.createApplication(
-      installedPackage.readConfig(config),
-      {
-        github: {
-          async objective() {
-            return { body, title: "Packed Objective" };
-          },
-        },
-        planningModel: {
-          async generateStructured() {
-            return graph;
-          },
-          async reviewGraph() {
-            return { findings: [] };
-          },
-        },
-      },
-    );
-    const candidate = await application.planObjective(1);
-    assert.equal(candidate.review.status, "clean");
-    assert.equal(candidate.baseSha, target.baseSha);
     assert.equal(
       existsSync(
         join(
-          installedPackage.stateRoot("example/package-smoke"),
+          environment.XDG_STATE_HOME,
+          "clockgrove-factory",
+          "repositories",
+          "example",
+          "package-smoke",
           "objectives",
           "1",
           "state.json",
@@ -196,21 +147,72 @@ test("fresh packed artifact installs and exposes documented install/status/plan 
       ),
       false,
     );
-    const json = JSON.parse(
+    const before = JSON.parse(
       execFileSync(
         cli,
         ["status", "--objective", "1", "--json", "--config", config],
         { encoding: "utf8", env: environment },
       ),
     );
-    assert.equal(json.state, "not-started");
-    assert.deepEqual(json.work, []);
+    assert.equal(before.state, "not-started");
+    assert.deepEqual(before.work, []);
+
+    const runner = join(prefix, "packed-harness-runner.mjs");
+    copyFileSync(
+      join(project, "test", "fixtures", "packed-harness-runner.mjs"),
+      runner,
+    );
+    const credentialFreeEnvironment = Object.fromEntries(
+      Object.entries(environment).filter(
+        ([name]) => !/^(?:GH_|GITHUB_|ANTHROPIC_|OPENAI_|CLAUDE_)/.test(name),
+      ),
+    );
+    const result = JSON.parse(
+      execFileSync(process.execPath, [runner], {
+        encoding: "utf8",
+        cwd: prefix,
+        env: {
+          ...credentialFreeEnvironment,
+          PACKED_TARGET_CHECKOUT: target.checkout,
+          PACKED_FACTORY_CONFIG: config,
+        },
+      }),
+    );
+    assert.equal(result.adapter, "example/scripted-local@1");
+    assert.equal(result.suppliedBase, target.baseSha);
+    assert.equal(result.workerHeadUnchanged, true);
+    assert.equal(result.validationPassed, true);
+    assert.equal(result.pullRequest, 201);
+    assert.equal(result.finalValidation, true);
+    assert.match(result.changeRef, /^[0-9a-f]{40}$/);
+    assert.match(result.treeSha, /^[0-9a-f]{40}$/);
+    assert.match(result.integratedSha, /^[0-9a-f]{40}$/);
+
+    const registeredConfig = JSON.parse(readFileSync(config, "utf8"));
+    assert.deepEqual(registeredConfig.execution.harness, {
+      kind: "registered",
+      adapter: "example/scripted-local@1",
+      config: {
+        output: "packed harness",
+        permissionMode: "worktree-only",
+        settingsSources: [],
+      },
+    });
+    const after = JSON.parse(
+      execFileSync(
+        cli,
+        ["status", "--objective", "1", "--json", "--config", config],
+        { encoding: "utf8", env: environment },
+      ),
+    );
+    assert.equal(after.state, "complete");
+    assert.equal(after.finalValidation, true);
     const timeline = execFileSync(
       cli,
       ["diagnostics", "--objective", "1", "--config", config],
       { encoding: "utf8", env: environment },
     );
-    assert.equal(timeline, "");
+    assert.match(timeline, /"operation":"harness"/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

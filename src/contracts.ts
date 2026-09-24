@@ -111,6 +111,7 @@ export interface ExecutionDriver {
 }
 
 export interface HarnessRequest {
+  /** Exact Factory-owned worktree. The harness may operate only inside it. */
   item: WorkItem;
   worktree: string;
   attemptId?: string;
@@ -122,7 +123,9 @@ export interface HarnessRequest {
   selectedAssets?: (SelectedAssetInput & { path: string })[];
 }
 export interface HarnessHandle {
+  /** Provider attempt identity, stable across controller restarts. */
   identity: string;
+  /** JSON-safe durable data only; no live process, closure, or credential. */
   data?: unknown;
 }
 export interface HarnessObservation {
@@ -133,7 +136,24 @@ export interface HarnessResult {
   assets?: ProducedAssetSet[];
   evidence?: unknown;
 }
+export interface AgentHarnessCapabilities {
+  protocolVersion: 1;
+  worktree: "factory-owned-read-write";
+  head: "preserve";
+  lifecycle: "restart-safe-durable-handle";
+  publication: "controller-only";
+  assetSets: true;
+  authentication: "local-environment" | "adapter-owned" | "none";
+}
 export interface AgentHarness {
+  /** Declared before composition; Factory rejects incompatible semantics. */
+  readonly capabilities: AgentHarnessCapabilities;
+  /**
+   * Start one attempt in the supplied worktree without moving HEAD. The
+   * harness does not commit, push, publish, or receive Factory's GitHub
+   * gateway. A returned handle must support restart-safe observation,
+   * cancellation, and collection without duplicating an ambiguous attempt.
+   */
   start(request: HarnessRequest): Promise<HarnessHandle>;
   observe(handle: HarnessHandle): Promise<HarnessObservation>;
   cancel(handle: HarnessHandle): Promise<void>;

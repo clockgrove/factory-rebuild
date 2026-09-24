@@ -322,7 +322,7 @@ test("review observations expose declared ownership and resources for named peer
   ]);
 });
 
-test("completed replayed item can retain its original worker base in legacy state", () => {
+test("completed replayed item can retain its original worker base", () => {
   const completed = state();
   completed.work.asset = {
     status: "done",
@@ -332,6 +332,7 @@ test("completed replayed item can retain its original worker base in legacy stat
       identity: "attempt-1",
       data: {
         request: { item: { id: "asset" }, baseSha: sha },
+        adapterIdentity: "scripted-test@1",
         handle: {
           identity: "worker-1",
           data: { pid: 123, startTime: "1", resultPath: "/tmp/result" },
@@ -352,7 +353,7 @@ test("completed replayed item can retain its original worker base in legacy stat
   );
 });
 
-test("persisted asset and active process identities fail closed", () => {
+test("persisted asset and active harness identities fail closed", () => {
   const waiting = state();
   waiting.work.asset = {
     status: "waiting",
@@ -391,8 +392,9 @@ test("persisted asset and active process identities fail closed", () => {
       identity: "attempt-1",
       data: {
         request: { item: { id: "asset" }, baseSha: sha },
+        adapterIdentity: "scripted-test@1",
         handle: {
-          identity: "worker-1",
+          identity: "",
           data: { pid: "bad", startTime: "1", resultPath: "/tmp/result" },
         },
         worktree: "/tmp/worktree",
@@ -402,6 +404,15 @@ test("persisted asset and active process identities fail closed", () => {
   assert.throws(
     () => parseFactoryState(running, repository, objective),
     /active attempt handle/,
+  );
+  running.work.asset.execution.data.handle = {
+    identity: "worker-1",
+    data: "opaque-json-handle",
+  };
+  assert.equal(
+    parseFactoryState(running, repository, objective).work.asset.execution.data
+      .handle.data,
+    "opaque-json-handle",
   );
 });
 
@@ -420,6 +431,7 @@ test("state ingress rejects an attempt handle pointing outside Factory state", (
         identity: "attempt-1",
         data: {
           request: { item: { id: "asset" }, baseSha: sha },
+          adapterIdentity: "scripted-test@1",
           worktree: "/tmp/foreign-worktree",
           handle: {
             identity: "worker-1",

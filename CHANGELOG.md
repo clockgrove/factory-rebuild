@@ -2,6 +2,12 @@
 
 This file records public releases of Factory. See [BUILD-STATUS.md](docs/BUILD-STATUS.md) for development acceptance evidence.
 
+## Unreleased
+
+- Expose a capability-checked package-root local `AgentHarness` registration seam with stable adapter identity, adapter-owned configuration, durable lifecycle handles, and a packed full-path conformance test.
+- Add pinned optional Claude Agent SDK 0.3.281 and GitHub Copilot SDK 1.0.13 Work Item adapters while preserving Codex as the default and planning/review provider.
+- Reuse developer-local provider authentication, fail with actionable login-and-retry guidance when it is absent, and keep controller GitHub publication credentials out of worker environments.
+
 ## 0.1.7 — 2026-09-23
 
 - Persist explicit, independently selectable Codex model and reasoning choices for planning, review, and Work Item execution instead of inheriting ambient user configuration.

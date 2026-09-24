@@ -116,6 +116,39 @@ function strings(value: unknown, label: string): string[] {
   return value;
 }
 
+function jsonSafe(
+  value: unknown,
+  label: string,
+  seen = new Set<unknown>(),
+): void {
+  if (value === null || typeof value === "string" || typeof value === "boolean")
+    return;
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) throw new Error(`${label} must be JSON-safe`);
+    return;
+  }
+  if (typeof value !== "object" || seen.has(value))
+    throw new Error(`${label} must be JSON-safe`);
+  seen.add(value);
+  try {
+    if (Array.isArray(value)) {
+      for (const [index, entry] of value.entries())
+        jsonSafe(entry, `${label}[${index}]`, seen);
+      return;
+    }
+    if (
+      (Object.getPrototypeOf(value) !== Object.prototype &&
+        Object.getPrototypeOf(value) !== null) ||
+      Object.getOwnPropertySymbols(value).length
+    )
+      throw new Error(`${label} must contain only JSON objects`);
+    for (const [key, entry] of Object.entries(value))
+      jsonSafe(entry, `${label}.${key}`, seen);
+  } finally {
+    seen.delete(value);
+  }
+}
+
 function acceptanceDecisions(value: unknown, label: string): void {
   if (!Array.isArray(value)) throw new Error(`${label} is invalid`);
   for (const raw of value) {
@@ -507,25 +540,26 @@ export function parseFactoryState(
       )
         throw new Error(`Work Item ${id} execution identity is invalid`);
       if (execution.data !== undefined)
-        record(execution.data, `work.${id}.execution.data`);
+        jsonSafe(execution.data, `work.${id}.execution.data`);
       if (execution.provider === "local") {
         const active = record(execution.data, `work.${id}.execution.data`);
         const request = record(active.request, `work.${id}.execution.request`);
         const attemptedItem = record(request.item, `work.${id}.execution.item`);
         const handle = record(active.handle, `work.${id}.harness`);
-        const host = record(handle.data, `work.${id}.harness.data`);
         if (
           typeof active.worktree !== "string" ||
+          typeof active.adapterIdentity !== "string" ||
+          !active.adapterIdentity ||
           attemptedItem.id !== id ||
           (request.baseSha !== item.baseSha &&
             item.status !== "done" &&
             item.status !== "published") ||
           typeof handle.identity !== "string" ||
-          !Number.isSafeInteger(host.pid) ||
-          typeof host.startTime !== "string" ||
-          typeof host.resultPath !== "string"
+          !handle.identity
         )
           throw new Error(`Work Item ${id} active attempt handle is invalid`);
+        if (handle.data !== undefined)
+          jsonSafe(handle.data, `work.${id}.harness.data`);
       }
     }
   }

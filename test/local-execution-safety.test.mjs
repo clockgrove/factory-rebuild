@@ -68,6 +68,15 @@ async function runCandidate(change, options = {}) {
   try {
     const { checkout, baseSha } = target(root, options.legacy, options.lfs);
     const harness = {
+      capabilities: {
+        protocolVersion: 1,
+        worktree: "factory-owned-read-write",
+        head: "preserve",
+        lifecycle: "restart-safe-durable-handle",
+        publication: "controller-only",
+        assetSets: true,
+        authentication: "none",
+      },
       async start(request) {
         change(request.worktree, root);
         return { identity: request.attemptId, data: {} };
@@ -86,6 +95,7 @@ async function runCandidate(change, options = {}) {
       harness,
       1,
       new LocalContentStore(join(root, "content")),
+      "scripted-test@1",
     );
     const item = {
       id: "safety",
