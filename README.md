@@ -4,7 +4,7 @@
 
 Factory turns a repository development Objective into source-grounded Work Items, runs bounded coding attempts, validates their exact result trees, and delivers the changes through GitHub. It is an open-source Clockgrove plugin installed for one target repository at a time.
 
-**Version:** `v0.1.6`. Factory runs the local Codex SDK path with a source-grounded dependency DAG, regular pull requests or native linear stacks, human-selected AssetSets, Git LFS, and private diagnostics. See [current build status](https://github.com/clockgrove/factory-rebuild/blob/main/docs/BUILD-STATUS.md) for the published artifact identity and exact Objective acceptance evidence.
+**Version:** `v0.1.7`. Factory runs the local Codex SDK path with a source-grounded dependency DAG, regular pull requests or native linear stacks, human-selected AssetSets, Git LFS, and private diagnostics. See [current build status](https://github.com/clockgrove/factory-rebuild/blob/main/docs/BUILD-STATUS.md) for the published artifact identity and exact Objective acceptance evidence.
 
 ## How it works
 
@@ -15,19 +15,19 @@ Factory turns a repository development Objective into source-grounded Work Items
 
 The target repository owns its product and runtime truth. Factory state and credentials stay outside the target checkout. Factory refuses to run against any Factory source repository.
 
-## Install v0.1.6
+## Install v0.1.7
 
-Install the plugin from the pinned Clockgrove marketplace and its bundled CLI from the matching [release page](https://github.com/clockgrove/factory-rebuild/releases/tag/v0.1.6) on Linux x64 with Node.js 22 or later. Compare the tarball digest with the independent value in [build status](https://github.com/clockgrove/factory-rebuild/blob/main/docs/BUILD-STATUS.md):
+Install the plugin from the pinned Clockgrove marketplace and its bundled CLI from the matching [release page](https://github.com/clockgrove/factory-rebuild/releases/tag/v0.1.7) on Linux x64 with Node.js 22 or later. Compare the tarball digest with the independent value in [build status](https://github.com/clockgrove/factory-rebuild/blob/main/docs/BUILD-STATUS.md):
 
 ```sh
-codex plugin marketplace add clockgrove/factory-rebuild --ref v0.1.6
+codex plugin marketplace add clockgrove/factory-rebuild --ref v0.1.7
 codex plugin add factory@clockgrove
-gh release download v0.1.6 --repo clockgrove/factory-rebuild \
-  --pattern clockgrove-factory-0.1.6.tgz --pattern SHA256SUMS
+gh release download v0.1.7 --repo clockgrove/factory-rebuild \
+  --pattern clockgrove-factory-0.1.7.tgz --pattern SHA256SUMS
 sha256sum --check SHA256SUMS
 # Compare the tarball digest with the independently recorded build status value.
 npm install --offline --ignore-scripts --prefix /absolute/private/factory-prefix \
-  ./clockgrove-factory-0.1.6.tgz
+  ./clockgrove-factory-0.1.7.tgz
 export PATH="/absolute/private/factory-prefix/node_modules/.bin:$PATH"
 factory help
 ```
@@ -36,7 +36,7 @@ The plugin supplies the packaged `director` and `setup` skills; the verified CLI
 
 ## Build from source
 
-For development, the following commands build and install the current checkout as a local candidate. A local build has its own package identity and does not count as installation of the published `v0.1.6` artifact. The [release checklist](https://github.com/clockgrove/factory-rebuild/blob/main/docs/RELEASE-CHECKLIST.md) and [public release procedure](https://github.com/clockgrove/factory-rebuild/blob/main/docs/PUBLIC-RELEASE.md) describe the exact-artifact gate.
+For development, the following commands build and install the current checkout as a local candidate. A local build has its own package identity and does not count as installation of the published `v0.1.7` artifact. The [release checklist](https://github.com/clockgrove/factory-rebuild/blob/main/docs/RELEASE-CHECKLIST.md) and [public release procedure](https://github.com/clockgrove/factory-rebuild/blob/main/docs/PUBLIC-RELEASE.md) describe the exact-artifact gate.
 
 Requires Node.js 22 or later, Git, GitHub CLI authentication for the target repository, and an authenticated Codex SDK environment. Media Objectives also require Git LFS. Clone this repository, then build and install its package in an isolated prefix:
 
@@ -48,7 +48,7 @@ npm run lint
 npm run format:check
 npm test
 npm pack
-npm install --prefix /tmp/factory-candidate ./clockgrove-factory-0.1.6.tgz
+npm install --prefix /tmp/factory-candidate ./clockgrove-factory-0.1.7.tgz
 ```
 
 Bind one target checkout, inspect a read-only plan, and run that exact candidate with the installed CLI:
@@ -57,7 +57,10 @@ Bind one target checkout, inspect a read-only plan, and run that exact candidate
 /tmp/factory-candidate/node_modules/.bin/factory install \
   --repository OWNER/REPO \
   --checkout /absolute/path/to/target \
-  --concurrency 2
+  --concurrency 2 \
+  --planning-model gpt-5.6-sol --planning-reasoning medium \
+  --review-model gpt-5.6-sol --review-reasoning medium \
+  --worker-model gpt-5.6-sol --worker-reasoning medium
 /tmp/factory-candidate/node_modules/.bin/factory plan --objective ISSUE_NUMBER \
   --output /absolute/private/plan.json
 /tmp/factory-candidate/node_modules/.bin/factory run --objective ISSUE_NUMBER \
@@ -80,6 +83,8 @@ An Objective may name additional canonical source paths or a section by exact he
 Factory reads those bytes from the exact Git base, includes them in the preview with source digests, and ignores dirty checkout edits. Root `AGENTS.md` and `README.md`, when present, are also read from that base. `plan` creates no Work Item issues or run state; its output contains target source text and should stay outside the target checkout. A missing or ambiguous heading stops planning. A sourced graph-review finding allows one revision and re-review. If it remains unresolved, the plan names a specific question; the operator can record an answer with `factory decide --objective ISSUE_NUMBER --plan /absolute/private/plan.json --outcome accept --actor NAME --reason TEXT --answer TEXT --output /absolute/private/decided.json`, or refuse it with `--outcome refuse`. If the independent reviewer returns malformed or ungrounded findings, the preview instead records the failure and asks for inspection of the exact pinned graph. An explicit `decide` acceptance preserves that graph as `human-accepted` and does not repeat the failed review; it is not labeled an automated clean review. A clean or human-accepted decided plan can be passed to `run --plan`. Running without `--plan` explicitly compiles and reviews a fresh graph. A changed Objective, base, or source packet requires a new plan.
 Run `/tmp/factory-candidate/node_modules/.bin/factory help` for the installed command list. Factory stores configuration and state outside the target checkout. Never bind it to a Factory source repository.
 
+Factory writes explicit Codex selections for the planner, independent graph/result reviewer, and Work Item worker. Each model flag accepts a non-empty Codex model ID; each reasoning flag accepts `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, `ultra`, or `persistent`. Omitted flags use the Factory-owned default `gpt-5.6-sol` with `medium` reasoning for that role. Factory never inherits these choices from the operator's ambient Codex configuration. The installed selections are part of the configuration digest, so changing one during an active Objective stops resumption instead of silently changing the run.
+
 `status --json` reports the current step, scheduler eligibility, ready or blocked reason, pending result criterion and question, issue/PR/stack identity, exact base/tree/head, final validation, and last error from Factory's atomic state snapshot. `eligible` means dependencies and resources permit scheduling. `ready` is `false` when blocked and `null` when admission depends on provider capacity, which is not persisted in the snapshot. Configured concurrency exhaustion appears as `blockedReason: "capacity"`. Its provider progress flag reflects whether the current attempt has produced an SDK stream. `diagnostics` prints private newline-delimited JSON events; `--follow` streams new events until interrupted. Validation stdout/stderr is emitted while the command runs, including partial lines, followed by exit evidence; split credentials are buffered until they can be redacted. `logs --item` reads the current attempt's worker stdout/stderr, with the same follow option, and reports when no worker output exists. The timeline correlates repository, Objective, run, item, attempt, and operation where known. It includes planning, scheduling, worker lifecycle and SDK progress, validation command output, result review and pending decisions, GitHub delivery, media review/selection, and finalization. SDK usage and tool identity appear only when the SDK reports them; unavailable model identity or progress is never inferred from response text. Treat diagnostic output as sensitive: it may include worker command output and validation stdout/stderr. Factory redacts known credential patterns and configured allowed secret values, but arbitrary target commands may print other private data. Keep terminal capture and any export outside the target checkout.
 
 Diagnostic and worker progress files live under the private Factory state root with mode `0600`; containing directories are private. The local log is observational and is never used to reconstruct or retry work. A write failure appears on controller stderr and does not alter execution. Operators may delete old `diagnostics.ndjson` and `harness/*.progress.ndjson` files after runs have stopped, subject to their own retention policy. The event `metadata` field holds identities suitable for a future exporter; `detail` is local-only and must not be exported without explicit redaction policy. No hosted telemetry backend is required.
@@ -88,7 +93,7 @@ The preview lists each Work Item command and every final Objective command with 
 
 At runtime Factory runs admitted commands on the exact result tree. For root `npm test`, `npm run NAME`, `pnpm test`, `pnpm check`, and `pnpm run NAME`, a script that existed at the Objective base remains pinned there. A script newly established by an Objective is permitted only through an exact source declaration; later Work Items pin it to their exact predecessor. Selected scripts cannot add pre/post hooks or nested package-manager wrappers without separate authority. Existing package-manager configuration stays pinned; a new pnpm workspace file may be created under source-declared command authority. Metadata, dependency, and unrelated script edits may proceed. A fresh validation worktree may run the exact source-declared bootstrap `pnpm install --frozen-lockfile --ignore-scripts` before its pnpm checks, using a lockfile tracked in the result tree and no pnpmfile hooks; plain install remains blocked. A new `.npmrc` remains blocked by this narrow path. Source-declared validation can still run candidate code on the local host under the target operator's authority; Factory does not sandbox that code.
 
-Factory then independently checks each stated Work Item and Objective acceptance criterion against the pinned sources, command evidence, and an exact-tree change packet with a conservative 48,000-byte text excerpt budget, explicit truncation markers, and blob descriptors for opaque files. A Work Item review also receives bounded `Delivery observations` from the authoritative atomic snapshot, accepted graph, and active delivery runner: the reviewed attempt, its declared dependencies, start time, immutable worker execution base, integration head observed at attempt start, current result head and integration state, relevant dependency or acceptance-named peer attempts, and explicit regular or native-stack unit/layer context. Native replay may advance the mutable validation and delivery base without changing worker-start facts. Legacy attempts that lack immutable start provenance are labeled as unrecorded rather than inferred. This observation packet does not derive continuation truth from diagnostics or worker prose. Operators using a reviewer with a larger context can set `FACTORY_RESULT_REVIEW_TEXT_BUDGET_BYTES` to a positive byte budget. A truncated text excerpt cannot auto-pass a criterion even if the reviewer returns pass; the criterion waits for an exact-tree operator decision or a retry with a larger text budget and reviewer context. Reviewer failures also wait with their specific error. A source-backed clean result review passes without routine operator approval. Missing, conflicting, or human-owned evidence pauses on one specific criterion. `factory status --objective ISSUE_NUMBER` shows its question and tree. To answer, run `factory decide-result --objective ISSUE_NUMBER [--item WORK_ITEM_ID] --tree EXACT_TREE_SHA --outcome accept|refuse --actor NAME --reason TEXT`, then `factory run --objective ISSUE_NUMBER`. Omit `--item` for final Objective acceptance. The recorded decision is valid only for that criterion and tree; a refusal stops delivery. This decision approves the result criterion, while the target repository's branch protection and GitHub checks still govern PR integration.
+Factory then independently checks each stated Work Item and Objective acceptance criterion against the pinned sources, command evidence, and an exact-tree change packet with a conservative 48,000-byte text excerpt budget, explicit truncation markers, and blob descriptors for opaque files. A Work Item review also receives bounded `Delivery observations` from the authoritative atomic snapshot, accepted graph, and active delivery runner: the reviewed attempt, its declared dependencies, owned paths, named resources, start time, immutable worker execution base, integration head observed at attempt start, current result head and integration state, relevant dependency or acceptance-named peer attempts, and explicit regular or native-stack unit/layer context. Native replay may advance the mutable validation and delivery base without changing worker-start facts. Legacy attempts that lack immutable start provenance are labeled as unrecorded rather than inferred. This observation packet does not derive continuation truth from diagnostics or worker prose. Operators using a reviewer with a larger context can set `FACTORY_RESULT_REVIEW_TEXT_BUDGET_BYTES` to a positive byte budget. A truncated text excerpt cannot auto-pass a criterion even if the reviewer returns pass; the criterion waits for an exact-tree operator decision or a retry with a larger text budget and reviewer context. Reviewer failures also wait with their specific error. A source-backed clean result review passes without routine operator approval. Missing, conflicting, or human-owned evidence pauses on one specific criterion. `factory status --objective ISSUE_NUMBER` shows its question and tree. To answer, run `factory decide-result --objective ISSUE_NUMBER [--item WORK_ITEM_ID] --tree EXACT_TREE_SHA --outcome accept|refuse --actor NAME --reason TEXT`, then `factory run --objective ISSUE_NUMBER`. Omit `--item` for final Objective acceptance. The recorded decision is valid only for that criterion and tree; a refusal stops delivery. This decision approves the result criterion, while the target repository's branch protection and GitHub checks still govern PR integration.
 
 Use `--delivery native-stack` at install time to deliver maximal linear chains through GitHub's native stacked pull requests. The default is regular PR delivery.
 

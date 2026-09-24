@@ -2,7 +2,13 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve, sep } from "node:path";
 import type { PlanCandidate } from "./compiler.js";
-import { configPath, readConfig, stateRoot, validateConfig } from "./config.js";
+import {
+  configPath,
+  DEFAULT_CODEX_MODEL_SELECTION,
+  readConfig,
+  stateRoot,
+  validateConfig,
+} from "./config.js";
 import { compose, composePlanning } from "./index.js";
 import { readState } from "./state-store.js";
 import { itemsConflict } from "./scheduler.js";
@@ -27,7 +33,7 @@ function options(args: string[], name: string): string[] {
 
 function help(): void {
   console.log(
-    `Factory CLI\n\nCommands:\n  install --repository OWNER/REPO --checkout ABSOLUTE_PATH --concurrency N [--delivery regular|native-stack] [--network host|off] [--config PATH]\n  plan --objective N [--output ABSOLUTE_NEW_FILE] [--config PATH]\n  decide --objective N --plan PLAN_FILE --outcome accept|refuse --actor NAME --reason TEXT [--answer TEXT] --output ABSOLUTE_NEW_FILE [--config PATH]\n  run --objective N [--plan PLAN_FILE] [--config PATH]\n  status --objective N [--json] [--config PATH]\n  diagnostics --objective N [--follow] [--config PATH]\n  logs --objective N --item ID [--follow] [--config PATH]\n  decide-result --objective N [--item ID] --tree SHA --outcome accept|refuse --actor NAME --reason TEXT [--config PATH]\n  review --objective N --item ID --set SET_ID --output ABSOLUTE_NEW_DIRECTORY [--config PATH]\n  select --objective N --item ID --set SET_ID [--actor NAME] [--reason TEXT] [--bind DEPENDENT_ITEM ...] [--config PATH]\n  cancel --objective N [--config PATH]\n  retry --objective N --item ID [--config PATH]`,
+    `Factory CLI\n\nCommands:\n  install --repository OWNER/REPO --checkout ABSOLUTE_PATH --concurrency N [--delivery regular|native-stack] [--network host|off] [--planning-model MODEL] [--planning-reasoning EFFORT] [--review-model MODEL] [--review-reasoning EFFORT] [--worker-model MODEL] [--worker-reasoning EFFORT] [--config PATH]\n  plan --objective N [--output ABSOLUTE_NEW_FILE] [--config PATH]\n  decide --objective N --plan PLAN_FILE --outcome accept|refuse --actor NAME --reason TEXT [--answer TEXT] --output ABSOLUTE_NEW_FILE [--config PATH]\n  run --objective N [--plan PLAN_FILE] [--config PATH]\n  status --objective N [--json] [--config PATH]\n  diagnostics --objective N [--follow] [--config PATH]\n  logs --objective N --item ID [--follow] [--config PATH]\n  decide-result --objective N [--item ID] --tree SHA --outcome accept|refuse --actor NAME --reason TEXT [--config PATH]\n  review --objective N --item ID --set SET_ID --output ABSOLUTE_NEW_DIRECTORY [--config PATH]\n  select --objective N --item ID --set SET_ID [--actor NAME] [--reason TEXT] [--bind DEPENDENT_ITEM ...] [--config PATH]\n  cancel --objective N [--config PATH]\n  retry --objective N --item ID [--config PATH]`,
   );
 }
 
@@ -48,8 +54,36 @@ async function main(): Promise<void> {
       schemaVersion: 1,
       repository,
       checkout,
-      planning: { kind: "codex-sdk" },
-      execution: { kind: "local", concurrency, harness: { kind: "codex-sdk" } },
+      planning: {
+        kind: "codex-sdk",
+        planner: {
+          model:
+            option(args, "planning-model") ??
+            DEFAULT_CODEX_MODEL_SELECTION.model,
+          reasoningEffort:
+            option(args, "planning-reasoning") ??
+            DEFAULT_CODEX_MODEL_SELECTION.reasoningEffort,
+        },
+        reviewer: {
+          model:
+            option(args, "review-model") ?? DEFAULT_CODEX_MODEL_SELECTION.model,
+          reasoningEffort:
+            option(args, "review-reasoning") ??
+            DEFAULT_CODEX_MODEL_SELECTION.reasoningEffort,
+        },
+      },
+      execution: {
+        kind: "local",
+        concurrency,
+        harness: {
+          kind: "codex-sdk",
+          model:
+            option(args, "worker-model") ?? DEFAULT_CODEX_MODEL_SELECTION.model,
+          reasoningEffort:
+            option(args, "worker-reasoning") ??
+            DEFAULT_CODEX_MODEL_SELECTION.reasoningEffort,
+        },
+      },
       delivery: { kind: option(args, "delivery") ?? "regular" },
       contentStore: { kind: "local" },
       policy: {

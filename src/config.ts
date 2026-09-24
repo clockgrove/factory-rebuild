@@ -2,8 +2,32 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 
+export type CodexReasoningEffort =
+  | "minimal"
+  | "low"
+  | "medium"
+  | "high"
+  | "xhigh"
+  | "max"
+  | "ultra"
+  | "persistent";
+
+export interface CodexModelSelection {
+  model: string;
+  reasoningEffort: CodexReasoningEffort;
+}
+
+export const DEFAULT_CODEX_MODEL_SELECTION: CodexModelSelection = {
+  model: "gpt-5.6-sol",
+  reasoningEffort: "medium",
+};
+
 export type ExecutionConfig =
-  | { kind: "local"; concurrency: number; harness: { kind: "codex-sdk" } }
+  | {
+      kind: "local";
+      concurrency: number;
+      harness: { kind: "codex-sdk" } & CodexModelSelection;
+    }
   | { kind: "managed-agent"; concurrency: number; provider: string }
   | {
       kind: "sandbox";
@@ -16,7 +40,11 @@ export interface FactoryConfig {
   schemaVersion: 1;
   repository: string;
   checkout: string;
-  planning: { kind: "codex-sdk" };
+  planning: {
+    kind: "codex-sdk";
+    planner: CodexModelSelection;
+    reviewer: CodexModelSelection;
+  };
   execution: ExecutionConfig;
   delivery: { kind: "regular" | "native-stack" };
   contentStore: { kind: "local" };
@@ -26,6 +54,17 @@ export interface FactoryConfig {
     deployments: "denied";
   };
 }
+
+const codexReasoningEfforts = new Set<CodexReasoningEffort>([
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+  "ultra",
+  "persistent",
+]);
 
 const factoryRepositories = new Set([
   "clockgrove/factory",
@@ -51,6 +90,20 @@ function assertObject(
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
     throw new Error(`${name} must be an object`);
   }
+}
+
+function assertCodexModelSelection(
+  value: unknown,
+  name: string,
+): asserts value is CodexModelSelection {
+  assertObject(value, name);
+  if (typeof value.model !== "string" || value.model.trim().length === 0)
+    throw new Error(`${name}.model must be a non-empty string`);
+  if (
+    typeof value.reasoningEffort !== "string" ||
+    !codexReasoningEfforts.has(value.reasoningEffort as CodexReasoningEffort)
+  )
+    throw new Error(`${name}.reasoningEffort is unsupported`);
 }
 
 function remoteRepository(checkout: string): string | undefined {
@@ -119,6 +172,8 @@ export function validateConfig(value: unknown): FactoryConfig {
   assertObject(value.planning, "planning");
   if (value.planning.kind !== "codex-sdk")
     throw new Error("Unsupported planning model");
+  assertCodexModelSelection(value.planning.planner, "planning.planner");
+  assertCodexModelSelection(value.planning.reviewer, "planning.reviewer");
   assertObject(value.execution, "execution");
   if (value.execution.kind !== "local") {
     throw new Error(
@@ -136,6 +191,7 @@ export function validateConfig(value: unknown): FactoryConfig {
   assertObject(value.execution.harness, "execution.harness");
   if (value.execution.harness.kind !== "codex-sdk")
     throw new Error("Unsupported local harness");
+  assertCodexModelSelection(value.execution.harness, "execution.harness");
   assertObject(value.delivery, "delivery");
   if (
     value.delivery.kind !== "regular" &&

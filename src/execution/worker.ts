@@ -18,11 +18,13 @@ import { dirname, join, resolve } from "node:path";
 import type { HarnessRequest } from "../contracts.js";
 import type { ThreadEvent } from "@openai/codex-sdk";
 import { parseProducedAssetSets } from "../media.js";
+import type { CodexModelSelection } from "../config.js";
 
 interface WorkerInput {
   request: HarnessRequest;
   network: "host" | "off";
   redactionValues?: string[];
+  model: CodexModelSelection;
 }
 
 function privateProgress(path: string, event: unknown): void {
@@ -123,6 +125,7 @@ async function main(): Promise<void> {
     request,
     network,
     redactionValues = [],
+    model,
   } = JSON.parse(readFileSync(inputPath, "utf8")) as WorkerInput;
   const progressPath = resultPath.replace(
     /\.result\.json$/,
@@ -140,6 +143,8 @@ async function main(): Promise<void> {
     sandboxMode: "workspace-write",
     approvalPolicy: "never",
     networkAccessEnabled: network === "host",
+    model: model.model,
+    modelReasoningEffort: model.reasoningEffort,
   });
   const mediaInstructions = request.item.expectedOutputRoles?.length
     ? `\n\nProduce at least ${request.item.minimumAssetSets ?? 1} complete candidate AssetSets with different content. Put candidate bytes under .factory-media/ and write .factory-assets.json at the checkout root. Use this format-neutral manifest shape, replacing every angle-bracket placeholder with the actual declared role, file, media type, and owned destination: {"sets":[{"id":"candidate-a","members":[{"role":"<expected role>","path":".factory-media/candidate-a/<file>","mediaType":"<declared media type>","destination":"<owned target path>"}],"provenance":{"source":"<source path or generated>","rights":"<basis for repository use>","visibility":"repository","lineage":["<source path or input identity>"]}}]}. Include every expected role in each set. You may add member formatMetadata with a named source and uninterpreted values when an authoritative tool supplies it, set-level relationships with from, toRole, and kind when outputs are related, and production evidence with model, tool, request, or parameters when those values are actually supplied. Do not invent metadata or tool identities. .factory-media/ and .factory-assets.json are the only staging exceptions to owned paths. Do not write final destinations directly. Candidate files and the manifest are staging outputs; do not commit them. The controller will preserve the exact bytes for human review and selection.\nSource bindings: ${JSON.stringify(request.sourceAssets ?? [])}\nExpected output roles: ${request.item.expectedOutputRoles.join(", ")}`
