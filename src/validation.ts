@@ -1,17 +1,28 @@
-import { mkdirSync, rmSync } from "node:fs";
-import { join } from "node:path";
-import { randomUUID } from "node:crypto";
+import {
+  closeSync,
+  fstatSync,
+  lstatSync,
+  mkdirSync,
+  openSync,
+  readSync,
+  realpathSync,
+  rmSync,
+} from "node:fs";
+import { isAbsolute, join, resolve } from "node:path";
+import { createHash, randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { spawn, spawnSync } from "node:child_process";
 import { StringDecoder } from "node:string_decoder";
 import type {
   CapturedAssetSet,
+  ContentStore,
   ModelInvocationContext,
   PlanningModel,
   ResultReviewCandidate,
   ResultReviewEvidenceSource,
   ResultReviewFinding,
   ValidationCommandReceipt,
+  ValidationLfsMember,
   WorkItem,
 } from "./contracts.js";
 import type {
@@ -912,6 +923,140 @@ export interface ValidationOutputObservation {
   final: boolean;
 }
 
+function safeValidationPath(path: string): boolean {
+  return (
+    !!path &&
+    !isAbsolute(path) &&
+    !path.includes("\\") &&
+    !path.split("/").some((part) => !part || part === "." || part === "..") &&
+    path !== ".git" &&
+    !path.startsWith(".git/")
+  );
+}
+
+function assertSelectedLfsPointer(
+  worktree: string,
+  member: ValidationLfsMember,
+): void {
+  if (!safeValidationPath(member.destination))
+    throw new Error("Validation LFS destination is invalid");
+  if (
+    !/^[a-f0-9]{64}$/.test(member.digest) ||
+    !Number.isSafeInteger(member.bytes) ||
+    member.bytes < 0
+  )
+    throw new Error(
+      `Validation LFS identity is invalid: ${member.destination}`,
+    );
+  const filter = pinnedGit(
+    worktree,
+    "check-attr",
+    "filter",
+    "--",
+    member.destination,
+  );
+  if (!filter.endsWith(": lfs"))
+    throw new Error(
+      `Validation LFS policy does not cover ${member.destination}`,
+    );
+  let pointer: string;
+  try {
+    pointer = pinnedGitRaw(
+      worktree,
+      "show",
+      `HEAD:${member.destination}`,
+    ).toString("utf8");
+  } catch {
+    throw new Error(
+      `Validation tree is missing selected LFS path: ${member.destination}`,
+    );
+  }
+  const expected = `version https://git-lfs.github.com/spec/v1\noid sha256:${member.digest}\nsize ${member.bytes}\n`;
+  if (pointer !== expected)
+    throw new Error(
+      `Validation LFS pointer differs from selected bytes: ${member.destination}`,
+    );
+}
+
+function assertSelectedLfsBytes(
+  worktree: string,
+  member: ValidationLfsMember,
+): void {
+  const path = join(worktree, member.destination);
+  let fd: number | undefined;
+  try {
+    if (!lstatSync(path).isFile() || realpathSync(path) !== resolve(path))
+      throw new Error("unsafe file type");
+    fd = openSync(path, "r");
+    const expectedBytes = fstatSync(fd).size;
+    const hash = createHash("sha256");
+    let bytes = 0;
+    const chunk = Buffer.allocUnsafe(64 * 1024);
+    for (;;) {
+      const count = readSync(fd, chunk, 0, chunk.length, null);
+      if (!count) break;
+      hash.update(chunk.subarray(0, count));
+      bytes += count;
+    }
+    if (
+      bytes !== expectedBytes ||
+      bytes !== member.bytes ||
+      hash.digest("hex") !== member.digest
+    )
+      throw new Error("identity mismatch");
+  } catch {
+    throw new Error(
+      `Validation could not restore selected LFS bytes: ${member.destination}`,
+    );
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
+}
+
+async function hydrateSelectedLfsBytes(
+  worktree: string,
+  members: ValidationLfsMember[],
+  contentStore?: ContentStore,
+): Promise<void> {
+  if (!members.length) return;
+  if (!contentStore)
+    throw new Error("Validation LFS content store is unavailable");
+  const byDestination = new Map<string, ValidationLfsMember>();
+  for (const member of members) {
+    const existing = byDestination.get(member.destination);
+    if (
+      existing &&
+      (existing.digest !== member.digest || existing.bytes !== member.bytes)
+    )
+      throw new Error(
+        `Validation has conflicting LFS selections: ${member.destination}`,
+      );
+    byDestination.set(member.destination, member);
+  }
+  const selected = [...byDestination.values()];
+  for (const member of selected) assertSelectedLfsPointer(worktree, member);
+  for (const member of selected) {
+    const path = join(worktree, member.destination);
+    try {
+      if (!lstatSync(path).isFile() || realpathSync(path) !== resolve(path))
+        throw new Error("unsafe file type");
+      const ref = {
+        digest: member.digest,
+        bytes: member.bytes,
+        mediaType: member.mediaType,
+      };
+      await contentStore.verify(ref);
+      rmSync(path);
+      await contentStore.materialize(ref, path);
+    } catch {
+      throw new Error(
+        `Validation could not restore selected LFS bytes: ${member.destination}`,
+      );
+    }
+    assertSelectedLfsBytes(worktree, member);
+  }
+}
+
 export async function validateTree(
   checkout: string,
   root: string,
@@ -920,6 +1065,8 @@ export async function validateTree(
   commands: string[],
   observe?: (entry: ValidationObservation) => void,
   observeOutput?: (entry: ValidationOutputObservation) => void,
+  lfsMembers: ValidationLfsMember[] = [],
+  contentStore?: ContentStore,
 ): Promise<ValidationEvidence> {
   mkdirSync(root, { recursive: true });
   const emptyCredentials = join(root, "empty-gh-config");
@@ -932,6 +1079,10 @@ export async function validateTree(
       throw new Error(
         `Validation tree mismatch: expected ${expectedTree}, got ${treeSha}`,
       );
+    if (pinnedGit(worktree, "status", "--porcelain"))
+      throw new Error("Validation worktree is not initially clean");
+    await hydrateSelectedLfsBytes(worktree, lfsMembers, contentStore);
+    const hydratedStatus = pinnedGit(worktree, "status", "--porcelain");
     const evidence: ValidationEvidence = { treeSha, commands: [] };
     for (const [index, check] of commands.entries()) {
       const started = Date.now();
@@ -994,7 +1145,8 @@ export async function validateTree(
         treeSha,
       });
     }
-    if (pinnedGit(worktree, "status", "--porcelain"))
+    for (const member of lfsMembers) assertSelectedLfsBytes(worktree, member);
+    if (pinnedGit(worktree, "status", "--porcelain") !== hydratedStatus)
       throw new Error("Validation command modified the result tree");
     return evidence;
   } finally {
@@ -1244,6 +1396,8 @@ export async function validateWorkItem(
   observe?: (entry: ValidationObservation) => void,
   observeOutput?: (entry: ValidationOutputObservation) => void,
   predecessorSha?: string,
+  lfsMembers: ValidationLfsMember[] = [],
+  contentStore?: ContentStore,
 ): Promise<ValidationEvidence> {
   assertPinnedNpmScripts(
     checkout,
@@ -1265,5 +1419,7 @@ export async function validateWorkItem(
     item.validation.map((v) => v.command),
     observe,
     observeOutput,
+    lfsMembers,
+    contentStore,
   );
 }

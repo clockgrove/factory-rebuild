@@ -10,7 +10,11 @@ import type {
   PlanningModel,
   WorkItem,
 } from "../contracts.js";
-import { materializeAssetSet, selectedInputsForItem } from "../media.js";
+import {
+  materializeAssetSet,
+  selectedInputsForItem,
+  validationLfsMembersForItem,
+} from "../media.js";
 import { closeWorkItem } from "../completion.js";
 import { git } from "../process.js";
 import { readyItems } from "../scheduler.js";
@@ -162,6 +166,8 @@ export async function runRegularGraph(args: {
             entry.final,
           ),
         itemBase,
+        validationLfsMembersForItem(state, item),
+        args.contentStore,
       );
       const reviewResult = () =>
         reviewAcceptance({

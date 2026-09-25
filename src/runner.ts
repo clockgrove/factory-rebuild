@@ -27,7 +27,11 @@ import type {
   GitHubGateway,
   PlanningModel,
 } from "./contracts.js";
-import { assetSelectionDigest, verifyHydratedAssets } from "./media.js";
+import {
+  assetSelectionDigest,
+  finalValidationLfsMembers,
+  verifyHydratedAssets,
+} from "./media.js";
 import { runNativeGraph } from "./delivery/native-runner.js";
 import { linearDeliveryUnits } from "./delivery/plan.js";
 import { runRegularGraph } from "./delivery/regular-runner.js";
@@ -461,6 +465,8 @@ export async function runObjective(
           entry.output,
           entry.final,
         ),
+      finalValidationLfsMembers(state),
+      contentStore,
     );
     const selectedAssets = graph.items.flatMap((item) => {
       const work = state.work[item.id];

@@ -362,6 +362,17 @@ export interface CapturedAssetSet {
   evidence: { harnessIdentity: string; resultDigest: string };
 }
 
+/** Exact selected LFS bytes that an exact-tree validation must restore locally. */
+export interface ValidationLfsMember {
+  itemId: string;
+  setId: string;
+  role: string;
+  destination: string;
+  digest: string;
+  bytes: number;
+  mediaType: string;
+}
+
 export interface SelectedAssetInput {
   fromItem: string;
   setId: string;

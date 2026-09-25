@@ -2,6 +2,12 @@
 
 This file records public releases of Factory. See [BUILD-STATUS.md](docs/BUILD-STATUS.md) for development acceptance evidence.
 
+## Unreleased
+
+- Hydrate only the selected required-LFS members from Factory's verified local content store into exact-tree validation worktrees, verify their committed pointer and restored SHA-256/size before target commands, and fail closed before command zero when local selected bytes are missing or corrupt.
+- Reverify selected bytes after validation and compare the final worktree state with its controller-hydrated baseline, preserving clean-tree enforcement without globally enabling Git LFS smudging or fetching from the network.
+- Strengthen the regular/native application gate so both Work Item and final Objective validation must hash the exact selected content rather than merely accept a non-empty LFS pointer.
+
 ## 0.1.12 — 2026-09-25
 
 - Bind planning and independent graph review to a canonical installed-artifact manifest of controller-enforced media and Git LFS guarantees, rejecting edited or stale capability identities before activation.

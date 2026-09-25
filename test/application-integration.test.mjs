@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { execFileSync, spawn } from "node:child_process";
 import {
   chmodSync,
@@ -1650,8 +1651,10 @@ test("regular and native asset selection preserve a complete set and hydrate tar
       target.baseSha = git(target.checkout, "rev-parse", "HEAD");
       git(target.checkout, "lfs", "install", "--local");
       const fakeRoot = join(root, "fake");
-      const command =
-        'test -s approved/model.bin && test "$(cat approved/metadata.json)" = \'{"candidate":"b"}\'';
+      const selectedDigest = createHash("sha256")
+        .update(selectedModel)
+        .digest("hex");
+      const command = `sha256sum approved/model.bin | grep -qx '${selectedDigest}  approved/model.bin' && test "$(cat approved/metadata.json)" = '{"candidate":"b"}'`;
       const consumerCommand = "test -s approved/consumed.txt";
       const media = item("media", {
         path: "approved/model.bin",
