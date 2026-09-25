@@ -984,8 +984,9 @@ test("Codex adapter passes phase selections to every planning and review thread"
       get id() {
         return entry.id;
       },
-      async runStreamed(prompt) {
+      async runStreamed(prompt, options) {
         entry.prompt = prompt;
+        entry.outputSchema = options.outputSchema;
         async function* events() {
           yield { type: "thread.started", thread_id: entry.id };
           yield { type: "turn.started" };
@@ -1049,7 +1050,21 @@ test("Codex adapter passes phase selections to every planning and review thread"
     await model.reviewGraph({
       objective: "Objective",
       baseSha,
-      sources: [],
+      sources: [
+        {
+          path: "OBJECTIVE",
+          content: "# Objective\n\n## Acceptance\nRequired",
+        },
+        {
+          path: "docs/plan.md",
+          heading: "Wave 0",
+          content: "## Wave 0\nCanonical plan",
+        },
+        {
+          path: "OBJECTIVE",
+          content: "# Objective\n\n## Boundaries\nNo deployment",
+        },
+      ],
       graph: { objective: 1, baseSha, items: [] },
       commands: [],
       finalCommands: [],
@@ -1089,6 +1104,28 @@ test("Codex adapter passes phase selections to every planning and review thread"
         { model: "reviewer-choice", modelReasoningEffort: "medium" },
         { model: "reviewer-choice", modelReasoningEffort: "medium" },
       ],
+    );
+    assert.deepEqual(
+      captured[1].outputSchema.properties.findings.items.properties.source,
+      { type: "string", enum: ["OBJECTIVE", "docs/plan.md"] },
+    );
+    assert.match(
+      captured[1].prompt,
+      /set source to exactly one value from this supplied-path JSON list/,
+    );
+    assert.match(captured[1].prompt, /\["OBJECTIVE","docs\/plan\.md"\]/);
+    assert.match(
+      captured[1].prompt,
+      /Do not append a heading, section name, separator, or explanation/,
+    );
+    assert.match(captured[1].prompt, /return exactly \{"findings":\[\]\}/);
+    assert.match(
+      captured[1].prompt,
+      /do not emit advisory observations, confirmations, or speculative questions/,
+    );
+    assert.equal(
+      captured[1].outputSchema.properties.findings.description,
+      "Return [] exactly when the plan has no material source-grounded defect.",
     );
     assert.match(captured[2].prompt, /result identity is a Git tree/);
     assert.match(captured[2].prompt, /stable zero-based index/);
@@ -1214,7 +1251,7 @@ test("Codex adapter reports unavailable usage, malformed output, and provider fa
       model.reviewGraph({
         objective: "objective",
         baseSha: "a".repeat(40),
-        sources: [],
+        sources: [{ path: "OBJECTIVE", content: "objective" }],
         graph: { objective: 1, baseSha: "a".repeat(40), items: [] },
         commands: [],
         finalCommands: [],
@@ -1235,7 +1272,7 @@ test("Codex adapter reports unavailable usage, malformed output, and provider fa
     await model.reviewGraph({
       objective: "objective",
       baseSha: "a".repeat(40),
-      sources: [],
+      sources: [{ path: "OBJECTIVE", content: "objective" }],
       graph: { objective: 1, baseSha: "a".repeat(40), items: [] },
       commands: [],
       finalCommands: [],

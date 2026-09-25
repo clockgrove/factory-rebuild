@@ -335,7 +335,10 @@ export class CodexPlanningModel implements PlanningModel {
       question: string;
     }[];
   }> {
-    const prompt = `Independently review this complete proposed Factory plan against the exact pinned Objective and source packet. The Work Item graph, command-authority receipts, and final integrated-head commands are one review surface. Check every Objective obligation, unsupported scope, citations, dependencies, path/resource ownership, observable acceptance, exact command authority, and final validation. The separate Final commands and Command authority receipts sections are authoritative supervisor fields outside the inner WorkGraph; do not report them missing when they are present there. Return only material findings with the supplied source path and a short exact quote from that source. Give a specific operator question for unresolved authority. Do not edit the plan or grant authority. A clean plan has an empty findings array.\n\nObjective:\n${request.objective}\nBase: ${request.baseSha}\nSources:\n${request.sources.map((s) => `--- ${s.path} ---\n${s.content}`).join("\n")}\nGraph:\n${JSON.stringify(request.graph)}\nCommand authority receipts:\n${JSON.stringify(request.commands)}\nFinal commands:\n${JSON.stringify(request.finalCommands)}`;
+    const sourcePaths = [
+      ...new Set(request.sources.map((source) => source.path)),
+    ];
+    const prompt = `Independently review this complete proposed Factory plan against the exact pinned Objective and source packet. The Work Item graph, command-authority receipts, and final integrated-head commands are one review surface. Check every Objective obligation, unsupported scope, citations, dependencies, path/resource ownership, observable acceptance, exact command authority, and final validation. The separate Final commands and Command authority receipts sections are authoritative supervisor fields outside the inner WorkGraph; do not report them missing when they are present there. First decide whether a material source-grounded defect exists. If none exists, return exactly {"findings":[]}; do not emit advisory observations, confirmations, or speculative questions merely to avoid an empty array. A finding means the plan cannot be called clean. Return only material findings with a short exact quote from the cited source. For each finding, set source to exactly one value from this supplied-path JSON list: ${JSON.stringify(sourcePaths)}. Do not append a heading, section name, separator, or explanation to that value. Give a specific operator question for unresolved authority. Do not edit the plan, grant authority, or treat a malformed finding as approval.\n\nObjective:\n${request.objective}\nBase: ${request.baseSha}\nSources:\n${request.sources.map((s) => `--- ${s.path} ---\n${s.content}`).join("\n")}\nGraph:\n${JSON.stringify(request.graph)}\nCommand authority receipts:\n${JSON.stringify(request.commands)}\nFinal commands:\n${JSON.stringify(request.finalCommands)}`;
     return this.runStructured({
       selection: this.reviewer,
       prompt,
@@ -347,10 +350,12 @@ export class CodexPlanningModel implements PlanningModel {
         properties: {
           findings: {
             type: "array",
+            description:
+              "Return [] exactly when the plan has no material source-grounded defect.",
             items: {
               type: "object",
               properties: {
-                source: { type: "string" },
+                source: { type: "string", enum: sourcePaths },
                 quote: { type: "string" },
                 detail: { type: "string" },
                 question: { type: "string" },
@@ -1005,34 +1010,97 @@ function semanticFailureField(error: unknown): string {
   return (match?.slice(1).find(Boolean) ?? "response").slice(0, 120);
 }
 
+type GraphReviewRejectionReason =
+  "not-array" | "not-object" | "unknown-source" | "empty" | "quote-not-found";
+
+interface GraphReviewRejection {
+  field: string;
+  reason: GraphReviewRejectionReason;
+  source?: string;
+}
+
+class GraphReviewSemanticError extends Error {
+  constructor(readonly rejections: GraphReviewRejection[]) {
+    super(
+      `Graph review rejected ${rejections
+        .map((rejection) => `${rejection.field}: ${rejection.reason}`)
+        .join("; ")}`,
+    );
+    this.name = "GraphReviewSemanticError";
+  }
+}
+
+function safeReviewSourceLabel(path: string): string | undefined {
+  return path === "OBJECTIVE" ||
+    (/^[A-Za-z0-9_./-]{1,240}$/.test(path) &&
+      !path.startsWith("/") &&
+      !path.split("/").includes(".."))
+    ? path
+    : undefined;
+}
+
 function checkedFindings(
-  findings: {
+  findings: unknown,
+  sources: PlanningSource[],
+): { source: string; quote: string; detail: string; question: string }[] {
+  if (!Array.isArray(findings))
+    throw new GraphReviewSemanticError([
+      { field: "findings", reason: "not-array" },
+    ]);
+  const rejections: GraphReviewRejection[] = [];
+  for (const [index, candidate] of findings.entries()) {
+    if (
+      !candidate ||
+      typeof candidate !== "object" ||
+      Array.isArray(candidate)
+    ) {
+      rejections.push({ field: `findings[${index}]`, reason: "not-object" });
+      continue;
+    }
+    const finding = candidate as Record<string, unknown>;
+    const suppliedSources =
+      typeof finding.source === "string"
+        ? sources.filter((source) => source.path === finding.source)
+        : [];
+    const safeSource = suppliedSources.length
+      ? safeReviewSourceLabel(suppliedSources[0]!.path)
+      : undefined;
+    if (!suppliedSources.length)
+      rejections.push({
+        field: `findings[${index}].source`,
+        reason: "unknown-source",
+      });
+    const quote = typeof finding.quote === "string" ? finding.quote : "";
+    if (!quote.trim())
+      rejections.push({
+        field: `findings[${index}].quote`,
+        reason: "empty",
+        ...(safeSource ? { source: safeSource } : {}),
+      });
+    else if (
+      suppliedSources.length &&
+      !suppliedSources.some((source) => source.content.includes(quote))
+    )
+      rejections.push({
+        field: `findings[${index}].quote`,
+        reason: "quote-not-found",
+        ...(safeSource ? { source: safeSource } : {}),
+      });
+    for (const field of ["detail", "question"] as const)
+      if (typeof finding[field] !== "string" || !finding[field].trim())
+        rejections.push({
+          field: `findings[${index}].${field}`,
+          reason: "empty",
+          ...(safeSource ? { source: safeSource } : {}),
+        });
+  }
+  if (rejections.length) throw new GraphReviewSemanticError(rejections);
+  return findings as {
     source: string;
     quote: string;
     detail: string;
     question: string;
-  }[],
-  sources: PlanningSource[],
-): { source: string; quote: string; detail: string; question: string }[] {
-  if (!Array.isArray(findings))
-    throw new Error("Graph review has no findings array");
-  for (const finding of findings) {
-    if (
-      !finding ||
-      !finding.quote?.trim() ||
-      !sources.some(
-        (source) =>
-          source.path === finding.source &&
-          source.content.includes(finding.quote),
-      ) ||
-      !finding.detail?.trim() ||
-      !finding.question?.trim()
-    )
-      throw new Error(
-        "Graph review finding lacks a supplied source or question",
-      );
-  }
-  return findings;
+  }[];
 }
 
 async function checkedPlanReview(
@@ -1051,13 +1119,25 @@ async function checkedPlanReview(
       findings: checkedFindings(response.findings, packet.sources),
     };
   } catch (error) {
-    if (responseReceived)
-      observeModelInvocation(invocation, {
-        type: "response-invalid",
-        failureClass: "semantic-validation",
-        failureField: "findings",
-        detail: error instanceof Error ? error.message : String(error),
-      });
+    if (responseReceived) {
+      const rejections: {
+        field: string;
+        reason: string;
+        source?: string;
+      }[] =
+        error instanceof GraphReviewSemanticError
+          ? error.rejections
+          : [{ field: "findings", reason: "invalid" }];
+      for (const rejection of rejections)
+        observeModelInvocation(invocation, {
+          type: "response-invalid",
+          failureClass: "semantic-validation",
+          failureField: rejection.field,
+          failureReason: rejection.reason,
+          ...(rejection.source ? { failureSource: rejection.source } : {}),
+          detail: `Graph review rejected ${rejection.field}: ${rejection.reason}`,
+        });
+    }
     const detail = error instanceof Error ? error.message : String(error);
     return {
       findings: [],

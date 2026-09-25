@@ -209,6 +209,8 @@ export class DiagnosticEmitter {
         usageAvailable: observation.usageAvailable,
         failureClass: observation.failureClass,
         failureField: observation.failureField,
+        failureReason: observation.failureReason,
+        failureSource: observation.failureSource,
         ...(observation.usage ?? {}),
       }))
         if (["string", "number", "boolean"].includes(typeof value))
