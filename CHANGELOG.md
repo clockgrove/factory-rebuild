@@ -8,6 +8,7 @@ This file records public releases of Factory. See [BUILD-STATUS.md](docs/BUILD-S
 - Stream provider-neutral diagnostics for compile and review model invocations, preserving explicit model policy, provider progress, supplied token/cache usage, safe request/response digests, and parse or semantic rejection reasons.
 - Add `factory diagnostics --summary` with per-Objective, phase, and invocation-scope counts, explicit unavailable usage, available token totals, and cache-read numerator/denominator.
 - Constrain graph-review finding sources to the exact supplied path enum so heading-qualified aliases cannot produce invalid independent-review evidence.
+- Reject every malformed graph-review finding with its exact field path and bounded reason while preserving clean `{"findings":[]}` as the unambiguous no-defect result; private diagnostics never copy provider quotes or unknown source labels.
 
 ## 0.1.10 — 2026-09-24
 

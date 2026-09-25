@@ -75,6 +75,9 @@ export interface ModelInvocationObservation {
   usageAvailable?: boolean;
   failureClass?: string;
   failureField?: string;
+  failureReason?: string;
+  /** Exact supplied source label only; never an invented provider value. */
+  failureSource?: string;
   detail?: string;
 }
 

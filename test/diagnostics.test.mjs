@@ -292,8 +292,21 @@ test("model diagnostics preserve safe correlation and aggregate only supplied us
       usageAvailable: true,
       usage: { inputTokens: 100 },
     });
+    const semantic = emitter.modelObserver({ scopeId: "plan-attempt-1" });
+    semantic({
+      invocationId: "invoke-4",
+      phase: "graph-review",
+      ordinal: 2,
+      type: "response-invalid",
+      usageAvailable: false,
+      failureClass: "semantic-validation",
+      failureField: "findings[0].quote",
+      failureReason: "quote-not-found",
+      failureSource: "OBJECTIVE",
+      detail: "Graph review rejected findings[0].quote: quote-not-found",
+    });
     const events = readDiagnostics("example/model-diagnostics", 7);
-    assert.equal(events.length, 5);
+    assert.equal(events.length, 6);
     assert.ok(events.every((event) => event.operation === "model-invocation"));
     assert.equal(events[0].metadata.scopeId, "plan-attempt-1");
     assert.equal(events[2].metadata.inputTokens, 100);
@@ -302,6 +315,9 @@ test("model diagnostics preserve safe correlation and aggregate only supplied us
     assert.match(events[3].detail, /REDACTED/);
     assert.equal(events[3].metadata.detailTruncated, true);
     assert.ok(events[3].detail.length <= 4096);
+    assert.equal(events[5].metadata.failureField, "findings[0].quote");
+    assert.equal(events[5].metadata.failureReason, "quote-not-found");
+    assert.equal(events[5].metadata.failureSource, "OBJECTIVE");
 
     const summary = summarizeModelInvocations(events);
     assert.deepEqual(summary.objective.tokenTotals, {
@@ -311,11 +327,11 @@ test("model diagnostics preserve safe correlation and aggregate only supplied us
       outputTokens: 12,
       reasoningOutputTokens: 3,
     });
-    assert.equal(summary.objective.invocationCount, 3);
+    assert.equal(summary.objective.invocationCount, 4);
     assert.equal(summary.objective.completedCount, 2);
-    assert.equal(summary.objective.failedCount, 1);
+    assert.equal(summary.objective.failedCount, 2);
     assert.equal(summary.objective.usageAvailableCount, 2);
-    assert.equal(summary.objective.usageUnavailableCount, 1);
+    assert.equal(summary.objective.usageUnavailableCount, 2);
     assert.deepEqual(summary.objective.cacheReadRatio, {
       numeratorCachedInputTokens: 40,
       denominatorInputTokens: 100,
@@ -324,8 +340,8 @@ test("model diagnostics preserve safe correlation and aggregate only supplied us
     assert.equal(summary.objective.tokenAvailability.inputTokens, 2);
     assert.equal(summary.objective.tokenAvailability.cachedInputTokens, 1);
     assert.equal(summary.byPhase.compile.invocationCount, 1);
-    assert.equal(summary.byPhase["graph-review"].failedCount, 1);
-    assert.equal(summary.byScope["plan-attempt-1"].invocationCount, 3);
+    assert.equal(summary.byPhase["graph-review"].failedCount, 2);
+    assert.equal(summary.byScope["plan-attempt-1"].invocationCount, 4);
   } finally {
     if (previous === undefined) delete process.env.XDG_STATE_HOME;
     else process.env.XDG_STATE_HOME = previous;
