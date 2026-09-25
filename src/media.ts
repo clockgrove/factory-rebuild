@@ -676,10 +676,12 @@ function selectedRequiredLfsMembers(
   return members;
 }
 
-/** Selected required-LFS bytes present in this Work Item's dependency tree. */
+/** Required dependency bytes plus matching selected pointers already in this exact tree. */
 export function validationLfsMembersForItem(
   state: FactoryState,
   item: WorkItem,
+  checkout: string,
+  commit: string,
 ): ValidationLfsMember[] {
   const items = new Map(state.graph.items.map((entry) => [entry.id, entry]));
   const relevant = new Set<string>();
@@ -690,7 +692,26 @@ export function validationLfsMembersForItem(
       visit(dependency);
   };
   visit(item.id);
-  return selectedRequiredLfsMembers(state, relevant);
+  const all = selectedRequiredLfsMembers(
+    state,
+    new Set(state.graph.items.map((entry) => entry.id)),
+  );
+  return all.filter((member) => {
+    if (relevant.has(member.itemId)) return true;
+    const expected = Buffer.from(
+      `version https://git-lfs.github.com/spec/v1\noid sha256:${member.digest}\nsize ${member.bytes}\n`,
+      "utf8",
+    );
+    try {
+      return pinnedGitRaw(
+        checkout,
+        "show",
+        `${commit}:${member.destination}`,
+      ).equals(expected);
+    } catch {
+      return false;
+    }
+  });
 }
 
 /** Every selected required-LFS member expected in the integrated Objective tree. */

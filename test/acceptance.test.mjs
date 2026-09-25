@@ -33,6 +33,10 @@ import {
   git,
 } from "./support/integration-fixture.mjs";
 import { LocalContentStore } from "../dist/content/local.js";
+import {
+  assetSelectionDigest,
+  validationLfsMembersForItem,
+} from "../dist/media.js";
 
 function item(baseSha, validation) {
   return {
@@ -839,6 +843,107 @@ test("validation fails closed before commands when selected LFS bytes are unavai
         /Validation could not restore selected LFS bytes: assets\/selected\.bin/,
       );
       assert.equal(existsSync(commandMarker), false);
+    },
+  );
+});
+
+test("independent exact-tree validation hydrates a matching selected pointer already in its base", async () => {
+  const selected = Buffer.from("selected integrated bytes\u0000\u0001", "utf8");
+  await withTarget(
+    "independent-validation-lfs",
+    { "assets/selected.bin": selected },
+    async (root, target) => {
+      git(target.checkout, "lfs", "install", "--local");
+      writeFileSync(
+        join(target.checkout, ".gitattributes"),
+        "assets/*.bin filter=lfs diff=lfs merge=lfs -text\n",
+      );
+      writeFileSync(join(target.checkout, "independent.txt"), "result\n");
+      git(target.checkout, "add", ".gitattributes", "independent.txt");
+      git(target.checkout, "add", "--renormalize", "assets/selected.bin");
+      git(
+        target.checkout,
+        "-c",
+        "user.name=Factory Test",
+        "-c",
+        "user.email=factory-test@example.com",
+        "commit",
+        "-m",
+        "Add integrated selected asset and independent result",
+      );
+      const commit = git(target.checkout, "rev-parse", "HEAD");
+      const treeSha = git(target.checkout, "rev-parse", "HEAD^{tree}");
+      const contentStore = new LocalContentStore(join(root, "content"));
+      const ref = await contentStore.put(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(selected);
+            controller.close();
+          },
+        }),
+        { mediaType: "application/octet-stream" },
+      );
+      const media = {
+        id: "media",
+        dependencies: [],
+        requiredLfsRoles: ["model"],
+      };
+      const independent = {
+        id: "independent",
+        dependencies: [],
+        requiredLfsRoles: [],
+      };
+      const set = {
+        id: "candidate-a",
+        members: [
+          {
+            role: "model",
+            ref,
+            destination: "assets/selected.bin",
+          },
+        ],
+        provenance: {
+          source: "assets/selected.bin",
+          rights: "public test fixture",
+          visibility: "repository",
+          lineage: ["assets/selected.bin"],
+        },
+        evidence: { harnessIdentity: "test", resultDigest: "test" },
+      };
+      const state = {
+        graph: { items: [media, independent] },
+        work: {
+          media: {
+            assets: [set],
+            selectedAssetSet: set.id,
+            selectionDigest: assetSelectionDigest(set),
+          },
+          independent: {},
+        },
+      };
+      const members = validationLfsMembersForItem(
+        state,
+        independent,
+        target.checkout,
+        commit,
+      );
+      assert.deepEqual(
+        members.map((member) => [member.itemId, member.destination]),
+        [["media", "assets/selected.bin"]],
+      );
+      const command = `test -s independent.txt && sha256sum assets/selected.bin | grep -qx '${ref.digest}  assets/selected.bin'`;
+      const evidence = await validateTree(
+        target.checkout,
+        join(root, "validation"),
+        commit,
+        treeSha,
+        [command],
+        undefined,
+        undefined,
+        members,
+        contentStore,
+      );
+      assert.equal(evidence.commands[0].passed, true);
     },
   );
 });

@@ -166,7 +166,12 @@ export async function runRegularGraph(args: {
             entry.final,
           ),
         itemBase,
-        validationLfsMembersForItem(state, item),
+        validationLfsMembersForItem(
+          state,
+          item,
+          config.checkout,
+          work.changeRef!,
+        ),
         args.contentStore,
       );
       const reviewResult = () =>
