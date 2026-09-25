@@ -183,7 +183,7 @@ export class CodexPlanningModel implements PlanningModel {
     const provider = "openai-codex-sdk";
     const schema = JSON.stringify(args.schema);
     const started = Date.now();
-    const thread = this.startThread(args.selection);
+    let thread: ReturnType<CodexPlanningModel["startThread"]> | undefined;
     let finalResponse = "";
     let usage: ModelInvocationUsage | undefined;
     let invalidStructuredOutput = false;
@@ -204,6 +204,7 @@ export class CodexPlanningModel implements PlanningModel {
           }),
     });
     try {
+      thread = this.startThread(args.selection);
       const streamed = await thread.runStreamed(args.prompt, {
         outputSchema: args.schema,
       });
@@ -266,7 +267,7 @@ export class CodexPlanningModel implements PlanningModel {
           provider,
           model: args.selection.model,
           reasoningEffort: args.selection.reasoningEffort,
-          providerThreadId: thread.id ?? undefined,
+          providerThreadId: thread?.id ?? undefined,
           durationMs: Date.now() - started,
           responseBytes,
           responseDigest,
@@ -282,7 +283,7 @@ export class CodexPlanningModel implements PlanningModel {
         provider,
         model: args.selection.model,
         reasoningEffort: args.selection.reasoningEffort,
-        providerThreadId: thread.id ?? undefined,
+        providerThreadId: thread?.id ?? undefined,
         durationMs: Date.now() - started,
         responseBytes,
         responseDigest,
@@ -297,7 +298,7 @@ export class CodexPlanningModel implements PlanningModel {
           provider,
           model: args.selection.model,
           reasoningEffort: args.selection.reasoningEffort,
-          providerThreadId: thread.id ?? undefined,
+          providerThreadId: thread?.id ?? undefined,
           durationMs: Date.now() - started,
           ...(finalResponse
             ? {

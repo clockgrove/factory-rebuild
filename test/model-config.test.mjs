@@ -387,6 +387,7 @@ test("Codex adapter reports unavailable usage, malformed output, and provider fa
   let call = 0;
   Codex.prototype.startThread = function () {
     const index = call++;
+    if (index === 3) throw new Error("provider capacity unavailable");
     return {
       get id() {
         return `failure-thread-${index}`;
@@ -489,6 +490,28 @@ test("Codex adapter reports unavailable usage, malformed output, and provider fa
     assert.equal(unavailable.at(-1).type, "completed");
     assert.equal(unavailable.at(-1).usageAvailable, false);
     assert.equal(unavailable.at(-1).usage, undefined);
+
+    const setupFailure = [];
+    await assert.rejects(
+      model.generateStructured({
+        objective: "objective",
+        baseSha: "a".repeat(40),
+        sources: [],
+        schema: { type: "object" },
+        invocation: {
+          invocationId: "setup-failure",
+          phase: "compile",
+          ordinal: 1,
+          observe: (event) => setupFailure.push(event),
+        },
+      }),
+      /capacity unavailable/,
+    );
+    assert.deepEqual(
+      setupFailure.map((event) => event.type),
+      ["started", "failed"],
+    );
+    assert.equal(setupFailure.at(-1).failureClass, "provider-capacity");
   } finally {
     Codex.prototype.startThread = original;
   }
