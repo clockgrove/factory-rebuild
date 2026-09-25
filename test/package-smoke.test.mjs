@@ -137,6 +137,15 @@ test("fresh packed artifact installs and exposes documented install/status/plan 
         ),
       ).href
     );
+    const setupSkill = readFileSync(
+      join(installedRoot, "skills", "setup", "SKILL.md"),
+      "utf8",
+    );
+    const describedDefaults = `planner \`${installedPackage.DEFAULT_PLANNER_MODEL_SELECTION.model}\` with \`${installedPackage.DEFAULT_PLANNER_MODEL_SELECTION.reasoningEffort}\` reasoning, reviewer \`${installedPackage.DEFAULT_REVIEWER_MODEL_SELECTION.model}\` with \`${installedPackage.DEFAULT_REVIEWER_MODEL_SELECTION.reasoningEffort}\` reasoning, and worker \`${installedPackage.DEFAULT_WORKER_MODEL_SELECTION.model}\` with \`${installedPackage.DEFAULT_WORKER_MODEL_SELECTION.reasoningEffort}\` reasoning`;
+    assert.ok(
+      setupSkill.includes(describedDefaults),
+      "installed setup skill must describe the runtime role defaults exactly",
+    );
     const body = "# Packed Objective\n\n## Acceptance\n- `test -s one.txt`\n";
     const graph = {
       objective: 1,
