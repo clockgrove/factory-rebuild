@@ -37,12 +37,61 @@ export interface WorkGraph {
   items: WorkItem[];
 }
 
+export type ModelInvocationPhase =
+  "compile" | "graph-review" | "result-review" | "objective-review";
+
+export interface ModelInvocationUsage {
+  inputTokens?: number;
+  cachedInputTokens?: number;
+  cacheWriteInputTokens?: number;
+  outputTokens?: number;
+  reasoningOutputTokens?: number;
+  totalTokens?: number;
+}
+
+export interface ModelInvocationObservation {
+  type: "started" | "progress" | "completed" | "failed" | "response-invalid";
+  invocationId: string;
+  phase: ModelInvocationPhase;
+  ordinal: number;
+  provider?: string;
+  model?: string;
+  reasoningEffort?: string;
+  providerThreadId?: string;
+  durationMs?: number;
+  promptBytes?: number;
+  promptDigest?: string;
+  schemaBytes?: number;
+  schemaDigest?: string;
+  sourcePacketBytes?: number;
+  sourcePacketDigest?: string;
+  responseBytes?: number;
+  responseDigest?: string;
+  providerEvent?: string;
+  providerItemId?: string;
+  providerItemType?: string;
+  tool?: string;
+  usage?: ModelInvocationUsage;
+  usageAvailable?: boolean;
+  failureClass?: string;
+  failureField?: string;
+  detail?: string;
+}
+
+export interface ModelInvocationContext {
+  invocationId: string;
+  phase: ModelInvocationPhase;
+  ordinal: number;
+  observe?: (observation: ModelInvocationObservation) => void;
+}
+
 export interface PlanningRequest<T> {
   objective: string;
   baseSha: string;
   sources: { path: string; content: string }[];
   schema: unknown;
   resultType?: T;
+  invocation?: ModelInvocationContext;
 }
 
 export interface PlanCommandAuthorization {
@@ -61,6 +110,7 @@ export interface PlanReviewRequest {
   graph: WorkGraph;
   commands: PlanCommandAuthorization[];
   finalCommands: string[];
+  invocation?: ModelInvocationContext;
 }
 
 export interface ValidationCommandReceipt {
@@ -110,6 +160,7 @@ export interface PlanningModel {
     commands: ValidationCommandReceipt[];
     evidence?: ResultReviewEvidenceSource[];
     observations?: string;
+    invocation?: ModelInvocationContext;
   }): Promise<{
     findings: ResultReviewFinding[];
   }>;

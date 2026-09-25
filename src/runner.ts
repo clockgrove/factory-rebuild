@@ -69,8 +69,13 @@ export async function planObjective(
 ): Promise<PlanCandidate> {
   validateTarget(config.repository, config.checkout);
   const diagnostics = new DiagnosticEmitter(config.repository, objective);
+  const planningScopeId = randomUUID();
   const started = Date.now();
-  diagnostics.emit({ operation: "planning-preview", outcome: "started" });
+  diagnostics.emit({
+    operation: "planning-preview",
+    outcome: "started",
+    metadata: { scopeId: planningScopeId },
+  });
   try {
     const issue = await services.github.objective(objective);
     const baseSha = git(config.checkout, "rev-parse", "HEAD");
@@ -81,6 +86,7 @@ export async function planObjective(
       config.checkout,
       services.planningModel,
       configDigest(config),
+      diagnostics.modelObserver({ scopeId: planningScopeId }),
     );
     diagnostics.emit({
       operation: "planning-preview",
@@ -88,6 +94,7 @@ export async function planObjective(
       durationMs: Date.now() - started,
       metadata: {
         baseSha,
+        scopeId: planningScopeId,
         review: result.review.status,
         itemCount: result.graph.items.length,
       },
@@ -98,6 +105,7 @@ export async function planObjective(
       operation: "planning-preview",
       outcome: "failed",
       durationMs: Date.now() - started,
+      metadata: { scopeId: planningScopeId },
       detail: error instanceof Error ? error.message : String(error),
     });
     throw error;
@@ -278,8 +286,12 @@ export async function runObjective(
         }
       }
       const baseSha = git(config.checkout, "rev-parse", "HEAD");
+      const planningScopeId = randomUUID();
       const plan = await diagnostics.span(
-        { operation: "planning", metadata: { baseSha } },
+        {
+          operation: "planning",
+          metadata: { baseSha, scopeId: planningScopeId },
+        },
         async () => {
           const candidate =
             acceptedPlan ??
@@ -290,6 +302,7 @@ export async function runObjective(
               config.checkout,
               planningModel,
               installationConfigDigest,
+              diagnostics.modelObserver({ scopeId: planningScopeId }),
             ));
           verifyPlanCandidate(
             candidate,
@@ -457,6 +470,15 @@ export async function runObjective(
           evidenceSources: objectiveEvidence.evidence,
           decisions: state.finalAcceptanceDecisions,
           observations: objectiveEvidence.observations,
+          invocation: {
+            invocationId: randomUUID(),
+            phase: "objective-review",
+            ordinal: 0,
+            observe: diagnostics.modelObserver({
+              scopeId: state.runId,
+              runId: state.runId,
+            }),
+          },
         });
       finalEvidence = await diagnostics.span(
         {

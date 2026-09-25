@@ -15,6 +15,7 @@ import { createTarget } from "./support/integration-fixture.mjs";
 
 test("fresh packed artifact installs and exposes documented install/status/plan operations", async () => {
   const root = mkdtempSync(join(tmpdir(), "factory-package-smoke-"));
+  const previousStateRoot = process.env.XDG_STATE_HOME;
   try {
     const target = createTarget(root);
     const pack = join(root, "pack");
@@ -89,6 +90,7 @@ test("fresh packed artifact installs and exposes documented install/status/plan 
       XDG_CONFIG_HOME: join(root, "xdg-config"),
       XDG_STATE_HOME: join(root, "xdg-state"),
     };
+    process.env.XDG_STATE_HOME = environment.XDG_STATE_HOME;
     const installed = execFileSync(
       cli,
       [
@@ -173,10 +175,12 @@ test("fresh packed artifact installs and exposes documented install/status/plan 
           },
         },
         planningModel: {
-          async generateStructured() {
+          async generateStructured(request) {
+            observeInvocation(request);
             return graph;
           },
-          async reviewGraph() {
+          async reviewGraph(request) {
+            observeInvocation(request);
             return { findings: [] };
           },
         },
@@ -210,8 +214,78 @@ test("fresh packed artifact installs and exposes documented install/status/plan 
       ["diagnostics", "--objective", "1", "--config", config],
       { encoding: "utf8", env: environment },
     );
-    assert.equal(timeline, "");
+    const diagnosticEvents = timeline.trim().split("\n").map(JSON.parse);
+    const completed = diagnosticEvents.filter(
+      (event) =>
+        event.operation === "model-invocation" &&
+        event.metadata.observationType === "completed",
+    );
+    assert.deepEqual(
+      completed.map((event) => event.metadata.phase),
+      ["compile", "graph-review"],
+    );
+    assert.ok(
+      completed.every(
+        (event) =>
+          event.metadata.inputTokens === 11 &&
+          event.metadata.cachedInputTokens === 5,
+      ),
+    );
+    const summary = JSON.parse(
+      execFileSync(
+        cli,
+        ["diagnostics", "--objective", "1", "--summary", "--config", config],
+        { encoding: "utf8", env: environment },
+      ),
+    );
+    assert.equal(summary.objective.invocationCount, 2);
+    assert.deepEqual(summary.objective.tokenTotals, {
+      inputTokens: 22,
+      cachedInputTokens: 10,
+      cacheWriteInputTokens: 4,
+      outputTokens: 6,
+      reasoningOutputTokens: 2,
+    });
+    assert.deepEqual(summary.objective.cacheReadRatio, {
+      numeratorCachedInputTokens: 10,
+      denominatorInputTokens: 22,
+      value: 10 / 22,
+    });
   } finally {
+    if (previousStateRoot === undefined) delete process.env.XDG_STATE_HOME;
+    else process.env.XDG_STATE_HOME = previousStateRoot;
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+function observeInvocation(request) {
+  const context = request.invocation;
+  const common = {
+    invocationId: context.invocationId,
+    phase: context.phase,
+    ordinal: context.ordinal,
+    provider: "packed-test-provider",
+    model: "packed-test-model",
+    reasoningEffort: "medium",
+    providerThreadId: `packed-${context.invocationId}`,
+  };
+  context.observe({ ...common, type: "started", promptBytes: 10 });
+  context.observe({
+    ...common,
+    type: "progress",
+    providerEvent: "turn.started",
+  });
+  context.observe({
+    ...common,
+    type: "completed",
+    durationMs: 2,
+    usageAvailable: true,
+    usage: {
+      inputTokens: 11,
+      cachedInputTokens: 5,
+      cacheWriteInputTokens: 2,
+      outputTokens: 3,
+      reasoningOutputTokens: 1,
+    },
+  });
+}

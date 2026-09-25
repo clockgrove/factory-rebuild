@@ -6,6 +6,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { StringDecoder } from "node:string_decoder";
 import type {
   CapturedAssetSet,
+  ModelInvocationContext,
   PlanningModel,
   ResultReviewCandidate,
   ResultReviewEvidenceSource,
@@ -732,6 +733,7 @@ export async function reviewAcceptance(args: {
   evidenceSources?: ResultReviewEvidenceSource[];
   decisions?: AcceptanceDecision[];
   observations?: string;
+  invocation?: ModelInvocationContext;
 }): Promise<ValidationEvidence> {
   const { model, checkout, baseSha, commit, evidence, criteria, sources } =
     args;
@@ -783,9 +785,12 @@ export async function reviewAcceptance(args: {
           ? { evidence: args.evidenceSources }
           : {}),
         ...(args.observations ? { observations: args.observations } : {}),
+        invocation: args.invocation,
       });
-      if (!Array.isArray(reviewed.findings))
+      if (!Array.isArray(reviewed.findings)) {
+        observeInvalidReview(args.invocation, "findings", "not-an-array");
         throw new Error("review response has no findings array");
+      }
       findings = reviewed.findings;
     } catch (error) {
       reviewFailure = error instanceof Error ? error.message : String(error);
@@ -818,6 +823,8 @@ export async function reviewAcceptance(args: {
       groundedSources,
       patchExcerpts,
     );
+    if (rejection)
+      observeInvalidReview(args.invocation, rejection.field, rejection.reason);
     const finding = rejection ? undefined : candidate;
     if (finding?.verdict === "pass" && truncatedPaths.length === 0) {
       proven.push({
@@ -862,6 +869,28 @@ export async function reviewAcceptance(args: {
     });
   }
   return { ...evidence, criteria: proven };
+}
+
+function observeInvalidReview(
+  invocation: ModelInvocationContext | undefined,
+  field: string,
+  reason: string,
+): void {
+  try {
+    invocation?.observe?.({
+      invocationId: invocation.invocationId,
+      phase: invocation.phase,
+      ordinal: invocation.ordinal,
+      type: "response-invalid",
+      failureClass: "semantic-validation",
+      failureField: field,
+      detail: reason,
+    });
+  } catch (error) {
+    process.stderr.write(
+      `Factory model diagnostics unavailable: ${error instanceof Error ? error.message : String(error)}\n`,
+    );
+  }
 }
 
 export interface ValidationObservation {

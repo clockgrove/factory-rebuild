@@ -1,5 +1,5 @@
 import { Codex } from "@openai/codex-sdk";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { isAbsolute } from "node:path";
 import { recognizedObjectiveAttachment } from "./media.js";
 import { validateAndOrderGraph } from "./scheduler.js";
@@ -11,6 +11,10 @@ import {
 } from "./validation.js";
 import type {
   PlanCommandAuthorization,
+  ModelInvocationContext,
+  ModelInvocationObservation,
+  ModelInvocationPhase,
+  ModelInvocationUsage,
   PlanningModel,
   PlanningRequest,
   PlanReviewRequest,
@@ -20,6 +24,36 @@ import type {
   WorkGraph,
 } from "./contracts.js";
 import type { CodexModelSelection } from "./config.js";
+
+function observeModelInvocation(
+  invocation: ModelInvocationContext | undefined,
+  observation: Omit<
+    ModelInvocationObservation,
+    "invocationId" | "phase" | "ordinal"
+  >,
+): void {
+  if (!invocation) return;
+  try {
+    invocation.observe?.({
+      invocationId: invocation.invocationId,
+      phase: invocation.phase,
+      ordinal: invocation.ordinal,
+      ...observation,
+    });
+  } catch (error) {
+    process.stderr.write(
+      `Factory model diagnostics unavailable: ${error instanceof Error ? error.message : String(error)}\n`,
+    );
+  }
+}
+
+function providerFailureClass(error: unknown): string {
+  const detail = error instanceof Error ? error.message : String(error);
+  if (/rate.?limit|\b429\b/i.test(detail)) return "provider-rate-limit";
+  if (/capacity|overloaded|temporarily unavailable/i.test(detail))
+    return "provider-capacity";
+  return "provider";
+}
 
 export const graphSchema = {
   type: "object",
@@ -133,11 +167,163 @@ export class CodexPlanningModel implements PlanningModel {
     });
   }
 
+  private async runStructured<T>(args: {
+    selection: CodexModelSelection;
+    prompt: string;
+    schema: unknown;
+    invocation: ModelInvocationContext | undefined;
+    defaultPhase: ModelInvocationPhase;
+    sourcePacket?: string;
+  }): Promise<T> {
+    const invocation = args.invocation ?? {
+      invocationId: randomUUID(),
+      phase: args.defaultPhase,
+      ordinal: 0,
+    };
+    const provider = "openai-codex-sdk";
+    const schema = JSON.stringify(args.schema);
+    const started = Date.now();
+    const thread = this.startThread(args.selection);
+    let finalResponse = "";
+    let usage: ModelInvocationUsage | undefined;
+    let invalidStructuredOutput = false;
+    observeModelInvocation(invocation, {
+      type: "started",
+      provider,
+      model: args.selection.model,
+      reasoningEffort: args.selection.reasoningEffort,
+      promptBytes: Buffer.byteLength(args.prompt),
+      promptDigest: digest(args.prompt),
+      schemaBytes: Buffer.byteLength(schema),
+      schemaDigest: digest(schema),
+      ...(args.sourcePacket === undefined
+        ? {}
+        : {
+            sourcePacketBytes: Buffer.byteLength(args.sourcePacket),
+            sourcePacketDigest: digest(args.sourcePacket),
+          }),
+    });
+    try {
+      const streamed = await thread.runStreamed(args.prompt, {
+        outputSchema: args.schema,
+      });
+      for await (const event of streamed.events) {
+        if (
+          event.type === "item.completed" &&
+          event.item.type === "agent_message"
+        )
+          finalResponse = event.item.text;
+        if (event.type === "turn.completed") {
+          usage = {
+            inputTokens: event.usage.input_tokens,
+            cachedInputTokens: event.usage.cached_input_tokens,
+            cacheWriteInputTokens: event.usage.cache_write_input_tokens,
+            outputTokens: event.usage.output_tokens,
+            reasoningOutputTokens: event.usage.reasoning_output_tokens,
+          };
+        }
+        const item =
+          event.type === "item.started" ||
+          event.type === "item.updated" ||
+          event.type === "item.completed"
+            ? event.item
+            : undefined;
+        const tool =
+          item?.type === "mcp_tool_call"
+            ? `${item.server}/${item.tool}`
+            : item?.type === "command_execution"
+              ? "shell"
+              : item?.type === "file_change"
+                ? "apply_patch"
+                : undefined;
+        observeModelInvocation(invocation, {
+          type: "progress",
+          provider,
+          model: args.selection.model,
+          reasoningEffort: args.selection.reasoningEffort,
+          providerThreadId:
+            event.type === "thread.started"
+              ? event.thread_id
+              : (thread.id ?? undefined),
+          providerEvent: event.type,
+          providerItemId: item?.id,
+          providerItemType: item?.type,
+          tool,
+          ...(usage ? { usage, usageAvailable: true } : {}),
+        });
+        if (event.type === "turn.failed") throw new Error(event.error.message);
+        if (event.type === "error") throw new Error(event.message);
+      }
+      const responseBytes = Buffer.byteLength(finalResponse);
+      const responseDigest = digest(finalResponse);
+      let parsed: T;
+      try {
+        parsed = JSON.parse(finalResponse) as T;
+      } catch (error) {
+        invalidStructuredOutput = true;
+        observeModelInvocation(invocation, {
+          type: "response-invalid",
+          provider,
+          model: args.selection.model,
+          reasoningEffort: args.selection.reasoningEffort,
+          providerThreadId: thread.id ?? undefined,
+          durationMs: Date.now() - started,
+          responseBytes,
+          responseDigest,
+          usage,
+          usageAvailable: Boolean(usage),
+          failureClass: "structured-output-parse",
+          detail: error instanceof Error ? error.message : String(error),
+        });
+        throw error;
+      }
+      observeModelInvocation(invocation, {
+        type: "completed",
+        provider,
+        model: args.selection.model,
+        reasoningEffort: args.selection.reasoningEffort,
+        providerThreadId: thread.id ?? undefined,
+        durationMs: Date.now() - started,
+        responseBytes,
+        responseDigest,
+        usage,
+        usageAvailable: Boolean(usage),
+      });
+      return parsed;
+    } catch (error) {
+      if (!invalidStructuredOutput)
+        observeModelInvocation(invocation, {
+          type: "failed",
+          provider,
+          model: args.selection.model,
+          reasoningEffort: args.selection.reasoningEffort,
+          providerThreadId: thread.id ?? undefined,
+          durationMs: Date.now() - started,
+          ...(finalResponse
+            ? {
+                responseBytes: Buffer.byteLength(finalResponse),
+                responseDigest: digest(finalResponse),
+              }
+            : {}),
+          usage,
+          usageAvailable: Boolean(usage),
+          failureClass: providerFailureClass(error),
+          detail: error instanceof Error ? error.message : String(error),
+        });
+      throw error;
+    }
+  }
+
   async generateStructured<T>(request: PlanningRequest<T>): Promise<T> {
-    const thread = this.startThread(this.planner);
     const prompt = `Compile this human Objective into the smallest complete dependency-aware Work Item graph. Use parallel lanes only when ownership and resources allow them. Return the requested JSON only. Use exact supplied base SHA and Objective number. Cite only supplied source paths. Give each item explicit non-goals. Choose observable acceptance and owned paths. For every validation command, set provenance to base-observed or source-declared and name its exact source path. A source-declared command must be an exact command line in a supplied source (OBJECTIVE or a pinned source). A base-observed command must identify a tracked file in the exact base containing that command as an exact line, or a package.json script invoked by npm test/npm run NAME/pnpm test/pnpm check/pnpm run NAME. The exact source-declared command pnpm install --frozen-lockfile --ignore-scripts may precede pnpm checks in a fresh validation worktree when supplied; plain install is unsupported. Do not invent commands or use a vague source. For each source asset, bind its path, role, media type, visibility, and kind: repository for a pinned checkout path, local for an explicitly approved absolute private file, or github-attachment for a recognized URL literally present in the Objective. Use an explicitly declared media type when available, otherwise application/octet-stream; never infer format from an extension. List expected output roles for media work; use empty arrays for ordinary work. Set minimumAssetSets from the Objective candidate count, or 1 for unspecified media and 0 for ordinary work. List requiredLfsRoles only when a supplied source requires them; the target repository .gitattributes is authoritative. Do not add deployment, paid services, providers, recovery, or later scope.\n\nObjective:\n${request.objective}\n\nBase: ${request.baseSha}\n\nSources:\n${request.sources.map((s) => `--- ${s.path} ---\n${s.content}`).join("\n")}`;
-    const result = await thread.run(prompt, { outputSchema: request.schema });
-    return JSON.parse(result.finalResponse) as T;
+    return this.runStructured<T>({
+      selection: this.planner,
+      prompt,
+      schema: request.schema,
+      invocation: request.invocation,
+      defaultPhase: "compile",
+      sourcePacket: JSON.stringify(request.sources),
+    });
   }
 
   async reviewGraph(request: PlanReviewRequest): Promise<{
@@ -148,10 +334,14 @@ export class CodexPlanningModel implements PlanningModel {
       question: string;
     }[];
   }> {
-    const thread = this.startThread(this.reviewer);
     const prompt = `Independently review this complete proposed Factory plan against the exact pinned Objective and source packet. The Work Item graph, command-authority receipts, and final integrated-head commands are one review surface. Check every Objective obligation, unsupported scope, citations, dependencies, path/resource ownership, observable acceptance, exact command authority, and final validation. The separate Final commands and Command authority receipts sections are authoritative supervisor fields outside the inner WorkGraph; do not report them missing when they are present there. Return only material findings with the supplied source path and a short exact quote from that source. Give a specific operator question for unresolved authority. Do not edit the plan or grant authority. A clean plan has an empty findings array.\n\nObjective:\n${request.objective}\nBase: ${request.baseSha}\nSources:\n${request.sources.map((s) => `--- ${s.path} ---\n${s.content}`).join("\n")}\nGraph:\n${JSON.stringify(request.graph)}\nCommand authority receipts:\n${JSON.stringify(request.commands)}\nFinal commands:\n${JSON.stringify(request.finalCommands)}`;
-    const result = await thread.run(prompt, {
-      outputSchema: {
+    return this.runStructured({
+      selection: this.reviewer,
+      prompt,
+      invocation: request.invocation,
+      defaultPhase: "graph-review",
+      sourcePacket: JSON.stringify(request.sources),
+      schema: {
         type: "object",
         properties: {
           findings: {
@@ -173,7 +363,6 @@ export class CodexPlanningModel implements PlanningModel {
         additionalProperties: false,
       },
     });
-    return JSON.parse(result.finalResponse);
   }
 
   async reviewResult(request: {
@@ -185,52 +374,55 @@ export class CodexPlanningModel implements PlanningModel {
     commands: ValidationCommandReceipt[];
     evidence?: ResultReviewEvidenceSource[];
     observations?: string;
+    invocation?: ModelInvocationContext;
   }): Promise<{ findings: ResultReviewFinding[] }> {
-    const thread = this.startThread(this.reviewer);
     const promptSources = [...request.sources, ...(request.evidence ?? [])];
     request = { ...request, sources: promptSources };
     const identityInstructions =
       "The result identity is a Git tree. Delivery observations separately name every Git commit and Git tree; never compare them as the same object type. Command pass evidence is an ordered array of canonical receipts. Each receipt names its stable zero-based index, command, successful exit code 0, and exact result tree, produced only after Factory verified the result commit resolves to that tree. Sources whose path begins with Work Item Git delta are supervisor-generated exact result evidence: they bind accepted path ownership and that item's execution base, actual result base, result commit/tree, integrated commit/tree, changed paths, and raw patch excerpts. Treat each such path as an allowed supplied source path. Use those sources for criteria about one Work Item's exact delta or its relationship to another item's owned paths. Copy quotes exactly as serialized; never decode an escaped string into a quote. ";
-    const result = await thread.run(
+    const prompt =
       identityInstructions +
-        `Independently review the exact result of a Factory Objective. Decide each criterion only from the supplied pinned source, command pass evidence, delivery observations when supplied, and exact Git change packet. The packet has bounded text patch excerpts, explicit truncation flags, line counts, and exact blob identities/sizes. Never pass a criterion when relevant text is truncated or omitted unless other supplied evidence independently proves it. Blob identity alone does not prove opaque content semantics; ask for a focused human decision when missing evidence matters. A shell exit code alone proves only that command's assertion. Return one finding per criterion in the given order. Pass only when the evidence proves that criterion; otherwise needs-human with one specific question. Use refuse for a directly disproved criterion. For source, use exactly a supplied pinned source path, or exactly one of "Exact Git change packet", "Command pass evidence", or "Delivery observations". For quote, copy an exact contiguous fragment from that named input. Never invent a source label or paraphrase a quote. Never edit or run commands.\n\nBase: ${request.baseSha}\nResult tree: ${request.treeSha}\nCriteria: ${JSON.stringify(request.criteria)}\nCommands: ${JSON.stringify(request.commands)}\nDelivery observations: ${request.observations ?? "none"}\nSources: ${request.sources.map((s) => `--- ${s.path} ---\n${s.content}`).join("\n")}\nChange packet:\n${request.change}`,
-      {
-        outputSchema: {
-          type: "object",
-          properties: {
-            findings: {
-              type: "array",
-              items: {
-                type: "object",
-                properties: {
-                  criterion: { type: "string" },
-                  verdict: {
-                    type: "string",
-                    enum: ["pass", "needs-human", "refuse"],
-                  },
-                  source: { type: "string" },
-                  quote: { type: "string" },
-                  detail: { type: "string" },
-                  question: { type: "string" },
+      `Independently review the exact result of a Factory Objective. Decide each criterion only from the supplied pinned source, command pass evidence, delivery observations when supplied, and exact Git change packet. The packet has bounded text patch excerpts, explicit truncation flags, line counts, and exact blob identities/sizes. Never pass a criterion when relevant text is truncated or omitted unless other supplied evidence independently proves it. Blob identity alone does not prove opaque content semantics; ask for a focused human decision when missing evidence matters. A shell exit code alone proves only that command's assertion. Return one finding per criterion in the given order. Pass only when the evidence proves that criterion; otherwise needs-human with one specific question. Use refuse for a directly disproved criterion. For source, use exactly a supplied pinned source path, or exactly one of "Exact Git change packet", "Command pass evidence", or "Delivery observations". For quote, copy an exact contiguous fragment from that named input. Never invent a source label or paraphrase a quote. Never edit or run commands.\n\nBase: ${request.baseSha}\nResult tree: ${request.treeSha}\nCriteria: ${JSON.stringify(request.criteria)}\nCommands: ${JSON.stringify(request.commands)}\nDelivery observations: ${request.observations ?? "none"}\nSources: ${request.sources.map((s) => `--- ${s.path} ---\n${s.content}`).join("\n")}\nChange packet:\n${request.change}`;
+    return this.runStructured({
+      selection: this.reviewer,
+      prompt,
+      invocation: request.invocation,
+      defaultPhase: "result-review",
+      sourcePacket: JSON.stringify(promptSources),
+      schema: {
+        type: "object",
+        properties: {
+          findings: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                criterion: { type: "string" },
+                verdict: {
+                  type: "string",
+                  enum: ["pass", "needs-human", "refuse"],
                 },
-                required: [
-                  "criterion",
-                  "verdict",
-                  "source",
-                  "quote",
-                  "detail",
-                  "question",
-                ],
-                additionalProperties: false,
+                source: { type: "string" },
+                quote: { type: "string" },
+                detail: { type: "string" },
+                question: { type: "string" },
               },
+              required: [
+                "criterion",
+                "verdict",
+                "source",
+                "quote",
+                "detail",
+                "question",
+              ],
+              additionalProperties: false,
             },
           },
-          required: ["findings"],
-          additionalProperties: false,
         },
+        required: ["findings"],
+        additionalProperties: false,
       },
-    );
-    return JSON.parse(result.finalResponse);
+    });
   }
 }
 
@@ -707,6 +899,7 @@ export async function compileObjective(
   model: PlanningModel,
   extraSources: { path: string; content: string }[] = [],
   reviewFindings: { source: string; quote: string; detail: string }[] = [],
+  invocation?: ModelInvocationContext,
 ): Promise<WorkGraph> {
   const sources = planningSources(body, baseSha, checkout);
   sources.push(...extraSources);
@@ -717,72 +910,98 @@ export async function compileObjective(
       baseSha,
       sources,
       schema: graphSchema,
+      invocation,
     })
     .catch(planningFailure);
-  validateGraph(graph, objective, baseSha, new Set(sources.map((s) => s.path)));
-  validateCitations(graph, sources);
-  for (const item of graph.items) {
-    if (
-      new Set(item.expectedOutputRoles ?? []).size !==
-      (item.expectedOutputRoles ?? []).length
-    )
-      throw new Error(
-        `Work Item ${item.id} has duplicate expected output roles`,
-      );
-    if (
-      !Number.isSafeInteger(item.minimumAssetSets) ||
-      (item.minimumAssetSets ?? 0) < 0 ||
-      ((item.expectedOutputRoles?.length ?? 0) > 0 &&
-        (item.minimumAssetSets ?? 0) < 1)
-    )
-      throw new Error(`Work Item ${item.id} has an invalid candidate count`);
-    if (
-      (item.requiredLfsRoles ?? []).some(
-        (role) => !item.expectedOutputRoles?.includes(role),
-      )
-    )
-      throw new Error(
-        `Work Item ${item.id} requires LFS for an unknown output role`,
-      );
-    for (const source of item.sourceAssets ?? []) {
-      if (typeof source === "string")
-        throw new Error(`Work Item ${item.id} needs a structured source asset`);
-      const { path, role, mediaType, visibility } = source;
-      const kind = source.kind ?? "repository";
-      const repositoryPath =
-        /^[A-Za-z0-9_./-]+$/.test(path) &&
-        !path.startsWith("/") &&
-        !path.split("/").includes("..");
-      const available =
-        kind === "repository"
-          ? (() => {
-              if (!repositoryPath) return false;
-              try {
-                pinnedGit(checkout, "cat-file", "-e", `${baseSha}:${path}`);
-                return true;
-              } catch {
-                return false;
-              }
-            })()
-          : kind === "local"
-            ? visibility === "private" &&
-              isAbsolute(path) &&
-              body.includes(path)
-            : kind === "github-attachment"
-              ? recognizedObjectiveAttachment(path) && body.includes(path)
-              : false;
+  try {
+    validateGraph(
+      graph,
+      objective,
+      baseSha,
+      new Set(sources.map((s) => s.path)),
+    );
+    validateCitations(graph, sources);
+    for (const item of graph.items) {
       if (
-        !role ||
-        !mediaType ||
-        !["private", "repository"].includes(visibility) ||
-        !available
+        new Set(item.expectedOutputRoles ?? []).size !==
+        (item.expectedOutputRoles ?? []).length
       )
         throw new Error(
-          `Work Item ${item.id} cites an unavailable or invalid source asset: ${path}`,
+          `Work Item ${item.id} has duplicate expected output roles`,
         );
+      if (
+        !Number.isSafeInteger(item.minimumAssetSets) ||
+        (item.minimumAssetSets ?? 0) < 0 ||
+        ((item.expectedOutputRoles?.length ?? 0) > 0 &&
+          (item.minimumAssetSets ?? 0) < 1)
+      )
+        throw new Error(`Work Item ${item.id} has an invalid candidate count`);
+      if (
+        (item.requiredLfsRoles ?? []).some(
+          (role) => !item.expectedOutputRoles?.includes(role),
+        )
+      )
+        throw new Error(
+          `Work Item ${item.id} requires LFS for an unknown output role`,
+        );
+      for (const source of item.sourceAssets ?? []) {
+        if (typeof source === "string")
+          throw new Error(
+            `Work Item ${item.id} needs a structured source asset`,
+          );
+        const { path, role, mediaType, visibility } = source;
+        const kind = source.kind ?? "repository";
+        const repositoryPath =
+          /^[A-Za-z0-9_./-]+$/.test(path) &&
+          !path.startsWith("/") &&
+          !path.split("/").includes("..");
+        const available =
+          kind === "repository"
+            ? (() => {
+                if (!repositoryPath) return false;
+                try {
+                  pinnedGit(checkout, "cat-file", "-e", `${baseSha}:${path}`);
+                  return true;
+                } catch {
+                  return false;
+                }
+              })()
+            : kind === "local"
+              ? visibility === "private" &&
+                isAbsolute(path) &&
+                body.includes(path)
+              : kind === "github-attachment"
+                ? recognizedObjectiveAttachment(path) && body.includes(path)
+                : false;
+        if (
+          !role ||
+          !mediaType ||
+          !["private", "repository"].includes(visibility) ||
+          !available
+        )
+          throw new Error(
+            `Work Item ${item.id} cites an unavailable or invalid source asset: ${path}`,
+          );
+      }
     }
+  } catch (error) {
+    observeModelInvocation(invocation, {
+      type: "response-invalid",
+      failureClass: "semantic-validation",
+      failureField: semanticFailureField(error),
+      detail: error instanceof Error ? error.message : String(error),
+    });
+    throw error;
   }
   return graph;
+}
+
+function semanticFailureField(error: unknown): string {
+  const detail = error instanceof Error ? error.message : String(error);
+  const match = detail.match(
+    /(?:Work Item ([^ ]+)|cites (?:unavailable source|missing heading) ([^ ]+)|invalid ([A-Za-z -]+))/i,
+  );
+  return (match?.slice(1).find(Boolean) ?? "response").slice(0, 120);
 }
 
 function checkedFindings(
@@ -818,18 +1037,26 @@ function checkedFindings(
 async function checkedPlanReview(
   model: PlanningModel,
   packet: PlanReviewRequest,
+  invocation?: ModelInvocationContext,
 ): Promise<{
   findings: ReturnType<typeof checkedFindings>;
   failure?: { detail: string; question: string };
 }> {
+  let responseReceived = false;
   try {
+    const response = await model.reviewGraph({ ...packet, invocation });
+    responseReceived = true;
     return {
-      findings: checkedFindings(
-        (await model.reviewGraph(packet)).findings,
-        packet.sources,
-      ),
+      findings: checkedFindings(response.findings, packet.sources),
     };
   } catch (error) {
+    if (responseReceived)
+      observeModelInvocation(invocation, {
+        type: "response-invalid",
+        failureClass: "semantic-validation",
+        failureField: "findings",
+        detail: error instanceof Error ? error.message : String(error),
+      });
     const detail = error instanceof Error ? error.message : String(error);
     return {
       findings: [],
@@ -849,11 +1076,34 @@ export async function compilePlan(
   checkout: string,
   model: PlanningModel,
   configDigest = digest("unbound-test-configuration"),
+  observe?: (observation: ModelInvocationObservation) => void,
 ): Promise<PlanCandidate> {
+  const invocation = (
+    phase: ModelInvocationPhase,
+    ordinal: number,
+  ): ModelInvocationContext => ({
+    invocationId: randomUUID(),
+    phase,
+    ordinal,
+    observe,
+  });
   const sources = planningSources(body, baseSha, checkout);
-  let graph = await compileObjective(objective, body, baseSha, checkout, model);
+  let graph = await compileObjective(
+    objective,
+    body,
+    baseSha,
+    checkout,
+    model,
+    [],
+    [],
+    invocation("compile", 0),
+  );
   let packet = planReviewPacket(body, baseSha, sources, graph, checkout);
-  let review = await checkedPlanReview(model, packet);
+  let review = await checkedPlanReview(
+    model,
+    packet,
+    invocation("graph-review", 0),
+  );
   let findings = review.findings;
   let revisions = 0;
   if (findings.length && !review.failure) {
@@ -866,10 +1116,15 @@ export async function compilePlan(
         model,
         [],
         findings,
+        invocation("compile", 1),
       );
       revisions = 1;
       packet = planReviewPacket(body, baseSha, sources, graph, checkout);
-      review = await checkedPlanReview(model, packet);
+      review = await checkedPlanReview(
+        model,
+        packet,
+        invocation("graph-review", 1),
+      );
       findings = review.findings;
     } catch (error) {
       if (

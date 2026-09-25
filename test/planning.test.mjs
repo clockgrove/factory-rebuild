@@ -224,11 +224,15 @@ test("one sourced review finding permits one revision and re-review", async () =
     const calls = [];
     const model = {
       async generateStructured(request) {
-        calls.push({ type: "compile", objective: request.objective });
+        calls.push({
+          type: "compile",
+          objective: request.objective,
+          invocation: request.invocation,
+        });
         return graph(target.baseSha);
       },
-      async reviewGraph() {
-        calls.push({ type: "review" });
+      async reviewGraph(request) {
+        calls.push({ type: "review", invocation: request.invocation });
         return {
           findings:
             calls.filter((call) => call.type === "review").length === 1
@@ -258,6 +262,19 @@ test("one sourced review finding permits one revision and re-review", async () =
       ["compile", "review", "compile", "review"],
     );
     assert.match(calls[2].objective, /Missing obligation/);
+    assert.deepEqual(
+      calls.map((call) => [call.invocation.phase, call.invocation.ordinal]),
+      [
+        ["compile", 0],
+        ["graph-review", 0],
+        ["compile", 1],
+        ["graph-review", 1],
+      ],
+    );
+    assert.equal(
+      new Set(calls.map((call) => call.invocation.invocationId)).size,
+      4,
+    );
   });
 });
 
@@ -446,6 +463,7 @@ test("malformed graph review pauses on the pinned graph and an explicit decision
     });
     let generationCount = 0;
     let reviewCount = 0;
+    const observations = [];
     const model = {
       async generateStructured() {
         generationCount += 1;
@@ -471,6 +489,8 @@ test("malformed graph review pauses on the pinned graph and an explicit decision
       target.baseSha,
       target.checkout,
       model,
+      undefined,
+      (event) => observations.push(event),
     );
     assert.equal(candidate.review.status, "needs-human");
     assert.equal(candidate.review.findings.length, 0);
@@ -482,6 +502,15 @@ test("malformed graph review pauses on the pinned graph and an explicit decision
     );
     assert.equal(generationCount, 1);
     assert.equal(reviewCount, 1);
+    assert.ok(
+      observations.some(
+        (event) =>
+          event.type === "response-invalid" &&
+          event.phase === "graph-review" &&
+          event.failureClass === "semantic-validation" &&
+          event.failureField === "findings",
+      ),
+    );
     assert.throws(
       () =>
         verifyPlanCandidate(
