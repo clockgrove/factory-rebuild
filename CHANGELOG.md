@@ -2,7 +2,7 @@
 
 This file records public releases of Factory. See [BUILD-STATUS.md](docs/BUILD-STATUS.md) for development acceptance evidence.
 
-## Unreleased
+## 0.1.12 — 2026-09-25
 
 - Bind planning and independent graph review to a canonical installed-artifact manifest of controller-enforced media and Git LFS guarantees, rejecting edited or stale capability identities before activation.
 - Let the controller migrate an explicitly captured repository asset from an ordinary Git blob to required Git LFS at the same path only when the selected, captured, and current bytes are identical; workers may not mutate final asset destinations.

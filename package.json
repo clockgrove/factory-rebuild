@@ -1,6 +1,6 @@
 {
   "name": "@clockgrove/factory",
-  "version": "0.1.11",
+  "version": "0.1.12",
   "description": "Objective-driven development plugin for a target repository",
   "homepage": "https://github.com/clockgrove/factory-rebuild#readme",
   "repository": {
