@@ -2,6 +2,11 @@
 
 This file records public releases of Factory. See [BUILD-STATUS.md](docs/BUILD-STATUS.md) for development acceptance evidence.
 
+## 0.1.16 — 2026-09-25
+
+- Align the installed setup skill with the independent runtime defaults for planner, reviewer, and worker model selections.
+- Check the packaged setup guidance against the installed runtime default exports during the offline packed-artifact smoke.
+
 ## 0.1.15 — 2026-09-25
 
 - Require every streamed provider turn to emit an explicit successful terminal event; classify premature stream exhaustion or interruption instead of treating it as completion.
