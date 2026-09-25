@@ -336,6 +336,67 @@ test("one sourced review finding permits one revision and re-review", async () =
   });
 });
 
+test("graph review grounds a quote in any supplied heading with the same path", async () => {
+  await fixture("review-duplicate-path", async (root) => {
+    const target = createTarget(root, {
+      "docs/plan.md":
+        "# Plan\n\n## Earlier\nEarlier obligation\n\n## Later\nLater-only obligation\n",
+    });
+    const duplicatePathBody = `# Objective
+
+## Acceptance
+- \`test -s one.txt\`
+
+## Planning sources
+- \`docs/plan.md#Earlier\`
+- \`docs/plan.md#Later\`
+`;
+    const observations = [];
+    let reviews = 0;
+    const candidate = await compilePlan(
+      1,
+      duplicatePathBody,
+      target.baseSha,
+      target.checkout,
+      {
+        async generateStructured() {
+          return graph(target.baseSha);
+        },
+        async reviewGraph() {
+          reviews += 1;
+          return {
+            findings:
+              reviews === 1
+                ? [
+                    {
+                      source: "docs/plan.md",
+                      quote: "Later-only obligation",
+                      detail: "The later obligation is missing",
+                      question: "Which Work Item owns the later obligation?",
+                    },
+                  ]
+                : [],
+          };
+        },
+      },
+      undefined,
+      (event) => observations.push(event),
+    );
+    const matchingSources = candidate.sources.filter(
+      (source) => source.path === "docs/plan.md",
+    );
+    assert.equal(matchingSources.length, 2);
+    assert.doesNotMatch(matchingSources[0].content, /Later-only obligation/);
+    assert.match(matchingSources[1].content, /Later-only obligation/);
+    assert.equal(candidate.review.status, "clean");
+    assert.equal(candidate.review.revisions, 1);
+    assert.equal(
+      observations.some((event) => event.type === "response-invalid"),
+      false,
+    );
+  });
+});
+
 test("review and verification bind commands, final commands, and installation config", async () => {
   await fixture("review-packet", async (root) => {
     const target = createTarget(root, {
@@ -552,7 +613,10 @@ test("malformed graph review pauses on the pinned graph and an explicit decision
     );
     assert.equal(candidate.review.status, "needs-human");
     assert.equal(candidate.review.findings.length, 0);
-    assert.match(candidate.review.failure.detail, /supplied source/);
+    assert.match(
+      candidate.review.failure.detail,
+      /findings\[0\]\.source: unknown-source/,
+    );
     assert.match(candidate.review.failure.question, /pinned Factory plan/);
     assert.match(
       candidate.review.failure.question,
@@ -566,7 +630,9 @@ test("malformed graph review pauses on the pinned graph and an explicit decision
           event.type === "response-invalid" &&
           event.phase === "graph-review" &&
           event.failureClass === "semantic-validation" &&
-          event.failureField === "findings",
+          event.failureField === "findings[0].source" &&
+          event.failureReason === "unknown-source" &&
+          event.failureSource === undefined,
       ),
     );
     assert.throws(
@@ -631,6 +697,190 @@ test("malformed graph review pauses on the pinned graph and an explicit decision
           target.checkout,
         ),
       /differs|specific human source decision/,
+    );
+  });
+});
+
+test("graph review semantic failures report every rejected field without finding content", async () => {
+  await fixture("review-rejections", async (root) => {
+    const target = createTarget(root, {
+      "docs/plan.md": "# Plan\n\n## Wave 0\nCanonical obligation\n",
+    });
+    const observations = [];
+    const privateFindingContent = "private-review-content";
+    const model = {
+      async generateStructured() {
+        return graph(target.baseSha);
+      },
+      async reviewGraph() {
+        return {
+          findings: [
+            privateFindingContent,
+            {
+              source: privateFindingContent,
+              quote: privateFindingContent,
+              detail: privateFindingContent,
+              question: privateFindingContent,
+            },
+            {
+              source: "OBJECTIVE",
+              quote: " ",
+              detail: "detail",
+              question: "question",
+            },
+            {
+              source: "OBJECTIVE",
+              quote: privateFindingContent,
+              detail: "detail",
+              question: "question",
+            },
+            {
+              source: "OBJECTIVE",
+              quote: "## Acceptance",
+              detail: " ",
+              question: "question",
+            },
+            {
+              source: "OBJECTIVE",
+              quote: "## Acceptance",
+              detail: "detail",
+              question: " ",
+            },
+          ],
+        };
+      },
+    };
+    const candidate = await compilePlan(
+      1,
+      body,
+      target.baseSha,
+      target.checkout,
+      model,
+      undefined,
+      (event) => observations.push(event),
+    );
+    assert.equal(candidate.review.status, "needs-human");
+    assert.deepEqual(candidate.review.findings, []);
+    assert.match(candidate.review.failure.detail, /findings\[0\]: not-object/);
+    assert.match(
+      candidate.review.failure.detail,
+      /findings\[1\]\.source: unknown-source/,
+    );
+    assert.match(
+      candidate.review.failure.detail,
+      /findings\[2\]\.quote: empty/,
+    );
+    assert.match(
+      candidate.review.failure.detail,
+      /findings\[3\]\.quote: quote-not-found/,
+    );
+    assert.match(
+      candidate.review.failure.detail,
+      /findings\[4\]\.detail: empty/,
+    );
+    assert.match(
+      candidate.review.failure.detail,
+      /findings\[5\]\.question: empty/,
+    );
+    assert.doesNotMatch(
+      JSON.stringify({ candidate, observations }),
+      new RegExp(privateFindingContent),
+    );
+    assert.deepEqual(
+      observations
+        .filter((event) => event.type === "response-invalid")
+        .map((event) => ({
+          field: event.failureField,
+          reason: event.failureReason,
+          source: event.failureSource,
+        })),
+      [
+        { field: "findings[0]", reason: "not-object", source: undefined },
+        {
+          field: "findings[1].source",
+          reason: "unknown-source",
+          source: undefined,
+        },
+        {
+          field: "findings[2].quote",
+          reason: "empty",
+          source: "OBJECTIVE",
+        },
+        {
+          field: "findings[3].quote",
+          reason: "quote-not-found",
+          source: "OBJECTIVE",
+        },
+        {
+          field: "findings[4].detail",
+          reason: "empty",
+          source: "OBJECTIVE",
+        },
+        {
+          field: "findings[5].question",
+          reason: "empty",
+          source: "OBJECTIVE",
+        },
+      ],
+    );
+  });
+});
+
+test("graph review requires an array and accepts an explicit clean empty review", async () => {
+  await fixture("review-top-level", async (root) => {
+    const target = createTarget(root, {
+      "docs/plan.md": "# Plan\n\n## Wave 0\nCanonical obligation\n",
+    });
+    const invalidObservations = [];
+    const invalid = await compilePlan(
+      1,
+      body,
+      target.baseSha,
+      target.checkout,
+      {
+        async generateStructured() {
+          return graph(target.baseSha);
+        },
+        async reviewGraph() {
+          return { findings: null };
+        },
+      },
+      undefined,
+      (event) => invalidObservations.push(event),
+    );
+    assert.equal(invalid.review.status, "needs-human");
+    assert.match(invalid.review.failure.detail, /findings: not-array/);
+    assert.ok(
+      invalidObservations.some(
+        (event) =>
+          event.type === "response-invalid" &&
+          event.failureField === "findings" &&
+          event.failureReason === "not-array",
+      ),
+    );
+
+    const cleanObservations = [];
+    const clean = await compilePlan(
+      1,
+      body,
+      target.baseSha,
+      target.checkout,
+      {
+        async generateStructured() {
+          return graph(target.baseSha);
+        },
+        async reviewGraph() {
+          return { findings: [] };
+        },
+      },
+      undefined,
+      (event) => cleanObservations.push(event),
+    );
+    assert.equal(clean.review.status, "clean");
+    assert.deepEqual(clean.review.findings, []);
+    assert.equal(
+      cleanObservations.some((event) => event.type === "response-invalid"),
+      false,
     );
   });
 });

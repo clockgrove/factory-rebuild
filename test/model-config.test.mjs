@@ -359,6 +359,15 @@ test("Codex adapter passes phase selections to every planning and review thread"
       captured[1].prompt,
       /Do not append a heading, section name, separator, or explanation/,
     );
+    assert.match(captured[1].prompt, /return exactly \{"findings":\[\]\}/);
+    assert.match(
+      captured[1].prompt,
+      /do not emit advisory observations, confirmations, or speculative questions/,
+    );
+    assert.equal(
+      captured[1].outputSchema.properties.findings.description,
+      "Return [] exactly when the plan has no material source-grounded defect.",
+    );
     assert.match(captured[2].prompt, /result identity is a Git tree/);
     assert.match(captured[2].prompt, /stable zero-based index/);
     assert.match(captured[2].prompt, /Work Item Git delta: one/);
