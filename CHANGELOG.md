@@ -2,6 +2,12 @@
 
 This file records public releases of Factory. See [BUILD-STATUS.md](docs/BUILD-STATUS.md) for development acceptance evidence.
 
+## 0.1.15 — 2026-09-25
+
+- Require every streamed provider turn to emit an explicit successful terminal event; classify premature stream exhaustion or interruption instead of treating it as completion.
+- Bound planning, review, and detached worker turns with one shared 15-minute reset-on-real-event idle watchdog that does not depend on provider SDK abort cooperation.
+- Close provider iterators on terminal paths with bounded cleanup while preserving the authoritative provider failure, and durably record timeout or interruption failures without result evidence.
+
 ## 0.1.14 — 2026-09-25
 
 - Emit controller-owned capture receipts only after Factory verifies every complete candidate member beneath `.factory-media/`, and bind optional `.factory-assets.json` provenance only after a descriptor-based regular-file read matches the harness declaration exactly.
