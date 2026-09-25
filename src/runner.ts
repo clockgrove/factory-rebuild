@@ -61,6 +61,12 @@ function configDigest(config: FactoryConfig): string {
   return createHash("sha256").update(JSON.stringify(config)).digest("hex");
 }
 
+function configuredDiagnosticSecrets(config: FactoryConfig): string[] {
+  return config.policy.allowedSecretNames
+    .map((name) => process.env[name])
+    .filter((value): value is string => Boolean(value));
+}
+
 /** Read-only preflight: no controller lock, issue projection, or run state. */
 export async function planObjective(
   config: FactoryConfig,
@@ -68,7 +74,11 @@ export async function planObjective(
   services: Pick<ApplicationServices, "planningModel" | "github">,
 ): Promise<PlanCandidate> {
   validateTarget(config.repository, config.checkout);
-  const diagnostics = new DiagnosticEmitter(config.repository, objective);
+  const diagnostics = new DiagnosticEmitter(
+    config.repository,
+    objective,
+    configuredDiagnosticSecrets(config),
+  );
   const planningScopeId = randomUUID();
   const started = Date.now();
   diagnostics.emit({
@@ -125,7 +135,11 @@ export async function decidePlan(
   },
 ): Promise<PlanCandidate> {
   validateTarget(config.repository, config.checkout);
-  const diagnostics = new DiagnosticEmitter(config.repository, objective);
+  const diagnostics = new DiagnosticEmitter(
+    config.repository,
+    objective,
+    configuredDiagnosticSecrets(config),
+  );
   const started = Date.now();
   diagnostics.emit({ operation: "planning-decision", outcome: "started" });
   try {
@@ -175,9 +189,7 @@ export async function runObjective(
   const diagnostics = new DiagnosticEmitter(
     config.repository,
     objective,
-    config.policy.allowedSecretNames
-      .map((name) => process.env[name])
-      .filter((value): value is string => Boolean(value)),
+    configuredDiagnosticSecrets(config),
   );
   let stateDiagnostics: StateDiagnostics | undefined;
   const save = (state: FactoryState) => {

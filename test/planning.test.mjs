@@ -216,6 +216,64 @@ test("planning rejects missing selected heading without mutating run state", asy
   });
 });
 
+test("read-only planning diagnostics redact configured secret values", async () => {
+  await fixture("planning-secret", async (root) => {
+    const target = createTarget(root, {
+      "docs/plan.md": "# Plan\n\n## Wave 0\nCanonical obligation\n",
+    });
+    const config = factoryConfig(target.checkout, "example/planning-secret");
+    config.policy.allowedSecretNames = ["FACTORY_PLANNING_TEST_SECRET"];
+    const previousSecret = process.env.FACTORY_PLANNING_TEST_SECRET;
+    process.env.FACTORY_PLANNING_TEST_SECRET = "private-planning-secret";
+    try {
+      const planningModel = {
+        async generateStructured() {
+          return graph(target.baseSha);
+        },
+        async reviewGraph(request) {
+          request.invocation.observe({
+            invocationId: request.invocation.invocationId,
+            phase: request.invocation.phase,
+            ordinal: request.invocation.ordinal,
+            type: "failed",
+            failureClass: "provider",
+            usageAvailable: false,
+            detail: "provider exposed private-planning-secret",
+          });
+          throw new Error("provider exposed private-planning-secret");
+        },
+      };
+      const { application } = makeApplication({
+        config,
+        graph: graph(target.baseSha),
+        objectiveBody: body,
+        fakeRoot: join(root, "fake"),
+        actions: {},
+        planningModel,
+      });
+      const candidate = await application.planObjective(1);
+      assert.equal(candidate.review.status, "needs-human");
+      const diagnostics = readDiagnostics(config.repository, 1);
+      assert.doesNotMatch(
+        JSON.stringify(diagnostics),
+        /private-planning-secret/,
+      );
+      assert.ok(
+        diagnostics.some(
+          (event) =>
+            event.operation === "model-invocation" &&
+            event.metadata.phase === "graph-review" &&
+            /REDACTED/.test(event.detail),
+        ),
+      );
+    } finally {
+      if (previousSecret === undefined)
+        delete process.env.FACTORY_PLANNING_TEST_SECRET;
+      else process.env.FACTORY_PLANNING_TEST_SECRET = previousSecret;
+    }
+  });
+});
+
 test("one sourced review finding permits one revision and re-review", async () => {
   await fixture("review", async (root) => {
     const target = createTarget(root, {
