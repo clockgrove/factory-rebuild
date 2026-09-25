@@ -2,18 +2,21 @@
 
 This file records public releases of Factory. See [BUILD-STATUS.md](docs/BUILD-STATUS.md) for development acceptance evidence.
 
-## 0.1.11 — 2026-09-25
+## Unreleased
 
 - Expose a capability-checked package-root local `AgentHarness` registration seam with stable adapter identity, adapter-owned configuration, durable lifecycle handles, and a packed full-path conformance test.
 - Add pinned optional Claude Agent SDK 0.3.281 and GitHub Copilot SDK 1.0.13 Work Item adapters while preserving Codex as the default and planning/review provider.
 - Reuse developer-local provider authentication, fail with actionable login-and-retry guidance when it is absent, and keep controller GitHub publication credentials out of worker environments.
+- Preserve every exact Work Item validation command with its provenance and source in the common Codex, Claude, and GitHub Copilot worker prompt while retaining controller-only command execution and validation authority.
+- Derive Claude and GitHub Copilot client telemetry versions from the installed Factory package metadata instead of a stale release literal.
+
+## 0.1.11 — 2026-09-25
+
 - Default planner and reviewer execution to `gpt-5.6-sol` with medium reasoning, and Work Item execution to `gpt-5.6-luna` with medium reasoning, while preserving independent explicit overrides for every role.
 - Stream provider-neutral diagnostics for compile and review model invocations, preserving explicit model policy, provider progress, supplied token/cache usage, safe request/response digests, and parse or semantic rejection reasons.
 - Add `factory diagnostics --summary` with per-Objective, phase, and invocation-scope counts, explicit unavailable usage, available token totals, and cache-read numerator/denominator.
 - Constrain graph-review finding sources to the exact supplied path enum so heading-qualified aliases cannot produce invalid independent-review evidence.
 - Reject every malformed graph-review finding with its exact field path and bounded reason while preserving clean `{"findings":[]}` as the unambiguous no-defect result; private diagnostics never copy provider quotes or unknown source labels.
-- Preserve every exact Work Item validation command with its provenance and source in the common Codex, Claude, and GitHub Copilot worker prompt while retaining controller-only command execution and validation authority.
-- Derive Claude and GitHub Copilot client telemetry versions from the installed Factory package metadata instead of a stale release literal.
 
 ## 0.1.10 — 2026-09-24
 
