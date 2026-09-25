@@ -1,10 +1,10 @@
 # Public release and third-party installation
 
-This is the reusable release and installation procedure. [#25](https://github.com/clockgrove/factory-rebuild/issues/25) accepted `v0.1.0`, the v0.1.7 gate completed [#46](https://github.com/clockgrove/factory-rebuild/issues/46), [#48](https://github.com/clockgrove/factory-rebuild/issues/48), and [#51](https://github.com/clockgrove/factory-rebuild/issues/51), and v0.1.8 proved [#60](https://github.com/clockgrove/factory-rebuild/issues/60)'s deterministic activation. The fresh installed v0.1.10 gate completed and closed [#44](https://github.com/clockgrove/factory-rebuild/issues/44), [#64](https://github.com/clockgrove/factory-rebuild/issues/64), and [#67](https://github.com/clockgrove/factory-rebuild/issues/67). The public v0.1.13 gate remained nonqualifying when result review lacked controller-owned capture and selection evidence, and v0.1.14 remained nonqualifying after a provider stream never emitted a terminal result. The current v0.1.15 candidate must independently qualify [#81](https://github.com/clockgrove/factory-rebuild/issues/81)'s controller media guarantees and same-path LFS migration. Keep every tag, marketplace entry, tarball, and evidence record tied to the same source commit. The [build status](BUILD-STATUS.md) distinguishes publication from installed Objective acceptance. Do not run Factory against this repository.
+This is the reusable release and installation procedure. [#25](https://github.com/clockgrove/factory-rebuild/issues/25) accepted `v0.1.0`, the v0.1.7 gate completed [#46](https://github.com/clockgrove/factory-rebuild/issues/46), [#48](https://github.com/clockgrove/factory-rebuild/issues/48), and [#51](https://github.com/clockgrove/factory-rebuild/issues/51), and v0.1.8 proved [#60](https://github.com/clockgrove/factory-rebuild/issues/60)'s deterministic activation. The fresh installed v0.1.10 gate completed and closed [#44](https://github.com/clockgrove/factory-rebuild/issues/44), [#64](https://github.com/clockgrove/factory-rebuild/issues/64), and [#67](https://github.com/clockgrove/factory-rebuild/issues/67). The public v0.1.13 gate remained nonqualifying when result review lacked controller-owned capture and selection evidence, v0.1.14 remained nonqualifying after a provider stream never emitted a terminal result, and v0.1.15 was superseded before a live Objective because its installed setup skill misstated the worker default. The current v0.1.16 candidate must independently qualify [#81](https://github.com/clockgrove/factory-rebuild/issues/81)'s controller media guarantees and same-path LFS migration. Keep every tag, marketplace entry, tarball, and evidence record tied to the same source commit. The [build status](BUILD-STATUS.md) distinguishes publication from installed Objective acceptance. Do not run Factory against this repository.
 
 ## Distribution shape
 
-The [Clockgrove marketplace](../.agents/plugins/marketplace.json) names the plugin at this repository's root and pins `v0.1.15`. Codex loads its manifest and use skills from that Git tag. The TypeScript CLI and its production dependency tree are built into a separate npm tarball attached to the matching public GitHub Release; marketplace installation does not build the CLI. The bundled tree makes the release install independent of later npm dependency resolution and needs no npm publishing account. The first tarball targets Linux x64 with Node.js 22 or later. The repo marketplace is a public distribution source for people who add it; a listing in the universal Plugins Directory would require a separate submission and review.
+The [Clockgrove marketplace](../.agents/plugins/marketplace.json) names the plugin at this repository's root and pins `v0.1.16`. Codex loads its manifest and use skills from that Git tag. The TypeScript CLI and its production dependency tree are built into a separate npm tarball attached to the matching public GitHub Release; marketplace installation does not build the CLI. The bundled tree makes the release install independent of later npm dependency resolution and needs no npm publishing account. The first tarball targets Linux x64 with Node.js 22 or later. The repo marketplace is a public distribution source for people who add it; a listing in the universal Plugins Directory would require a separate submission and review.
 
 Publish a candidate tag and release asset only after its code, CI, packaging, and notice checks pass; then run the disposable gate from a fresh public download. Publication is not acceptance and does not authorize the Clockgrove pilot. Do not point the marketplace at a moving branch. If the candidate version changes, update the package, manifest, marketplace ref, changelog, README status, and commands here together before tagging.
 
@@ -23,10 +23,10 @@ npm test
 mkdir -p /absolute/empty/release-directory
 npm pack --pack-destination /absolute/empty/release-directory
 cd /absolute/empty/release-directory
-sha256sum clockgrove-factory-0.1.15.tgz > SHA256SUMS
+sha256sum clockgrove-factory-0.1.16.tgz > SHA256SUMS
 ```
 
-Inspect the tarball file list for the manifest, installed skills, CLI, license, logo, notices, and bundled production dependency tree. In a separate empty prefix, install the tarball with `npm install --offline --ignore-scripts --prefix /absolute/private/check-prefix ./clockgrove-factory-0.1.15.tgz` using an empty npm cache; verify `factory help`, compare every installed bundled package version with `package-lock.json`, and check that notices cover the same tree. Record `git rev-parse HEAD`, package version, tarball SHA-256, and the passing CI run. Create a protected `v0.1.15` tag at that same commit and attach both `clockgrove-factory-0.1.15.tgz` and `SHA256SUMS` to a public GitHub Release. Record the expected SHA-256 outside the mutable Release assets, in [BUILD-STATUS.md](BUILD-STATUS.md). This procedure does not itself publish or tag anything.
+Inspect the tarball file list for the manifest, installed skills, CLI, license, logo, notices, and bundled production dependency tree. In a separate empty prefix, install the tarball with `npm install --offline --ignore-scripts --prefix /absolute/private/check-prefix ./clockgrove-factory-0.1.16.tgz` using an empty npm cache; verify `factory help`, compare every installed bundled package version with `package-lock.json`, and check that notices cover the same tree. Record `git rev-parse HEAD`, package version, tarball SHA-256, and the passing CI run. Create a protected `v0.1.16` tag at that same commit and attach both `clockgrove-factory-0.1.16.tgz` and `SHA256SUMS` to a public GitHub Release. Record the expected SHA-256 outside the mutable Release assets, in [BUILD-STATUS.md](BUILD-STATUS.md). This procedure does not itself publish or tag anything.
 
 ## Install from public artifacts
 
@@ -43,13 +43,13 @@ gh auth status
 Then install from the public tag and release assets:
 
 ```sh
-codex plugin marketplace add clockgrove/factory-rebuild --ref v0.1.15
+codex plugin marketplace add clockgrove/factory-rebuild --ref v0.1.16
 codex plugin add factory@clockgrove
-gh release download v0.1.15 --repo clockgrove/factory-rebuild \
-  --pattern clockgrove-factory-0.1.15.tgz --pattern SHA256SUMS
+gh release download v0.1.16 --repo clockgrove/factory-rebuild \
+  --pattern clockgrove-factory-0.1.16.tgz --pattern SHA256SUMS
 sha256sum --check SHA256SUMS
 # Also compare the digest with the independently recorded release value in BUILD-STATUS.md.
-npm install --offline --ignore-scripts --prefix /absolute/private/factory-prefix ./clockgrove-factory-0.1.15.tgz
+npm install --offline --ignore-scripts --prefix /absolute/private/factory-prefix ./clockgrove-factory-0.1.16.tgz
 export PATH="/absolute/private/factory-prefix/node_modules/.bin:$PATH"
 factory help
 ```
