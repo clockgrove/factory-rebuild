@@ -31,7 +31,9 @@ import {
   authenticationFailure,
   harnessFailure,
   parseAuthenticationRequest,
+  workItemPrompt,
 } from "../dist/execution/harness-support.js";
+import { FACTORY_VERSION } from "../dist/package-metadata.js";
 import * as publicModule from "../dist/index.js";
 import { createTarget, factoryConfig } from "./support/integration-fixture.mjs";
 
@@ -45,6 +47,47 @@ const {
   validateConfig,
 } = configModule;
 const { compose, composeWithLocalHarness } = publicModule;
+const packageVersion = JSON.parse(
+  readFileSync(new URL("../package.json", import.meta.url), "utf8"),
+).version;
+
+test("provider client identity tracks the exact package version", () => {
+  assert.equal(FACTORY_VERSION, packageVersion);
+});
+
+test("shared worker prompt preserves exact controller validation constraints", () => {
+  const checks = [
+    {
+      command: "grep -qx 'literal without punctuation' proof/exact.txt",
+      provenance: "source-declared",
+      source: "OBJECTIVE",
+    },
+    {
+      command: "npm test",
+      provenance: "base-observed",
+      source: "package.json",
+    },
+  ];
+  const prompt = workItemPrompt({
+    worktree: "/tmp/factory-shared-prompt-test",
+    item: {
+      id: "shared-prompt",
+      title: "Preserve exact validation",
+      goal: "Create the exact literal output.",
+      acceptance: ["The literal is exact."],
+      nonGoals: ["Do not publish."],
+      citations: [{ path: "OBJECTIVE" }],
+      dependencies: [],
+      ownedPaths: ["proof/exact.txt"],
+      validation: checks,
+      brief: "Make only the bounded change.",
+    },
+  });
+
+  assert.match(prompt, /Controller-run validation constraints/);
+  assert.match(prompt, /Factory, not the worker, executes/);
+  for (const check of checks) assert.ok(prompt.includes(JSON.stringify(check)));
+});
 
 test("package root exports only role-specific model defaults", () => {
   assert.equal(
@@ -311,7 +354,7 @@ test("Claude adapter configuration is exact, isolated, and bound to the pinned S
     assert.equal(environment.HOME, process.env.HOME);
     assert.equal(
       environment.CLAUDE_AGENT_SDK_CLIENT_APP,
-      "clockgrove-factory/0.1.10",
+      `clockgrove-factory/${packageVersion}`,
     );
     const queryOptions = claudeQueryOptions(
       workerInput,
@@ -578,7 +621,7 @@ test("GitHub Copilot adapter uses local auth with a bounded empty-mode capabilit
     assert.equal(clientOptions.useLoggedInUser, true);
     assert.equal(clientOptions.workingDirectory, target.checkout);
     assert.deepEqual(clientOptions.builtinPluginDirectories, []);
-    assert.equal(clientOptions.clientInfo.applicationVersion, "0.1.10");
+    assert.equal(clientOptions.clientInfo.applicationVersion, packageVersion);
     assert.equal(clientOptions.env.GH_TOKEN, undefined);
     const sessionOptions = githubCopilotSessionOptions(workerInput);
     assert.equal(sessionOptions.model, "copilot-explicit-model");

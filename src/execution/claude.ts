@@ -20,6 +20,7 @@ import type {
 import { AuthenticationRequiredError } from "../contracts.js";
 import type { ClaudeAgentSdkConfig } from "../config.js";
 import { parseProducedAssetSets } from "../media.js";
+import { FACTORY_VERSION } from "../package-metadata.js";
 import {
   linuxProcessIdentity,
   processGroupExists,
@@ -74,7 +75,7 @@ export function claudeWorkerEnvironment(
     credentialDirectory,
     claudeLocalAuthenticationEnvironment,
   );
-  environment.CLAUDE_AGENT_SDK_CLIENT_APP = "clockgrove-factory/0.1.10";
+  environment.CLAUDE_AGENT_SDK_CLIENT_APP = `clockgrove-factory/${FACTORY_VERSION}`;
   return environment;
 }
 

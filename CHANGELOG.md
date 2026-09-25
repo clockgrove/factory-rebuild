@@ -12,6 +12,8 @@ This file records public releases of Factory. See [BUILD-STATUS.md](docs/BUILD-S
 - Add `factory diagnostics --summary` with per-Objective, phase, and invocation-scope counts, explicit unavailable usage, available token totals, and cache-read numerator/denominator.
 - Constrain graph-review finding sources to the exact supplied path enum so heading-qualified aliases cannot produce invalid independent-review evidence.
 - Reject every malformed graph-review finding with its exact field path and bounded reason while preserving clean `{"findings":[]}` as the unambiguous no-defect result; private diagnostics never copy provider quotes or unknown source labels.
+- Preserve every exact Work Item validation command with its provenance and source in the common Codex, Claude, and GitHub Copilot worker prompt while retaining controller-only command execution and validation authority.
+- Derive Claude and GitHub Copilot client telemetry versions from the installed Factory package metadata instead of a stale release literal.
 
 ## 0.1.10 — 2026-09-24
 

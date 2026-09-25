@@ -4,6 +4,7 @@ import type {
   SessionConfig,
 } from "@github/copilot-sdk";
 import type { GitHubCopilotWorkerInput } from "./github-copilot.js";
+import { FACTORY_VERSION } from "../package-metadata.js";
 import { pathInsideRoot } from "./harness-support.js";
 
 function permissionHandler(input: GitHubCopilotWorkerInput): PermissionHandler {
@@ -50,7 +51,7 @@ export function githubCopilotClientOptions(
     enableRemoteSessions: false,
     clientInfo: {
       applicationName: "clockgrove-factory",
-      applicationVersion: "0.1.10",
+      applicationVersion: FACTORY_VERSION,
       integrationName: "github-copilot-agent-harness",
       integrationVersion: "1",
     },

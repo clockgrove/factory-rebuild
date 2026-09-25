@@ -173,6 +173,11 @@ export function writeHarnessResult(path: string, value: unknown): void {
 }
 
 export function workItemPrompt(request: HarnessRequest): string {
+  const validationInstructions = request.item.validation.length
+    ? `\n\nController-run validation constraints (authoritative): Factory, not the worker, executes these exact commands after your turn. Do not run them merely because they are listed here. Preserve the literal meaning of each command together with its provenance and source:\n${request.item.validation
+        .map((check) => JSON.stringify(check))
+        .join("\n")}`
+    : "\n\nController-run validation constraints: none declared.";
   const mediaInstructions = request.item.expectedOutputRoles?.length
     ? `\n\nProduce at least ${request.item.minimumAssetSets ?? 1} complete candidate AssetSets with different content. Put candidate bytes under .factory-media/ and write .factory-assets.json at the checkout root. Use this format-neutral manifest shape, replacing every angle-bracket placeholder with the actual declared role, file, media type, and owned destination: {"sets":[{"id":"candidate-a","members":[{"role":"<expected role>","path":".factory-media/candidate-a/<file>","mediaType":"<declared media type>","destination":"<owned target path>"}],"provenance":{"source":"<source path or generated>","rights":"<basis for repository use>","visibility":"repository","lineage":["<source path or input identity>"]}}]}. Include every expected role in each set. You may add member formatMetadata with a named source and uninterpreted values when an authoritative tool supplies it, set-level relationships with from, toRole, and kind when outputs are related, and production evidence with model, tool, request, or parameters when those values are actually supplied. Do not invent metadata or tool identities. .factory-media/ and .factory-assets.json are the only staging exceptions to owned paths. Do not write final destinations directly. Candidate files and the manifest are staging outputs; do not commit them. The controller will preserve the exact bytes for human review and selection.\nSource bindings: ${JSON.stringify(request.sourceAssets ?? [])}\nExpected output roles: ${request.item.expectedOutputRoles.join(", ")}`
     : "";
@@ -187,7 +192,7 @@ export function workItemPrompt(request: HarnessRequest): string {
           },
         )}`
       : "";
-  return `Implement this Work Item in the current repository checkout. Change only the owned paths. Do not commit, push, create issues, create pull requests, or access GitHub credentials. Stop and report if acceptance is impossible.\n\nTitle: ${request.item.title}\nGoal: ${request.item.goal}\nAcceptance:\n${request.item.acceptance.join("\n")}\nNon-goals:\n${request.item.nonGoals.join("\n")}\nOwned paths:\n${request.item.ownedPaths.join("\n")}\nBrief:\n${request.item.brief}${mediaInstructions}${inputInstructions}`;
+  return `Implement this Work Item in the current repository checkout. Change only the owned paths. Do not commit, push, create issues, create pull requests, or access GitHub credentials. Stop and report if acceptance is impossible.\n\nTitle: ${request.item.title}\nGoal: ${request.item.goal}\nAcceptance:\n${request.item.acceptance.join("\n")}\nNon-goals:\n${request.item.nonGoals.join("\n")}\nOwned paths:\n${request.item.ownedPaths.join("\n")}\nBrief:\n${request.item.brief}${validationInstructions}${mediaInstructions}${inputInstructions}`;
 }
 
 export function readProducedAssets(
