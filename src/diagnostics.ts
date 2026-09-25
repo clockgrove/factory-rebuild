@@ -15,6 +15,11 @@ import { stateRoot } from "./config.js";
 import type { FactoryState, WorkState } from "./state.js";
 import { itemsConflict } from "./scheduler.js";
 import { linearDeliveryUnits } from "./delivery/plan.js";
+import type {
+  ModelInvocationObservation,
+  ModelInvocationPhase,
+  ModelInvocationUsage,
+} from "./contracts.js";
 
 export interface DiagnosticEvent {
   eventId: string;
@@ -169,6 +174,71 @@ export class DiagnosticEmitter {
     else this.streamBuffers.set(key, pending.slice(cut));
   }
 
+  modelObserver(context: {
+    scopeId: string;
+    runId?: string;
+    itemId?: string;
+    attemptId?: string;
+  }): (observation: ModelInvocationObservation) => void {
+    return (observation) => {
+      const { scopeId, ...diagnosticContext } = context;
+      const metadata: Record<string, string | number | boolean> = {
+        scopeId,
+        invocationId: observation.invocationId,
+        phase: observation.phase,
+        ordinal: observation.ordinal,
+        observationType: observation.type,
+      };
+      for (const [key, value] of Object.entries({
+        provider: observation.provider,
+        model: observation.model,
+        reasoningEffort: observation.reasoningEffort,
+        providerThreadId: observation.providerThreadId,
+        promptBytes: observation.promptBytes,
+        promptDigest: observation.promptDigest,
+        schemaBytes: observation.schemaBytes,
+        schemaDigest: observation.schemaDigest,
+        sourcePacketBytes: observation.sourcePacketBytes,
+        sourcePacketDigest: observation.sourcePacketDigest,
+        responseBytes: observation.responseBytes,
+        responseDigest: observation.responseDigest,
+        providerEvent: observation.providerEvent,
+        providerItemId: observation.providerItemId,
+        providerItemType: observation.providerItemType,
+        tool: observation.tool,
+        usageAvailable: observation.usageAvailable,
+        failureClass: observation.failureClass,
+        failureField: observation.failureField,
+        ...(observation.usage ?? {}),
+      }))
+        if (["string", "number", "boolean"].includes(typeof value))
+          metadata[key] = value as string | number | boolean;
+      const detailLimit = 4096;
+      const redactedDetail =
+        observation.detail === undefined
+          ? undefined
+          : redactDiagnosticDetail(observation.detail, this.secrets);
+      if ((redactedDetail?.length ?? 0) > detailLimit)
+        metadata.detailTruncated = true;
+      this.emit({
+        ...diagnosticContext,
+        operation: "model-invocation",
+        outcome:
+          observation.type === "started"
+            ? "started"
+            : observation.type === "completed"
+              ? "completed"
+              : observation.type === "failed" ||
+                  observation.type === "response-invalid"
+                ? "failed"
+                : "observed",
+        durationMs: observation.durationMs,
+        metadata,
+        detail: redactedDetail?.slice(0, detailLimit),
+      });
+    };
+  }
+
   async span<T>(
     context: Pick<
       DiagnosticEvent,
@@ -209,6 +279,173 @@ export class DiagnosticEmitter {
       throw error;
     }
   }
+}
+
+export interface ModelInvocationAggregate {
+  invocationCount: number;
+  completedCount: number;
+  failedCount: number;
+  activeCount: number;
+  usageAvailableCount: number;
+  usageUnavailableCount: number;
+  tokenTotals: Partial<ModelInvocationUsage>;
+  tokenAvailability: Partial<Record<keyof ModelInvocationUsage, number>>;
+  cacheReadRatio: {
+    numeratorCachedInputTokens: number;
+    denominatorInputTokens: number;
+    value: number;
+  } | null;
+  lastProgressAt?: string;
+}
+
+export interface ModelInvocationSummary {
+  objective: ModelInvocationAggregate;
+  byPhase: Partial<Record<ModelInvocationPhase, ModelInvocationAggregate>>;
+  byScope: Record<string, ModelInvocationAggregate>;
+}
+
+type ModelEvent = Pick<DiagnosticEvent, "at" | "operation" | "metadata">;
+
+/** Derive observational totals without treating absent provider usage as zero. */
+export function summarizeModelInvocations(
+  events: Array<ModelEvent | Record<string, unknown>>,
+): ModelInvocationSummary {
+  const invocations = new Map<
+    string,
+    {
+      phase: ModelInvocationPhase;
+      scopeId: string;
+      events: ModelEvent[];
+    }
+  >();
+  for (const rawEvent of events) {
+    const event = rawEvent as ModelEvent;
+    if (event.operation !== "model-invocation") continue;
+    const invocationId = event.metadata?.invocationId;
+    const phase = event.metadata?.phase;
+    const scopeId = event.metadata?.scopeId;
+    if (
+      typeof invocationId !== "string" ||
+      ![
+        "compile",
+        "graph-review",
+        "result-review",
+        "objective-review",
+      ].includes(String(phase)) ||
+      typeof scopeId !== "string"
+    )
+      continue;
+    const entry = invocations.get(invocationId) ?? {
+      phase: phase as ModelInvocationPhase,
+      scopeId,
+      events: [],
+    };
+    entry.events.push(event);
+    invocations.set(invocationId, entry);
+  }
+  const all = [...invocations.values()];
+  const aggregate = (selected: typeof all): ModelInvocationAggregate => {
+    const totals: Partial<ModelInvocationUsage> = {};
+    const availability: Partial<Record<keyof ModelInvocationUsage, number>> =
+      {};
+    let completedCount = 0;
+    let failedCount = 0;
+    let usageAvailableCount = 0;
+    let usageUnavailableCount = 0;
+    let cacheRatioInputTokens = 0;
+    let cacheRatioCachedInputTokens = 0;
+    let cacheRatioInvocationCount = 0;
+    let lastProgressAt: string | undefined;
+    for (const invocation of selected) {
+      const observations = invocation.events.map(
+        (event) => event.metadata?.observationType,
+      );
+      const failed = observations.some(
+        (type) => type === "failed" || type === "response-invalid",
+      );
+      const completed = observations.includes("completed");
+      if (failed) failedCount += 1;
+      else if (completed) completedCount += 1;
+      for (const event of invocation.events)
+        if (
+          event.metadata?.observationType === "progress" &&
+          (!lastProgressAt || event.at > lastProgressAt)
+        )
+          lastProgressAt = event.at;
+      if (!failed && !completed) continue;
+      const usageEvent = [...invocation.events]
+        .reverse()
+        .find((event) => event.metadata?.usageAvailable === true);
+      if (!usageEvent) {
+        usageUnavailableCount += 1;
+        continue;
+      }
+      usageAvailableCount += 1;
+      const inputTokens = usageEvent.metadata?.inputTokens;
+      const cachedInputTokens = usageEvent.metadata?.cachedInputTokens;
+      if (
+        typeof inputTokens === "number" &&
+        typeof cachedInputTokens === "number"
+      ) {
+        cacheRatioInputTokens += inputTokens;
+        cacheRatioCachedInputTokens += cachedInputTokens;
+        cacheRatioInvocationCount += 1;
+      }
+      for (const key of [
+        "inputTokens",
+        "cachedInputTokens",
+        "cacheWriteInputTokens",
+        "outputTokens",
+        "reasoningOutputTokens",
+        "totalTokens",
+      ] as const) {
+        const value = usageEvent.metadata?.[key];
+        if (typeof value !== "number") continue;
+        totals[key] = (totals[key] ?? 0) + value;
+        availability[key] = (availability[key] ?? 0) + 1;
+      }
+    }
+    return {
+      invocationCount: selected.length,
+      completedCount,
+      failedCount,
+      activeCount: selected.length - completedCount - failedCount,
+      usageAvailableCount,
+      usageUnavailableCount,
+      tokenTotals: totals,
+      tokenAvailability: availability,
+      cacheReadRatio:
+        cacheRatioInvocationCount > 0 && cacheRatioInputTokens > 0
+          ? {
+              numeratorCachedInputTokens: cacheRatioCachedInputTokens,
+              denominatorInputTokens: cacheRatioInputTokens,
+              value: cacheRatioCachedInputTokens / cacheRatioInputTokens,
+            }
+          : null,
+      ...(lastProgressAt ? { lastProgressAt } : {}),
+    };
+  };
+  const phases: ModelInvocationPhase[] = [
+    "compile",
+    "graph-review",
+    "result-review",
+    "objective-review",
+  ];
+  return {
+    objective: aggregate(all),
+    byPhase: Object.fromEntries(
+      phases.flatMap((phase) => {
+        const selected = all.filter((entry) => entry.phase === phase);
+        return selected.length ? [[phase, aggregate(selected)]] : [];
+      }),
+    ),
+    byScope: Object.fromEntries(
+      [...new Set(all.map((entry) => entry.scopeId))].map((scopeId) => [
+        scopeId,
+        aggregate(all.filter((entry) => entry.scopeId === scopeId)),
+      ]),
+    ),
+  };
 }
 
 export function readDiagnostics(

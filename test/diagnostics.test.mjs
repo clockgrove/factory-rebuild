@@ -18,6 +18,7 @@ import {
   readWorkerOutput,
   redactDiagnosticDetail,
   StateDiagnostics,
+  summarizeModelInvocations,
 } from "../dist/diagnostics.js";
 import { validateTree } from "../dist/validation.js";
 import { stateRoot } from "../dist/config.js";
@@ -216,6 +217,115 @@ test("private diagnostics redact secrets and validation streams command output",
         ),
       /unavailable/,
     );
+  } finally {
+    if (previous === undefined) delete process.env.XDG_STATE_HOME;
+    else process.env.XDG_STATE_HOME = previous;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("model diagnostics preserve safe correlation and aggregate only supplied usage", () => {
+  const root = mkdtempSync(join(tmpdir(), "factory-model-diagnostics-"));
+  const previous = process.env.XDG_STATE_HOME;
+  process.env.XDG_STATE_HOME = join(root, "state");
+  try {
+    const emitter = new DiagnosticEmitter("example/model-diagnostics", 7, [
+      "private-prompt-secret",
+    ]);
+    const observe = emitter.modelObserver({
+      scopeId: "plan-attempt-1",
+      runId: "run-1",
+    });
+    const common = {
+      invocationId: "invoke-1",
+      phase: "compile",
+      ordinal: 0,
+      provider: "provider-one",
+      model: "model-one",
+      reasoningEffort: "high",
+      providerThreadId: "thread-one",
+    };
+    observe({
+      ...common,
+      type: "started",
+      promptBytes: 123,
+      promptDigest: "a".repeat(64),
+      sourcePacketBytes: 45,
+      sourcePacketDigest: "b".repeat(64),
+    });
+    observe({
+      ...common,
+      type: "progress",
+      providerEvent: "turn.started",
+    });
+    observe({
+      ...common,
+      type: "completed",
+      durationMs: 9,
+      responseBytes: 20,
+      responseDigest: "c".repeat(64),
+      usageAvailable: true,
+      usage: {
+        inputTokens: 100,
+        cachedInputTokens: 40,
+        cacheWriteInputTokens: 5,
+        outputTokens: 12,
+        reasoningOutputTokens: 3,
+      },
+    });
+    const failed = emitter.modelObserver({ scopeId: "plan-attempt-1" });
+    failed({
+      invocationId: "invoke-2",
+      phase: "graph-review",
+      ordinal: 0,
+      type: "failed",
+      usageAvailable: false,
+      failureClass: "provider-capacity",
+      detail: `private-prompt-secret is unavailable ${"x".repeat(4050)}private-prompt-secret${"x".repeat(1000)}`,
+    });
+    const partial = emitter.modelObserver({ scopeId: "plan-attempt-1" });
+    partial({
+      invocationId: "invoke-3",
+      phase: "graph-review",
+      ordinal: 1,
+      type: "completed",
+      usageAvailable: true,
+      usage: { inputTokens: 100 },
+    });
+    const events = readDiagnostics("example/model-diagnostics", 7);
+    assert.equal(events.length, 5);
+    assert.ok(events.every((event) => event.operation === "model-invocation"));
+    assert.equal(events[0].metadata.scopeId, "plan-attempt-1");
+    assert.equal(events[2].metadata.inputTokens, 100);
+    assert.equal(events[2].metadata.totalTokens, undefined);
+    assert.doesNotMatch(JSON.stringify(events), /private-prompt-secret/);
+    assert.match(events[3].detail, /REDACTED/);
+    assert.equal(events[3].metadata.detailTruncated, true);
+    assert.ok(events[3].detail.length <= 4096);
+
+    const summary = summarizeModelInvocations(events);
+    assert.deepEqual(summary.objective.tokenTotals, {
+      inputTokens: 200,
+      cachedInputTokens: 40,
+      cacheWriteInputTokens: 5,
+      outputTokens: 12,
+      reasoningOutputTokens: 3,
+    });
+    assert.equal(summary.objective.invocationCount, 3);
+    assert.equal(summary.objective.completedCount, 2);
+    assert.equal(summary.objective.failedCount, 1);
+    assert.equal(summary.objective.usageAvailableCount, 2);
+    assert.equal(summary.objective.usageUnavailableCount, 1);
+    assert.deepEqual(summary.objective.cacheReadRatio, {
+      numeratorCachedInputTokens: 40,
+      denominatorInputTokens: 100,
+      value: 0.4,
+    });
+    assert.equal(summary.objective.tokenAvailability.inputTokens, 2);
+    assert.equal(summary.objective.tokenAvailability.cachedInputTokens, 1);
+    assert.equal(summary.byPhase.compile.invocationCount, 1);
+    assert.equal(summary.byPhase["graph-review"].failedCount, 1);
+    assert.equal(summary.byScope["plan-attempt-1"].invocationCount, 3);
   } finally {
     if (previous === undefined) delete process.env.XDG_STATE_HOME;
     else process.env.XDG_STATE_HOME = previous;

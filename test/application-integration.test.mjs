@@ -204,6 +204,34 @@ test("regular application path runs a source-grounded concurrent DAG with stable
       state.finalValidation.treeSha,
       git(target.checkout, "rev-parse", `${state.integratedSha}^{tree}`),
     );
+    const modelInvocations = readDiagnostics(
+      descriptor.config.repository,
+      objective,
+    ).filter(
+      (event) =>
+        event.operation === "model-invocation" &&
+        event.metadata.observationType === "completed",
+    );
+    assert.deepEqual(
+      modelInvocations.map((event) => event.metadata.phase).sort(),
+      [
+        "compile",
+        "graph-review",
+        "objective-review",
+        "result-review",
+        "result-review",
+        "result-review",
+        "result-review",
+      ].sort(),
+    );
+    assert.ok(
+      modelInvocations.every(
+        (event) =>
+          event.metadata.model === "scripted-test-model" &&
+          event.metadata.inputTokens === 10 &&
+          event.metadata.cachedInputTokens === 4,
+      ),
+    );
     const events = readEvents(eventsPath);
     const joinStart = events.findIndex(
       (event) => event.type === "start" && event.item === "join",
@@ -1008,7 +1036,8 @@ test("clean accepted plan activates without planning calls and rejects config dr
       },
       async reviewGraph(request) {
         reviewCount += 1;
-        reviewedPacket = structuredClone(request);
+        const { invocation: _invocation, ...packet } = request;
+        reviewedPacket = structuredClone(packet);
         return { findings: [] };
       },
       async reviewResult(request) {
