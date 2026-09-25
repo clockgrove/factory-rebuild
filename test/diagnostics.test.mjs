@@ -281,7 +281,7 @@ test("model diagnostics preserve safe correlation and aggregate only supplied us
       type: "failed",
       usageAvailable: false,
       failureClass: "provider-capacity",
-      detail: `private-prompt-secret is unavailable ${"x".repeat(5000)}`,
+      detail: `private-prompt-secret is unavailable ${"x".repeat(4050)}private-prompt-secret${"x".repeat(1000)}`,
     });
     const partial = emitter.modelObserver({ scopeId: "plan-attempt-1" });
     partial({

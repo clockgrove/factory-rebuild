@@ -214,7 +214,11 @@ export class DiagnosticEmitter {
         if (["string", "number", "boolean"].includes(typeof value))
           metadata[key] = value as string | number | boolean;
       const detailLimit = 4096;
-      if ((observation.detail?.length ?? 0) > detailLimit)
+      const redactedDetail =
+        observation.detail === undefined
+          ? undefined
+          : redactDiagnosticDetail(observation.detail, this.secrets);
+      if ((redactedDetail?.length ?? 0) > detailLimit)
         metadata.detailTruncated = true;
       this.emit({
         ...diagnosticContext,
@@ -230,7 +234,7 @@ export class DiagnosticEmitter {
                 : "observed",
         durationMs: observation.durationMs,
         metadata,
-        detail: observation.detail?.slice(0, detailLimit),
+        detail: redactedDetail?.slice(0, detailLimit),
       });
     };
   }

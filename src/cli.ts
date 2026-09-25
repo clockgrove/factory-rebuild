@@ -17,6 +17,7 @@ import { itemsConflict } from "./scheduler.js";
 import { linearDeliveryUnits } from "./delivery/plan.js";
 import {
   readAgentTimeline,
+  readDiagnostics,
   readWorkerOutput,
   redactDiagnosticDetail,
   statusDocument,
@@ -279,6 +280,16 @@ async function main(): Promise<void> {
   } else if (command === "diagnostics") {
     if (args.includes("--follow") && args.includes("--summary"))
       throw new Error("diagnostics accepts only one of --follow or --summary");
+    if (args.includes("--summary")) {
+      console.log(
+        JSON.stringify(
+          summarizeModelInvocations(
+            readDiagnostics(config.repository, objective),
+          ),
+        ),
+      );
+      return;
+    }
     const seen = new Set<string>();
     const printNew = () => {
       const timeline = readAgentTimeline(
@@ -286,10 +297,6 @@ async function main(): Promise<void> {
         objective,
         readState(config.repository, objective),
       );
-      if (args.includes("--summary")) {
-        console.log(JSON.stringify(summarizeModelInvocations(timeline)));
-        return;
-      }
       for (const event of timeline) {
         const json = JSON.stringify(event);
         if (!seen.has(json)) console.log(json);

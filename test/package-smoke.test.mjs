@@ -6,6 +6,7 @@ import {
   mkdirSync,
   readFileSync,
   rmSync,
+  writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -230,6 +231,19 @@ test("fresh packed artifact installs and exposes documented install/status/plan 
           event.metadata.inputTokens === 11 &&
           event.metadata.cachedInputTokens === 5,
       ),
+    );
+    const unrelatedHarnessRoot = join(
+      installedPackage.stateRoot("example/package-smoke"),
+      "harness",
+    );
+    mkdirSync(unrelatedHarnessRoot, { recursive: true, mode: 0o700 });
+    writeFileSync(
+      join(
+        unrelatedHarnessRoot,
+        "11111111-1111-4111-8111-111111111111.progress.ndjson",
+      ),
+      "not-json\n",
+      { mode: 0o600 },
     );
     const summary = JSON.parse(
       execFileSync(
