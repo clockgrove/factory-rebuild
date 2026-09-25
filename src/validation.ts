@@ -92,6 +92,7 @@ export function workItemReviewObservations(
   delivery: ReviewDeliveryObservation,
   selectedAsset?: CapturedAssetSet,
 ): string {
+  const current = state.work[item.id]!;
   const criterionText = item.acceptance.join("\n");
   const namedByCriterion = (id: string): boolean => {
     const escaped = id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -133,7 +134,19 @@ export function workItemReviewObservations(
         integratedCommitSha: work.integratedSha ?? null,
       };
     }),
+    assetCaptureReceipts: (current.assets ?? []).map(
+      (asset) => asset.capture ?? null,
+    ),
     selectedAsset: selectedAsset ?? null,
+    assetSelectionReceipt:
+      selectedAsset && current.selection
+        ? {
+            authority: "factory-controller",
+            setId: selectedAsset.id,
+            selectionDigest: current.selectionDigest ?? null,
+            ...current.selection,
+          }
+        : null,
   });
 }
 

@@ -387,6 +387,7 @@ async function main(): Promise<void> {
       actor: option(args, "actor"),
       reason: option(args, "reason"),
       downstreamItems: options(args, "bind"),
+      surface: "factory-cli",
     });
     console.log(
       `Selected AssetSet ${set} for Work Item ${item}; run the Objective to continue`,

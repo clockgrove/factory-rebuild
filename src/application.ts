@@ -53,7 +53,12 @@ export interface FactoryApplication {
     objective: number,
     itemId: string,
     setId: string,
-    decision?: { actor?: string; reason?: string; downstreamItems?: string[] },
+    decision?: {
+      actor?: string;
+      reason?: string;
+      downstreamItems?: string[];
+      surface?: "factory-cli" | "application";
+    },
   ): Promise<void>;
   exportAssetSetForReview(
     objective: number,

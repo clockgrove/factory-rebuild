@@ -813,7 +813,12 @@ export async function selectAssetSet(
   itemId: string,
   setId: string,
   store: ContentStore,
-  decision?: { actor?: string; reason?: string; downstreamItems?: string[] },
+  decision?: {
+    actor?: string;
+    reason?: string;
+    downstreamItems?: string[];
+    surface?: "factory-cli" | "application";
+  },
 ): Promise<void> {
   const root = stateRoot(config.repository);
   const lock = join(root, "controller.lock");
@@ -846,6 +851,7 @@ export async function selectAssetSet(
       actor: decision?.actor ?? userInfo().username,
       at: new Date().toISOString(),
       ...(decision?.reason && { reason: decision.reason }),
+      surface: decision?.surface ?? "application",
       destinations: set.members.map((member) => ({
         role: member.role,
         path: member.destination,

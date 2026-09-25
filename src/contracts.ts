@@ -360,6 +360,30 @@ export interface CapturedAssetSet {
   provenance: ProducedAssetSet["provenance"];
   production?: ProducedAssetSet["production"];
   evidence: { harnessIdentity: string; resultDigest: string };
+  /**
+   * Controller-generated only after every declared member has been verified as
+   * a regular file beneath the private media staging root and imported into the
+   * content store. Older snapshots may not contain this receipt and therefore
+   * cannot use it as automatic review evidence.
+   */
+  capture?: AssetCaptureReceipt;
+}
+
+export interface AssetCaptureReceipt {
+  authority: "factory-controller";
+  declarationPath?: ".factory-assets.json";
+  declarationDigest?: string;
+  mediaRoot: ".factory-media";
+  complete: true;
+  setId: string;
+  members: {
+    role: string;
+    stagingPath: string;
+    destination: string;
+    digest: string;
+    bytes: number;
+    mediaType: string;
+  }[];
 }
 
 /** Exact selected LFS bytes that an exact-tree validation must restore locally. */
@@ -388,6 +412,7 @@ export interface AssetSelectionDecision {
   actor: string;
   at: string;
   reason?: string;
+  surface?: "factory-cli" | "application";
   destinations: { role: string; path: string; digest: string }[];
   downstreamItems: string[];
 }

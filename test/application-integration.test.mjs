@@ -1763,7 +1763,7 @@ test("regular and native asset selection preserve a complete set and hydrate tar
           },
         },
       };
-      const { application, github } = makeApplication(descriptor);
+      const { application, github, planningPath } = makeApplication(descriptor);
       const publish = github.publish.bind(github);
       let lfsObjectObservedBeforePublication = false;
       github.publish = async (request) => {
@@ -1838,6 +1838,32 @@ test("regular and native asset selection preserve a complete set and hydrate tar
       );
       assert.equal(completed.work.media.selectedAssetSet, "candidate-b");
       assert.equal(completed.work.media.selection.actor, "test-operator");
+      const mediaReview = readEvents(planningPath)
+        .filter(
+          (event) =>
+            event.type === "result-review" &&
+            event.observations?.reviewedItemId === "media",
+        )
+        .at(-1);
+      assert.equal(mediaReview.observations.delivery.kind, delivery);
+      assert.equal(mediaReview.observations.assetCaptureReceipts.length, 2);
+      assert.ok(
+        mediaReview.observations.assetCaptureReceipts.every(
+          (receipt) =>
+            receipt.authority === "factory-controller" &&
+            receipt.declarationPath === ".factory-assets.json" &&
+            receipt.mediaRoot === ".factory-media" &&
+            receipt.complete === true,
+        ),
+      );
+      assert.equal(
+        mediaReview.observations.assetSelectionReceipt.setId,
+        "candidate-b",
+      );
+      assert.equal(
+        mediaReview.observations.assetSelectionReceipt.surface,
+        "application",
+      );
       assert.deepEqual(completed.work.media.selection.downstreamItems, [
         "consumer",
       ]);

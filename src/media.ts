@@ -9,14 +9,17 @@ import {
   lstatSync,
   mkdirSync,
   openSync,
+  readFileSync,
   readSync,
   realpathSync,
   rmSync,
 } from "node:fs";
 import { dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { Readable } from "node:stream";
+import { isDeepStrictEqual } from "node:util";
 import type {
   CapturedAssetSet,
+  AssetCaptureReceipt,
   ContentRef,
   ContentStore,
   ProducedAssetSet,
@@ -354,6 +357,27 @@ export async function captureAssetSets(
       .update(JSON.stringify(evidence ?? {}))
       .digest("hex"),
   };
+  const declaration = join(worktree, ".factory-assets.json");
+  let declarationDigest = "";
+  if (sets.length && existsSync(declaration)) {
+    if (
+      !lstatSync(declaration).isFile() ||
+      realpathSync(declaration) !== resolve(declaration)
+    )
+      throw new Error("AssetSet manifest is not a regular staging file");
+    const declarationBytes = readFileSync(declaration);
+    const value: unknown = JSON.parse(declarationBytes.toString("utf8"));
+    if (!value || typeof value !== "object" || Array.isArray(value))
+      throw new Error("AssetSet manifest must be an object with sets");
+    const declared = parseProducedAssetSets(
+      (value as Record<string, unknown>).sets,
+    );
+    if (!isDeepStrictEqual(declared, sets))
+      throw new Error("Harness AssetSets differ from .factory-assets.json");
+    declarationDigest = createHash("sha256")
+      .update(declarationBytes)
+      .digest("hex");
+  }
   const mediaRoot = join(worktree, ".factory-media");
   if (
     sets.length &&
@@ -380,6 +404,7 @@ export async function captureAssetSets(
     const roles = new Set<string>();
     const destinations = new Set<string>();
     const members: CapturedAssetSet["members"] = [];
+    const receiptMembers: AssetCaptureReceipt["members"] = [];
     for (const member of set.members) {
       if (
         !/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(member.role) ||
@@ -415,6 +440,14 @@ export async function captureAssetSets(
         destination: member.destination,
         ...(member.formatMetadata && { formatMetadata: member.formatMetadata }),
       });
+      receiptMembers.push({
+        role: member.role,
+        stagingPath: member.path,
+        destination: member.destination,
+        digest: ref.digest,
+        bytes: ref.bytes,
+        mediaType: ref.mediaType,
+      });
     }
     for (const role of item.expectedOutputRoles ?? [])
       if (!roles.has(role))
@@ -427,6 +460,17 @@ export async function captureAssetSets(
       provenance,
       ...(set.production && { production: set.production }),
       evidence: evidenceRef,
+      capture: {
+        authority: "factory-controller",
+        ...(declarationDigest && {
+          declarationPath: ".factory-assets.json" as const,
+          declarationDigest,
+        }),
+        mediaRoot: ".factory-media",
+        complete: true,
+        setId: set.id,
+        members: receiptMembers,
+      },
     });
   }
   rmSync(mediaRoot, { recursive: true, force: true });
@@ -441,6 +485,45 @@ export async function captureAssetSets(
   )
     throw new Error("Candidate AssetSets must have distinct content");
   return captured;
+}
+
+/** Reject persisted capture evidence that no longer matches its captured set. */
+export function assertAssetCaptureReceipt(set: CapturedAssetSet): void {
+  const receipt = set.capture;
+  if (!receipt) throw new Error("AssetSet lacks a controller capture receipt");
+  if (
+    receipt.authority !== "factory-controller" ||
+    receipt.mediaRoot !== ".factory-media" ||
+    receipt.complete !== true ||
+    receipt.setId !== set.id ||
+    !Array.isArray(receipt.members) ||
+    receipt.members.length !== set.members.length
+  )
+    throw new Error("AssetSet controller capture receipt is invalid");
+  if (
+    (receipt.declarationPath === undefined) !==
+      (receipt.declarationDigest === undefined) ||
+    (receipt.declarationPath !== undefined &&
+      (receipt.declarationPath !== ".factory-assets.json" ||
+        !/^[0-9a-f]{64}$/.test(receipt.declarationDigest ?? "")))
+  )
+    throw new Error("AssetSet controller declaration receipt is invalid");
+  for (const [index, member] of set.members.entries()) {
+    const captured = receipt.members[index];
+    if (
+      !captured ||
+      !safeRelative(captured.stagingPath, true) ||
+      !captured.stagingPath.startsWith(".factory-media/") ||
+      captured.role !== member.role ||
+      captured.destination !== member.destination ||
+      captured.digest !== member.ref.digest ||
+      captured.bytes !== member.ref.bytes ||
+      captured.mediaType !== member.ref.mediaType
+    )
+      throw new Error(
+        "AssetSet controller capture receipt differs from members",
+      );
+  }
 }
 
 export async function materializeAssetSet(args: {
