@@ -176,7 +176,41 @@ class ScriptedPlanningModel {
     this.logPath = logPath;
   }
 
+  observe(request) {
+    const context = request.invocation;
+    if (!context?.observe) return;
+    const common = {
+      invocationId: context.invocationId,
+      phase: context.phase,
+      ordinal: context.ordinal,
+      provider: "scripted-test-provider",
+      model: "scripted-test-model",
+      reasoningEffort: "test",
+      providerThreadId: `thread-${context.invocationId}`,
+    };
+    context.observe({ ...common, type: "started", promptBytes: 1 });
+    context.observe({
+      ...common,
+      type: "progress",
+      providerEvent: "turn.started",
+    });
+    context.observe({
+      ...common,
+      type: "completed",
+      durationMs: 1,
+      usageAvailable: true,
+      usage: {
+        inputTokens: 10,
+        cachedInputTokens: 4,
+        cacheWriteInputTokens: 1,
+        outputTokens: 2,
+        reasoningOutputTokens: 1,
+      },
+    });
+  }
+
   async generateStructured(request) {
+    this.observe(request);
     appendEvent(this.logPath, {
       baseSha: request.baseSha,
       objective: request.objective,
@@ -185,11 +219,13 @@ class ScriptedPlanningModel {
     return structuredClone(this.graph);
   }
 
-  async reviewGraph() {
+  async reviewGraph(request) {
+    this.observe(request);
     return { findings: [] };
   }
 
   async reviewResult(request) {
+    this.observe(request);
     const source = request.sources.find((item) => item.path === "OBJECTIVE");
     return {
       findings: request.criteria.map((criterion) => ({

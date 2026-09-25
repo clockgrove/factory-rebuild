@@ -765,9 +765,52 @@ test("result review auto-accepts sourced evidence, otherwise asks one exact-tree
       criteria: ["result.txt exists"],
       sources,
     };
+    const invocation = (events) => ({
+      invocationId: "result-review-test",
+      phase: "result-review",
+      ordinal: 0,
+      observe: (event) => events.push(event),
+    });
+    const absentEvents = [];
     await assert.rejects(
-      reviewAcceptance({ ...request, model: {} }),
+      reviewAcceptance({
+        ...request,
+        model: {},
+        invocation: invocation(absentEvents),
+      }),
       AcceptanceDecisionRequired,
+    );
+    assert.deepEqual(absentEvents, []);
+    const providerFailureEvents = [];
+    await assert.rejects(
+      reviewAcceptance({
+        ...request,
+        model: {
+          async reviewResult() {
+            throw new Error("provider unavailable");
+          },
+        },
+        invocation: invocation(providerFailureEvents),
+      }),
+      AcceptanceDecisionRequired,
+    );
+    assert.deepEqual(providerFailureEvents, []);
+    const malformedEvents = [];
+    await assert.rejects(
+      reviewAcceptance({
+        ...request,
+        model: {
+          async reviewResult() {
+            return { findings: "not-an-array" };
+          },
+        },
+        invocation: invocation(malformedEvents),
+      }),
+      AcceptanceDecisionRequired,
+    );
+    assert.deepEqual(
+      malformedEvents.map((event) => [event.type, event.failureField]),
+      [["response-invalid", "findings"]],
     );
     const clean = await reviewAcceptance({
       ...request,

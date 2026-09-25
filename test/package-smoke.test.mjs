@@ -7,14 +7,17 @@ import {
   mkdirSync,
   readFileSync,
   rmSync,
+  writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import test from "node:test";
 import { createTarget } from "./support/integration-fixture.mjs";
 
-test("fresh packed artifact composes a registered harness through the package root", () => {
+test("fresh packed artifact composes a registered harness through the package root", async () => {
   const root = mkdtempSync(join(tmpdir(), "factory-package-smoke-"));
+  const previousStateRoot = process.env.XDG_STATE_HOME;
   try {
     const target = createTarget(root);
     const pack = join(root, "pack");
@@ -99,6 +102,7 @@ test("fresh packed artifact composes a registered harness through the package ro
       XDG_CONFIG_HOME: join(root, "xdg-config"),
       XDG_STATE_HOME: join(root, "xdg-state"),
     };
+    process.env.XDG_STATE_HOME = environment.XDG_STATE_HOME;
     const installed = execFileSync(
       cli,
       [
@@ -132,6 +136,71 @@ test("fresh packed artifact composes a registered harness through the package ro
       { encoding: "utf8", env: environment },
     );
     assert.match(status, /no active Objective/);
+    const installedPackage = await import(
+      pathToFileURL(
+        join(
+          prefix,
+          "node_modules",
+          "@clockgrove",
+          "factory",
+          "dist",
+          "index.js",
+        ),
+      ).href
+    );
+    const body = "# Packed Objective\n\n## Acceptance\n- `test -s one.txt`\n";
+    const graph = {
+      objective: 1,
+      baseSha: target.baseSha,
+      items: [
+        {
+          id: "one",
+          title: "One",
+          goal: "Create one.txt",
+          acceptance: ["one.txt exists"],
+          nonGoals: ["No deployment"],
+          citations: [{ path: "OBJECTIVE", heading: "Acceptance" }],
+          dependencies: [],
+          ownedPaths: ["one.txt"],
+          resources: [],
+          validation: [
+            {
+              command: "test -s one.txt",
+              provenance: "source-declared",
+              source: "OBJECTIVE",
+            },
+          ],
+          brief: "Create one.txt",
+          sourceAssets: [],
+          expectedOutputRoles: [],
+          minimumAssetSets: 0,
+          requiredLfsRoles: [],
+        },
+      ],
+    };
+    const application = installedPackage.createApplication(
+      installedPackage.readConfig(config),
+      {
+        github: {
+          async objective() {
+            return { body, title: "Packed Objective" };
+          },
+        },
+        planningModel: {
+          async generateStructured(request) {
+            observeInvocation(request);
+            return graph;
+          },
+          async reviewGraph(request) {
+            observeInvocation(request);
+            return { findings: [] };
+          },
+        },
+      },
+    );
+    const candidate = await application.planObjective(1);
+    assert.equal(candidate.review.status, "clean");
+    assert.equal(candidate.baseSha, target.baseSha);
     assert.equal(
       existsSync(
         join(
@@ -213,7 +282,91 @@ test("fresh packed artifact composes a registered harness through the package ro
       { encoding: "utf8", env: environment },
     );
     assert.match(timeline, /"operation":"harness"/);
+    const diagnosticEvents = timeline.trim().split("\n").map(JSON.parse);
+    const completed = diagnosticEvents.filter(
+      (event) =>
+        event.operation === "model-invocation" &&
+        event.metadata.observationType === "completed",
+    );
+    assert.deepEqual(
+      completed.map((event) => event.metadata.phase),
+      ["compile", "graph-review"],
+    );
+    assert.ok(
+      completed.every(
+        (event) =>
+          event.metadata.inputTokens === 11 &&
+          event.metadata.cachedInputTokens === 5,
+      ),
+    );
+    const unrelatedHarnessRoot = join(
+      installedPackage.stateRoot("example/package-smoke"),
+      "harness",
+    );
+    mkdirSync(unrelatedHarnessRoot, { recursive: true, mode: 0o700 });
+    writeFileSync(
+      join(
+        unrelatedHarnessRoot,
+        "11111111-1111-4111-8111-111111111111.progress.ndjson",
+      ),
+      "not-json\n",
+      { mode: 0o600 },
+    );
+    const summary = JSON.parse(
+      execFileSync(
+        cli,
+        ["diagnostics", "--objective", "1", "--summary", "--config", config],
+        { encoding: "utf8", env: environment },
+      ),
+    );
+    assert.equal(summary.objective.invocationCount, 2);
+    assert.deepEqual(summary.objective.tokenTotals, {
+      inputTokens: 22,
+      cachedInputTokens: 10,
+      cacheWriteInputTokens: 4,
+      outputTokens: 6,
+      reasoningOutputTokens: 2,
+    });
+    assert.deepEqual(summary.objective.cacheReadRatio, {
+      numeratorCachedInputTokens: 10,
+      denominatorInputTokens: 22,
+      value: 10 / 22,
+    });
   } finally {
+    if (previousStateRoot === undefined) delete process.env.XDG_STATE_HOME;
+    else process.env.XDG_STATE_HOME = previousStateRoot;
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+function observeInvocation(request) {
+  const context = request.invocation;
+  const common = {
+    invocationId: context.invocationId,
+    phase: context.phase,
+    ordinal: context.ordinal,
+    provider: "packed-test-provider",
+    model: "packed-test-model",
+    reasoningEffort: "medium",
+    providerThreadId: `packed-${context.invocationId}`,
+  };
+  context.observe({ ...common, type: "started", promptBytes: 10 });
+  context.observe({
+    ...common,
+    type: "progress",
+    providerEvent: "turn.started",
+  });
+  context.observe({
+    ...common,
+    type: "completed",
+    durationMs: 2,
+    usageAvailable: true,
+    usage: {
+      inputTokens: 11,
+      cachedInputTokens: 5,
+      cacheWriteInputTokens: 2,
+      outputTokens: 3,
+      reasoningOutputTokens: 1,
+    },
+  });
+}

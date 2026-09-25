@@ -977,16 +977,51 @@ test("Codex adapter passes phase selections to every planning and review thread"
   const original = Codex.prototype.startThread;
   const captured = [];
   Codex.prototype.startThread = function (options) {
-    captured.push(options);
+    const index = captured.length;
+    const entry = { options, id: `thread-${index}` };
+    captured.push(entry);
     return {
-      async run(prompt) {
-        captured.at(-1).prompt = prompt;
-        return {
-          finalResponse:
-            captured.length === 1
-              ? JSON.stringify({ result: "compiled" })
-              : JSON.stringify({ findings: [] }),
-        };
+      get id() {
+        return entry.id;
+      },
+      async runStreamed(prompt) {
+        entry.prompt = prompt;
+        async function* events() {
+          yield { type: "thread.started", thread_id: entry.id };
+          yield { type: "turn.started" };
+          yield {
+            type: "item.started",
+            item: {
+              id: `command-${index}`,
+              type: "command_execution",
+              command: "printf private-command-marker",
+              aggregated_output: "private-command-output",
+              status: "in_progress",
+            },
+          };
+          yield {
+            type: "item.completed",
+            item: {
+              id: `message-${index}`,
+              type: "agent_message",
+              text:
+                index === 0
+                  ? JSON.stringify({ result: "compiled" })
+                  : JSON.stringify({ findings: [] }),
+            },
+          };
+          yield {
+            type: "turn.completed",
+            usage: {
+              input_tokens: 100 + index,
+              cached_input_tokens: 50 + index,
+              cache_write_input_tokens: 3 + index,
+              output_tokens: 20 + index,
+              reasoning_output_tokens: 7 + index,
+            },
+          };
+        }
+        return { events: events() };
       },
     };
   };
@@ -997,11 +1032,19 @@ test("Codex adapter passes phase selections to every planning and review thread"
       { model: "reviewer-choice", reasoningEffort: "medium" },
     );
     const baseSha = "a".repeat(40);
+    const observations = [];
+    const invocation = (phase, ordinal) => ({
+      invocationId: `${phase}-${ordinal}`,
+      phase,
+      ordinal,
+      observe: (event) => observations.push(event),
+    });
     await model.generateStructured({
-      objective: 1,
+      objective: "private-objective-marker",
       baseSha,
-      sources: [],
+      sources: [{ path: "OBJECTIVE", content: "private-source-marker" }],
       schema: { type: "object" },
+      invocation: invocation("compile", 0),
     });
     await model.reviewGraph({
       objective: "Objective",
@@ -1010,6 +1053,7 @@ test("Codex adapter passes phase selections to every planning and review thread"
       graph: { objective: 1, baseSha, items: [] },
       commands: [],
       finalCommands: [],
+      invocation: invocation("graph-review", 0),
     });
     const treeSha = "b".repeat(40);
     await model.reviewResult({
@@ -1033,11 +1077,12 @@ test("Codex adapter passes phase selections to every planning and review thread"
           treeSha,
         },
       ],
+      invocation: invocation("result-review", 0),
     });
     assert.deepEqual(
-      captured.map(({ model, modelReasoningEffort }) => ({
-        model,
-        modelReasoningEffort,
+      captured.map(({ options }) => ({
+        model: options.model,
+        modelReasoningEffort: options.modelReasoningEffort,
       })),
       [
         { model: "planner-choice", modelReasoningEffort: "high" },
@@ -1050,6 +1095,182 @@ test("Codex adapter passes phase selections to every planning and review thread"
     assert.match(captured[2].prompt, /Work Item Git delta: one/);
     assert.match(captured[2].prompt, /supervisor item delta/);
     assert.match(captured[2].prompt, new RegExp(treeSha));
+    for (const [index, phase] of [
+      "compile",
+      "graph-review",
+      "result-review",
+    ].entries()) {
+      const events = observations.filter((event) => event.phase === phase);
+      assert.equal(events[0].type, "started");
+      assert.ok(events.some((event) => event.type === "progress"));
+      assert.ok(
+        events.some(
+          (event) =>
+            event.providerItemType === "command_execution" &&
+            event.tool === "shell",
+        ),
+      );
+      assert.equal(events.at(-1).type, "completed");
+      assert.equal(events.at(-1).providerThreadId, `thread-${index}`);
+      assert.deepEqual(events.at(-1).usage, {
+        inputTokens: 100 + index,
+        cachedInputTokens: 50 + index,
+        cacheWriteInputTokens: 3 + index,
+        outputTokens: 20 + index,
+        reasoningOutputTokens: 7 + index,
+      });
+      assert.equal(events.at(-1).usageAvailable, true);
+      assert.equal(
+        events[0].model,
+        index ? "reviewer-choice" : "planner-choice",
+      );
+      assert.equal(events[0].reasoningEffort, index ? "medium" : "high");
+      assert.equal(typeof events[0].promptDigest, "string");
+      assert.equal(typeof events[0].sourcePacketDigest, "string");
+    }
+    assert.doesNotMatch(
+      JSON.stringify(observations),
+      /private-objective-marker|private-source-marker|supervisor item delta/,
+    );
+    assert.doesNotMatch(
+      JSON.stringify(observations),
+      /private-command-marker|private-command-output/,
+    );
+  } finally {
+    Codex.prototype.startThread = original;
+  }
+});
+
+test("Codex adapter reports unavailable usage, malformed output, and provider failure", async () => {
+  const original = Codex.prototype.startThread;
+  let call = 0;
+  Codex.prototype.startThread = function () {
+    const index = call++;
+    if (index === 3) throw new Error("provider capacity unavailable");
+    return {
+      get id() {
+        return `failure-thread-${index}`;
+      },
+      async runStreamed() {
+        async function* events() {
+          yield {
+            type: "thread.started",
+            thread_id: `failure-thread-${index}`,
+          };
+          if (index === 0) {
+            yield {
+              type: "item.completed",
+              item: { id: "bad", type: "agent_message", text: "not json" },
+            };
+          } else if (index === 1) {
+            yield { type: "error", message: "429 rate limit reached" };
+          } else {
+            yield {
+              type: "item.completed",
+              item: {
+                id: "clean",
+                type: "agent_message",
+                text: JSON.stringify({ findings: [] }),
+              },
+            };
+          }
+        }
+        return { events: events() };
+      },
+    };
+  };
+  try {
+    const model = new CodexPlanningModel(
+      "/tmp/model-config-test",
+      { model: "planner-choice", reasoningEffort: "high" },
+      { model: "reviewer-choice", reasoningEffort: "medium" },
+    );
+    const malformed = [];
+    await assert.rejects(
+      model.generateStructured({
+        objective: "objective",
+        baseSha: "a".repeat(40),
+        sources: [],
+        schema: { type: "object" },
+        invocation: {
+          invocationId: "malformed",
+          phase: "compile",
+          ordinal: 0,
+          observe: (event) => malformed.push(event),
+        },
+      }),
+      SyntaxError,
+    );
+    assert.equal(malformed.at(-1).type, "response-invalid");
+    assert.equal(malformed.at(-1).failureClass, "structured-output-parse");
+    assert.equal(malformed.at(-1).usageAvailable, false);
+    assert.equal(
+      malformed.some((event) => event.type === "failed"),
+      false,
+    );
+
+    const failed = [];
+    await assert.rejects(
+      model.reviewGraph({
+        objective: "objective",
+        baseSha: "a".repeat(40),
+        sources: [],
+        graph: { objective: 1, baseSha: "a".repeat(40), items: [] },
+        commands: [],
+        finalCommands: [],
+        invocation: {
+          invocationId: "provider-failure",
+          phase: "graph-review",
+          ordinal: 0,
+          observe: (event) => failed.push(event),
+        },
+      }),
+      /429 rate limit/,
+    );
+    assert.equal(failed.at(-1).type, "failed");
+    assert.equal(failed.at(-1).failureClass, "provider-rate-limit");
+    assert.equal(failed.at(-1).usageAvailable, false);
+
+    const unavailable = [];
+    await model.reviewGraph({
+      objective: "objective",
+      baseSha: "a".repeat(40),
+      sources: [],
+      graph: { objective: 1, baseSha: "a".repeat(40), items: [] },
+      commands: [],
+      finalCommands: [],
+      invocation: {
+        invocationId: "usage-unavailable",
+        phase: "graph-review",
+        ordinal: 1,
+        observe: (event) => unavailable.push(event),
+      },
+    });
+    assert.equal(unavailable.at(-1).type, "completed");
+    assert.equal(unavailable.at(-1).usageAvailable, false);
+    assert.equal(unavailable.at(-1).usage, undefined);
+
+    const setupFailure = [];
+    await assert.rejects(
+      model.generateStructured({
+        objective: "objective",
+        baseSha: "a".repeat(40),
+        sources: [],
+        schema: { type: "object" },
+        invocation: {
+          invocationId: "setup-failure",
+          phase: "compile",
+          ordinal: 1,
+          observe: (event) => setupFailure.push(event),
+        },
+      }),
+      /capacity unavailable/,
+    );
+    assert.deepEqual(
+      setupFailure.map((event) => event.type),
+      ["started", "failed"],
+    );
+    assert.equal(setupFailure.at(-1).failureClass, "provider-capacity");
   } finally {
     Codex.prototype.startThread = original;
   }

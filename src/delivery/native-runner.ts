@@ -350,6 +350,17 @@ export async function runNativeGraph(args: {
               },
               work.assets?.find((set) => set.id === work.selectedAssetSet),
             ),
+            invocation: {
+              invocationId: randomUUID(),
+              phase: "result-review",
+              ordinal: 0,
+              observe: args.diagnostics?.modelObserver({
+                scopeId: work.attempt!,
+                runId: state.runId,
+                itemId: item.id,
+                attemptId: work.attempt,
+              }),
+            },
           });
         work.validation = args.diagnostics
           ? await args.diagnostics.span(
