@@ -15,16 +15,24 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import type { HarnessRequest } from "../contracts.js";
 import type { ThreadEvent } from "@openai/codex-sdk";
 import { parseProducedAssetSets } from "../media.js";
 import type { CodexModelSelection } from "../config.js";
+import {
+  DEFAULT_PROVIDER_TURN_IDLE_TIMEOUT_MS,
+  ProviderTurnGuard,
+  closeProviderEventStream,
+  requireCompletedProviderTurn,
+} from "../provider-turn.js";
 
 interface WorkerInput {
   request: HarnessRequest;
   network: "host" | "off";
   redactionValues?: string[];
   model: CodexModelSelection;
+  providerTurnIdleTimeoutMs: number;
 }
 
 function privateProgress(path: string, event: unknown): void {
@@ -117,15 +125,16 @@ function writeResult(path: string, value: unknown): void {
   }
 }
 
-async function main(): Promise<void> {
-  const [inputPath, resultPath] = process.argv.slice(2);
-  if (!inputPath || !resultPath)
-    throw new Error("Worker requires input and result paths");
+export async function runCodexWorker(
+  inputPath: string,
+  resultPath: string,
+): Promise<boolean> {
   const {
     request,
     network,
     redactionValues = [],
     model,
+    providerTurnIdleTimeoutMs,
   } = JSON.parse(readFileSync(inputPath, "utf8")) as WorkerInput;
   const progressPath = resultPath.replace(
     /\.result\.json$/,
@@ -161,39 +170,74 @@ async function main(): Promise<void> {
         )}`
       : "";
   const prompt = `Implement this Work Item in the current repository checkout. Change only the owned paths. Do not commit, push, create issues, create pull requests, or access GitHub credentials. Stop and report if acceptance is impossible.\n\nTitle: ${request.item.title}\nGoal: ${request.item.goal}\nAcceptance:\n${request.item.acceptance.join("\n")}\nNon-goals:\n${request.item.nonGoals.join("\n")}\nOwned paths:\n${request.item.ownedPaths.join("\n")}\nBrief:\n${request.item.brief}${mediaInstructions}${inputInstructions}`;
+  let turn: ProviderTurnGuard | undefined;
   try {
-    const streamed = await thread.runStreamed(prompt);
+    turn = new ProviderTurnGuard(
+      providerTurnIdleTimeoutMs ?? DEFAULT_PROVIDER_TURN_IDLE_TIMEOUT_MS,
+    );
+    const streamed = await turn.race(
+      thread.runStreamed(prompt, { signal: turn.signal }),
+    );
     let finalResponse = "";
     let usage: unknown = null;
+    let turnCompleted = false;
     const commandOffsets = new Map<string, number>();
     let progressLost = false;
-    for await (const event of streamed.events) {
-      const observation = progressEvent(
-        event,
-        request.attemptId ?? "",
-        redactionValues,
-        commandOffsets,
-      );
-      if (!progressLost)
-        try {
-          privateProgress(progressPath, observation);
-        } catch (error) {
-          progressLost = true;
-          process.stderr.write(
-            `Factory worker progress unavailable: ${error instanceof Error ? error.message : String(error)}\n`,
-          );
+    const events = streamed.events[Symbol.asyncIterator]();
+    let closeStarted = false;
+    try {
+      for (;;) {
+        const next = await turn.race(events.next());
+        if (next.done) break;
+        const event = next.value;
+        turn.progress();
+        const observation = progressEvent(
+          event,
+          request.attemptId ?? "",
+          redactionValues,
+          commandOffsets,
+        );
+        if (!progressLost)
+          try {
+            privateProgress(progressPath, observation);
+          } catch (error) {
+            progressLost = true;
+            process.stderr.write(
+              `Factory worker progress unavailable: ${error instanceof Error ? error.message : String(error)}\n`,
+            );
+          }
+        if (
+          (event.type === "item.started" ||
+            event.type === "item.updated" ||
+            event.type === "item.completed") &&
+          event.item.type === "agent_message"
+        )
+          finalResponse = event.item.text;
+        if (event.type === "turn.completed") {
+          turnCompleted = true;
+          usage = event.usage;
         }
-      if (
-        (event.type === "item.started" ||
-          event.type === "item.updated" ||
-          event.type === "item.completed") &&
-        event.item.type === "agent_message"
-      )
-        finalResponse = event.item.text;
-      if (event.type === "turn.completed") usage = event.usage;
-      if (event.type === "turn.failed") throw new Error(event.error.message);
-      if (event.type === "error") throw new Error(event.message);
+        if (event.type === "turn.failed") throw new Error(event.error.message);
+        if (event.type === "error") throw new Error(event.message);
+        if (turnCompleted) break;
+      }
+      closeStarted = true;
+      await closeProviderEventStream(events, turn, true);
+    } catch (error) {
+      if (!closeStarted && !turn.signal.aborted) {
+        closeStarted = true;
+        try {
+          await closeProviderEventStream(events, turn, true);
+        } catch {
+          // Preserve the provider failure that required cleanup.
+        }
+      }
+      throw error;
+    } finally {
+      if (!closeStarted) void closeProviderEventStream(events, turn, false);
     }
+    requireCompletedProviderTurn(turnCompleted);
+    turn.finish();
     const manifest = join(request.worktree, ".factory-assets.json");
     if (
       existsSync(manifest) &&
@@ -234,18 +278,30 @@ async function main(): Promise<void> {
         usage,
       },
     });
-  } catch (error) {
+    return true;
+  } catch (caught) {
+    const error = caught;
     writeResult(resultPath, {
       state: "failed",
       error: error instanceof Error ? error.message : String(error),
     });
-    process.exitCode = 1;
+    return false;
+  } finally {
+    turn?.finish();
   }
 }
 
-main().catch((error: unknown) => {
-  process.stderr.write(
-    `${error instanceof Error ? error.stack : String(error)}\n`,
-  );
-  process.exitCode = 1;
-});
+async function main(): Promise<void> {
+  const [inputPath, resultPath] = process.argv.slice(2);
+  if (!inputPath || !resultPath)
+    throw new Error("Worker requires input and result paths");
+  if (!(await runCodexWorker(inputPath, resultPath))) process.exitCode = 1;
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href)
+  main().catch((error: unknown) => {
+    process.stderr.write(
+      `${error instanceof Error ? error.stack : String(error)}\n`,
+    );
+    process.exitCode = 1;
+  });

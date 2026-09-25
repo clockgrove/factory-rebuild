@@ -1,0 +1,84 @@
+export const DEFAULT_PROVIDER_TURN_IDLE_TIMEOUT_MS = 15 * 60 * 1_000;
+
+export class ProviderTurnTimeoutError extends Error {
+  constructor(timeoutMs: number) {
+    super(`Provider turn produced no progress for ${timeoutMs} ms`);
+    this.name = "ProviderTurnTimeoutError";
+  }
+}
+
+export class ProviderTurnIncompleteError extends Error {
+  constructor() {
+    super("Provider stream ended without turn.completed");
+    this.name = "ProviderTurnIncompleteError";
+  }
+}
+
+export class ProviderTurnGuard {
+  private readonly controller = new AbortController();
+  private timer: NodeJS.Timeout | undefined;
+  private timeoutError: ProviderTurnTimeoutError | undefined;
+  private timeout: Promise<never>;
+
+  constructor(private readonly idleTimeoutMs: number) {
+    if (!Number.isSafeInteger(idleTimeoutMs) || idleTimeoutMs <= 0)
+      throw new Error("Provider turn idle timeout must be a positive integer");
+    this.timeout = this.reset();
+  }
+
+  get signal(): AbortSignal {
+    return this.controller.signal;
+  }
+
+  progress(): void {
+    if (this.controller.signal.aborted) return;
+    if (this.timer) clearTimeout(this.timer);
+    this.timeout = this.reset();
+  }
+
+  async race<T>(operation: Promise<T>): Promise<T> {
+    try {
+      return await Promise.race([operation, this.timeout]);
+    } catch (error) {
+      throw this.timeoutError ?? error;
+    }
+  }
+
+  finish(): void {
+    if (this.timer) clearTimeout(this.timer);
+    this.timer = undefined;
+  }
+
+  private reset(): Promise<never> {
+    return new Promise<never>((_resolve, reject) => {
+      this.timer = setTimeout(() => {
+        this.timeoutError = new ProviderTurnTimeoutError(this.idleTimeoutMs);
+        this.controller.abort(this.timeoutError);
+        reject(this.timeoutError);
+      }, this.idleTimeoutMs);
+    });
+  }
+}
+
+export function requireCompletedProviderTurn(completed: boolean): void {
+  if (!completed) throw new ProviderTurnIncompleteError();
+}
+
+export async function closeProviderEventStream(
+  events: AsyncIterator<unknown>,
+  turn: ProviderTurnGuard,
+  wait: boolean,
+): Promise<void> {
+  let closing: Promise<unknown>;
+  try {
+    closing = Promise.resolve(events.return?.());
+  } catch (error) {
+    if (wait) throw error;
+    return;
+  }
+  if (wait) {
+    await turn.race(closing);
+    return;
+  }
+  void closing.catch(() => undefined);
+}

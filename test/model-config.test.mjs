@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
@@ -12,6 +18,7 @@ import {
   installedControllerCapabilities,
 } from "../dist/controller-capabilities.js";
 import { codexWorkerInput } from "../dist/execution/local.js";
+import { runCodexWorker } from "../dist/execution/worker.js";
 import * as publicModule from "../dist/index.js";
 import { createTarget, factoryConfig } from "./support/integration-fixture.mjs";
 
@@ -446,7 +453,7 @@ test("Codex adapter reports unavailable usage, malformed output, and provider fa
   let call = 0;
   Codex.prototype.startThread = function () {
     const index = call++;
-    if (index === 3) throw new Error("provider capacity unavailable");
+    if (index === 4) throw new Error("provider capacity unavailable");
     return {
       get id() {
         return `failure-thread-${index}`;
@@ -462,6 +469,7 @@ test("Codex adapter reports unavailable usage, malformed output, and provider fa
               type: "item.completed",
               item: { id: "bad", type: "agent_message", text: "not json" },
             };
+            yield { type: "turn.completed", usage: null };
           } else if (index === 1) {
             yield { type: "error", message: "429 rate limit reached" };
           } else {
@@ -473,6 +481,7 @@ test("Codex adapter reports unavailable usage, malformed output, and provider fa
                 text: JSON.stringify({ findings: [] }),
               },
             };
+            if (index === 2) yield { type: "turn.completed", usage: null };
           }
         }
         return { events: events() };
@@ -556,6 +565,30 @@ test("Codex adapter reports unavailable usage, malformed output, and provider fa
     assert.equal(unavailable.at(-1).usageAvailable, false);
     assert.equal(unavailable.at(-1).usage, undefined);
 
+    const interrupted = [];
+    await assert.rejects(
+      model.reviewGraph({
+        objective: "objective",
+        baseSha: "a".repeat(40),
+        sources: [{ path: "OBJECTIVE", content: "objective" }],
+        graph: { objective: 1, baseSha: "a".repeat(40), items: [] },
+        commands: [],
+        finalCommands: [],
+        controllerCapabilities: installedControllerCapabilities(),
+        controllerCapabilitiesDigest: CONTROLLER_CAPABILITIES_DIGEST,
+        invocation: {
+          invocationId: "provider-interrupted",
+          phase: "graph-review",
+          ordinal: 2,
+          observe: (event) => interrupted.push(event),
+        },
+      }),
+      /without turn\.completed/,
+    );
+    assert.equal(interrupted.at(-1).type, "failed");
+    assert.equal(interrupted.at(-1).failureClass, "provider-interrupted");
+    assert.equal(interrupted.at(-1).usageAvailable, false);
+
     const setupFailure = [];
     await assert.rejects(
       model.generateStructured({
@@ -584,13 +617,416 @@ test("Codex adapter reports unavailable usage, malformed output, and provider fa
   }
 });
 
-test("Codex harness private request carries an explicit worker selection", () => {
-  const input = codexWorkerInput({ attemptId: "attempt-1" }, "off", [], {
-    model: "worker-choice",
-    reasoningEffort: "xhigh",
-  });
+test("Codex adapter aborts and records an abort-aware stalled stream", async () => {
+  const original = Codex.prototype.startThread;
+  Codex.prototype.startThread = function () {
+    return {
+      id: "stalled-thread",
+      async runStreamed(_prompt, options) {
+        async function* events() {
+          yield { type: "thread.started", thread_id: "stalled-thread" };
+          await new Promise((resolve, reject) => {
+            options.signal.addEventListener(
+              "abort",
+              () => reject(options.signal.reason),
+              { once: true },
+            );
+          });
+        }
+        return { events: events() };
+      },
+    };
+  };
+  try {
+    const observations = [];
+    const model = new CodexPlanningModel(
+      "/tmp/model-config-test",
+      { model: "planner-choice", reasoningEffort: "high" },
+      { model: "reviewer-choice", reasoningEffort: "medium" },
+      20,
+    );
+    await assert.rejects(
+      model.generateStructured({
+        objective: "objective",
+        baseSha: "a".repeat(40),
+        sources: [],
+        controllerCapabilities: installedControllerCapabilities(),
+        controllerCapabilitiesDigest: CONTROLLER_CAPABILITIES_DIGEST,
+        schema: { type: "object" },
+        invocation: {
+          invocationId: "provider-timeout",
+          phase: "compile",
+          ordinal: 0,
+          observe: (event) => observations.push(event),
+        },
+      }),
+      /no progress for 20 ms/,
+    );
+    assert.equal(observations.at(-1).type, "failed");
+    assert.equal(observations.at(-1).failureClass, "provider-timeout");
+    assert.equal(observations.at(-1).providerThreadId, "stalled-thread");
+    assert.equal(observations.at(-1).usageAvailable, false);
+  } finally {
+    Codex.prototype.startThread = original;
+  }
+});
+
+test("Codex adapter bounds a stalled stream that ignores abort", async () => {
+  const original = Codex.prototype.startThread;
+  Codex.prototype.startThread = function () {
+    return {
+      id: "noncooperative-thread",
+      async runStreamed() {
+        async function* events() {
+          yield {
+            type: "thread.started",
+            thread_id: "noncooperative-thread",
+          };
+          await new Promise(() => {});
+        }
+        return { events: events() };
+      },
+    };
+  };
+  try {
+    const observations = [];
+    const model = new CodexPlanningModel(
+      "/tmp/model-config-test",
+      { model: "planner-choice", reasoningEffort: "high" },
+      { model: "reviewer-choice", reasoningEffort: "medium" },
+      20,
+    );
+    await assert.rejects(
+      model.generateStructured({
+        objective: "objective",
+        baseSha: "a".repeat(40),
+        sources: [],
+        controllerCapabilities: installedControllerCapabilities(),
+        controllerCapabilitiesDigest: CONTROLLER_CAPABILITIES_DIGEST,
+        schema: { type: "object" },
+        invocation: {
+          invocationId: "provider-timeout-noncooperative",
+          phase: "compile",
+          ordinal: 0,
+          observe: (event) => observations.push(event),
+        },
+      }),
+      /no progress for 20 ms/,
+    );
+    assert.equal(observations.at(-1).type, "failed");
+    assert.equal(observations.at(-1).failureClass, "provider-timeout");
+    assert.equal(observations.at(-1).providerThreadId, "noncooperative-thread");
+    assert.equal(observations.at(-1).usageAvailable, false);
+  } finally {
+    Codex.prototype.startThread = original;
+  }
+});
+
+test("Codex adapter bounds stalled stream creation", async () => {
+  const original = Codex.prototype.startThread;
+  Codex.prototype.startThread = function () {
+    return {
+      id: "stream-creation-thread",
+      async runStreamed() {
+        return new Promise(() => {});
+      },
+    };
+  };
+  try {
+    const observations = [];
+    const model = new CodexPlanningModel(
+      "/tmp/model-config-test",
+      { model: "planner-choice", reasoningEffort: "high" },
+      { model: "reviewer-choice", reasoningEffort: "medium" },
+      20,
+    );
+    await assert.rejects(
+      model.generateStructured({
+        objective: "objective",
+        baseSha: "a".repeat(40),
+        sources: [],
+        controllerCapabilities: installedControllerCapabilities(),
+        controllerCapabilitiesDigest: CONTROLLER_CAPABILITIES_DIGEST,
+        schema: { type: "object" },
+        invocation: {
+          invocationId: "provider-stream-creation-timeout",
+          phase: "compile",
+          ordinal: 0,
+          observe: (event) => observations.push(event),
+        },
+      }),
+      /no progress for 20 ms/,
+    );
+    assert.equal(observations.at(-1).type, "failed");
+    assert.equal(observations.at(-1).failureClass, "provider-timeout");
+    assert.equal(
+      observations.at(-1).providerThreadId,
+      "stream-creation-thread",
+    );
+  } finally {
+    Codex.prototype.startThread = original;
+  }
+});
+
+test("Codex adapter closes provider iterators on completion and failure", async () => {
+  const original = Codex.prototype.startThread;
+  const closed = [];
+  let call = 0;
+  Codex.prototype.startThread = function () {
+    const index = call++;
+    return {
+      id: `cleanup-thread-${index}`,
+      async runStreamed() {
+        async function* events() {
+          try {
+            yield {
+              type: "thread.started",
+              thread_id: `cleanup-thread-${index}`,
+            };
+            if (index === 0) {
+              yield {
+                type: "item.completed",
+                item: {
+                  id: "message",
+                  type: "agent_message",
+                  text: JSON.stringify({ result: "complete" }),
+                },
+              };
+              yield { type: "turn.completed", usage: null };
+            } else {
+              yield {
+                type: "turn.failed",
+                error: { message: "provider terminal failure" },
+              };
+            }
+          } finally {
+            closed[index] = true;
+          }
+        }
+        return { events: events() };
+      },
+    };
+  };
+  try {
+    const model = new CodexPlanningModel(
+      "/tmp/model-config-test",
+      { model: "planner-choice", reasoningEffort: "high" },
+      { model: "reviewer-choice", reasoningEffort: "medium" },
+      100,
+    );
+    assert.deepEqual(
+      await model.generateStructured({
+        objective: "objective",
+        baseSha: "a".repeat(40),
+        sources: [],
+        controllerCapabilities: installedControllerCapabilities(),
+        controllerCapabilitiesDigest: CONTROLLER_CAPABILITIES_DIGEST,
+        schema: { type: "object" },
+      }),
+      { result: "complete" },
+    );
+    assert.equal(closed[0], true);
+    await assert.rejects(
+      model.reviewGraph({
+        objective: "objective",
+        baseSha: "a".repeat(40),
+        sources: [{ path: "OBJECTIVE", content: "objective" }],
+        graph: { objective: 1, baseSha: "a".repeat(40), items: [] },
+        commands: [],
+        finalCommands: [],
+        controllerCapabilities: installedControllerCapabilities(),
+        controllerCapabilitiesDigest: CONTROLLER_CAPABILITIES_DIGEST,
+      }),
+      /provider terminal failure/,
+    );
+    assert.equal(closed[1], true);
+  } finally {
+    Codex.prototype.startThread = original;
+  }
+});
+
+test("Codex adapter preserves terminal failure when iterator cleanup stalls", async () => {
+  const original = Codex.prototype.startThread;
+  Codex.prototype.startThread = function () {
+    let event = 0;
+    return {
+      id: "cleanup-stall-thread",
+      async runStreamed() {
+        return {
+          events: {
+            [Symbol.asyncIterator]() {
+              return this;
+            },
+            async next() {
+              event += 1;
+              if (event === 1)
+                return {
+                  done: false,
+                  value: {
+                    type: "thread.started",
+                    thread_id: "cleanup-stall-thread",
+                  },
+                };
+              return {
+                done: false,
+                value: {
+                  type: "turn.failed",
+                  error: { message: "authoritative provider failure" },
+                },
+              };
+            },
+            async return() {
+              return new Promise(() => {});
+            },
+          },
+        };
+      },
+    };
+  };
+  try {
+    const observations = [];
+    const model = new CodexPlanningModel(
+      "/tmp/model-config-test",
+      { model: "planner-choice", reasoningEffort: "high" },
+      { model: "reviewer-choice", reasoningEffort: "medium" },
+      20,
+    );
+    await assert.rejects(
+      model.reviewGraph({
+        objective: "objective",
+        baseSha: "a".repeat(40),
+        sources: [{ path: "OBJECTIVE", content: "objective" }],
+        graph: { objective: 1, baseSha: "a".repeat(40), items: [] },
+        commands: [],
+        finalCommands: [],
+        controllerCapabilities: installedControllerCapabilities(),
+        controllerCapabilitiesDigest: CONTROLLER_CAPABILITIES_DIGEST,
+        invocation: {
+          invocationId: "cleanup-stall",
+          phase: "graph-review",
+          ordinal: 0,
+          observe: (observation) => observations.push(observation),
+        },
+      }),
+      /authoritative provider failure/,
+    );
+    assert.equal(observations.at(-1).type, "failed");
+    assert.equal(observations.at(-1).failureClass, "provider");
+    assert.equal(observations.at(-1).detail, "authoritative provider failure");
+  } finally {
+    Codex.prototype.startThread = original;
+  }
+});
+
+test("Codex harness private request carries selection and turn timeout", () => {
+  const input = codexWorkerInput(
+    { attemptId: "attempt-1" },
+    "off",
+    [],
+    {
+      model: "worker-choice",
+      reasoningEffort: "xhigh",
+    },
+    1234,
+  );
   assert.deepEqual(input.model, {
     model: "worker-choice",
     reasoningEffort: "xhigh",
   });
+  assert.equal(input.providerTurnIdleTimeoutMs, 1234);
+});
+
+test("Codex worker closes completed streams and durably fails nonterminal streams", async () => {
+  const original = Codex.prototype.startThread;
+  const root = mkdtempSync(join(tmpdir(), "factory-worker-terminal-"));
+  const closed = new Set();
+  let scenario = "complete";
+  Codex.prototype.startThread = function () {
+    return {
+      id: `worker-${scenario}`,
+      async runStreamed() {
+        async function* events() {
+          try {
+            yield {
+              type: "thread.started",
+              thread_id: `worker-${scenario}`,
+            };
+            yield {
+              type: "item.completed",
+              item: {
+                id: "message",
+                type: "agent_message",
+                text: "provider prose is not terminal authority",
+              },
+            };
+            if (scenario === "complete") {
+              yield { type: "turn.completed", usage: null };
+              return;
+            }
+            if (scenario === "eof") return;
+            await new Promise(() => {});
+          } finally {
+            closed.add(scenario);
+          }
+        }
+        return { events: events() };
+      },
+    };
+  };
+  try {
+    for (scenario of ["complete", "eof", "silent"]) {
+      const inputPath = join(root, `${scenario}.request.json`);
+      const resultPath = join(root, `${scenario}.result.json`);
+      writeFileSync(
+        inputPath,
+        `${JSON.stringify({
+          request: {
+            attemptId: `attempt-${scenario}`,
+            worktree: root,
+            item: {
+              id: "item",
+              title: "Title",
+              goal: "Goal",
+              acceptance: ["Acceptance"],
+              nonGoals: ["Non-goal"],
+              citations: [],
+              dependencies: [],
+              ownedPaths: [],
+              resources: [],
+              validation: [],
+              brief: "Brief",
+              sourceAssets: [],
+              expectedOutputRoles: [],
+              minimumAssetSets: 0,
+              requiredLfsRoles: [],
+            },
+          },
+          network: "off",
+          redactionValues: [],
+          model: { model: "worker-choice", reasoningEffort: "medium" },
+          providerTurnIdleTimeoutMs: 20,
+        })}\n`,
+      );
+      const completed = await runCodexWorker(inputPath, resultPath);
+      const result = JSON.parse(readFileSync(resultPath, "utf8"));
+      if (scenario === "complete") {
+        assert.equal(completed, true);
+        assert.equal(result.state, "complete");
+        assert.equal(closed.has("complete"), true);
+        continue;
+      }
+      assert.equal(completed, false);
+      assert.equal(result.state, "failed");
+      assert.match(
+        result.error,
+        scenario === "eof"
+          ? /without turn\.completed/
+          : /no progress for 20 ms/,
+      );
+      assert.equal(result.evidence, undefined);
+    }
+  } finally {
+    Codex.prototype.startThread = original;
+    rmSync(root, { recursive: true, force: true });
+  }
 });
