@@ -93,6 +93,28 @@ export function workItemReviewObservations(
   selectedAsset?: CapturedAssetSet,
 ): string {
   const current = state.work[item.id]!;
+  const captureReceipt = (asset: CapturedAssetSet) =>
+    asset.capture
+      ? {
+          authority: "factory-controller" as const,
+          ...(asset.capture.declarationPath &&
+            asset.capture.declarationDigest && {
+              declarationPath: asset.capture.declarationPath,
+              declarationDigest: asset.capture.declarationDigest,
+            }),
+          mediaRoot: ".factory-media" as const,
+          complete: true as const,
+          setId: asset.id,
+          members: asset.capture.members.map((member) => ({
+            role: member.role,
+            stagingPath: member.stagingPath,
+            destination: member.destination,
+            digest: member.digest,
+            bytes: member.bytes,
+            mediaType: member.mediaType,
+          })),
+        }
+      : null;
   const criterionText = item.acceptance.join("\n");
   const namedByCriterion = (id: string): boolean => {
     const escaped = id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -134,17 +156,35 @@ export function workItemReviewObservations(
         integratedCommitSha: work.integratedSha ?? null,
       };
     }),
-    assetCaptureReceipts: (current.assets ?? []).map(
-      (asset) => asset.capture ?? null,
-    ),
-    selectedAsset: selectedAsset ?? null,
+    assetCaptureReceipts: (current.assets ?? []).map(captureReceipt),
+    selectedAsset: selectedAsset
+      ? {
+          ...selectedAsset,
+          ...(selectedAsset.capture && {
+            capture: captureReceipt(selectedAsset),
+          }),
+        }
+      : null,
     assetSelectionReceipt:
       selectedAsset && current.selection
         ? {
             authority: "factory-controller",
             setId: selectedAsset.id,
             selectionDigest: current.selectionDigest ?? null,
-            ...current.selection,
+            actor: current.selection.actor,
+            at: current.selection.at,
+            ...(current.selection.reason && {
+              reason: current.selection.reason,
+            }),
+            ...(current.selection.surface && {
+              surface: current.selection.surface,
+            }),
+            destinations: current.selection.destinations.map((destination) => ({
+              role: destination.role,
+              path: destination.path,
+              digest: destination.digest,
+            })),
+            downstreamItems: current.selection.downstreamItems,
           }
         : null,
   });

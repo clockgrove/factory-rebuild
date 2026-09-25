@@ -807,18 +807,20 @@ export function decideResult(
   }
 }
 
-export async function selectAssetSet(
+type AssetSelectionInput = {
+  actor?: string;
+  reason?: string;
+  downstreamItems?: string[];
+};
+
+async function selectAssetSetWithSurface(
   config: FactoryConfig,
   objective: number,
   itemId: string,
   setId: string,
   store: ContentStore,
-  decision?: {
-    actor?: string;
-    reason?: string;
-    downstreamItems?: string[];
-    surface?: "factory-cli" | "application";
-  },
+  decision: AssetSelectionInput | undefined,
+  surface: "factory-cli" | "application",
 ): Promise<void> {
   const root = stateRoot(config.repository);
   const lock = join(root, "controller.lock");
@@ -851,7 +853,7 @@ export async function selectAssetSet(
       actor: decision?.actor ?? userInfo().username,
       at: new Date().toISOString(),
       ...(decision?.reason && { reason: decision.reason }),
-      surface: decision?.surface ?? "application",
+      surface,
       destinations: set.members.map((member) => ({
         role: member.role,
         path: member.destination,
@@ -872,6 +874,45 @@ export async function selectAssetSet(
   } finally {
     releaseControllerLock(lock, lockHandle);
   }
+}
+
+export async function selectAssetSet(
+  config: FactoryConfig,
+  objective: number,
+  itemId: string,
+  setId: string,
+  store: ContentStore,
+  decision?: AssetSelectionInput,
+): Promise<void> {
+  return selectAssetSetWithSurface(
+    config,
+    objective,
+    itemId,
+    setId,
+    store,
+    decision,
+    "application",
+  );
+}
+
+/** CLI-only boundary: the invocation surface is fixed here, not caller data. */
+export async function selectAssetSetFromCli(
+  config: FactoryConfig,
+  objective: number,
+  itemId: string,
+  setId: string,
+  store: ContentStore,
+  decision?: AssetSelectionInput,
+): Promise<void> {
+  return selectAssetSetWithSurface(
+    config,
+    objective,
+    itemId,
+    setId,
+    store,
+    decision,
+    "factory-cli",
+  );
 }
 
 export async function exportAssetSetForReview(

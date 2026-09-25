@@ -17,6 +17,7 @@ import test from "node:test";
 import { parseFactoryState } from "../dist/state.js";
 import { readState, statePath } from "../dist/state-store.js";
 import { readDiagnostics, statusDocument } from "../dist/diagnostics.js";
+import { selectAssetSetFromCli } from "../dist/runner.js";
 import {
   createTarget,
   factoryConfig,
@@ -1763,7 +1764,8 @@ test("regular and native asset selection preserve a complete set and hydrate tar
           },
         },
       };
-      const { application, github, planningPath } = makeApplication(descriptor);
+      const { application, github, planningPath, contentStore } =
+        makeApplication(descriptor);
       const publish = github.publish.bind(github);
       let lfsObjectObservedBeforePublication = false;
       github.publish = async (request) => {
@@ -1810,11 +1812,25 @@ test("regular and native asset selection preserve a complete set and hydrate tar
         readFileSync(join(review, "metadata-metadata.json"), "utf8"),
         '{"candidate":"b"}\n',
       );
-      await application.selectAssetSet(objective, "media", "candidate-b", {
+      const selection = {
         actor: "test-operator",
         reason: "reviewed opaque pair",
         downstreamItems: ["consumer"],
-      });
+      };
+      if (delivery === "regular")
+        await selectAssetSetFromCli(
+          descriptor.config,
+          objective,
+          "media",
+          "candidate-b",
+          contentStore,
+          selection,
+        );
+      else
+        await application.selectAssetSet(objective, "media", "candidate-b", {
+          ...selection,
+          surface: "factory-cli",
+        });
       const completed = await application.runObjective(objective);
       assert.equal(lfsObjectObservedBeforePublication, true);
       assert.ok(
@@ -1862,7 +1878,7 @@ test("regular and native asset selection preserve a complete set and hydrate tar
       );
       assert.equal(
         mediaReview.observations.assetSelectionReceipt.surface,
-        "application",
+        delivery === "regular" ? "factory-cli" : "application",
       );
       assert.deepEqual(completed.work.media.selection.downstreamItems, [
         "consumer",

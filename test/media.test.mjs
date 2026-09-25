@@ -173,6 +173,20 @@ test("a non-manifest harness keeps verified capture evidence without claiming ma
         },
       },
     ];
+    const externalManifest = join(root, "external-manifest.json");
+    writeFileSync(externalManifest, `${JSON.stringify({ sets })}\n`);
+    symlinkSync(externalManifest, join(staging, ".factory-assets.json"));
+    await assert.rejects(
+      captureAssetSets(
+        new LocalContentStore(join(root, "rejected-content")),
+        staging,
+        { ownedPaths: ["approved/image.png"], expectedOutputRoles: ["image"] },
+        sets,
+        { harness: "provider-neutral" },
+      ),
+      /not a regular staging file/,
+    );
+    rmSync(join(staging, ".factory-assets.json"));
     const [captured] = await captureAssetSets(
       new LocalContentStore(join(root, "content")),
       staging,

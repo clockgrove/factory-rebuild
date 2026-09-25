@@ -697,6 +697,7 @@ export function makeApplication(descriptor) {
     eventsPath,
     planningPath,
     github,
+    contentStore,
   };
 }
 

@@ -57,7 +57,6 @@ export interface FactoryApplication {
       actor?: string;
       reason?: string;
       downstreamItems?: string[];
-      surface?: "factory-cli" | "application";
     },
   ): Promise<void>;
   exportAssetSetForReview(

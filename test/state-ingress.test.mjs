@@ -533,6 +533,64 @@ test("regular and native review observations expose validated capture and CLI se
   );
   assert.deepEqual(native.assetSelectionReceipt, regular.assetSelectionReceipt);
 
+  const injected = structuredClone(selected);
+  injected.work.asset.selection.authority = "harness";
+  injected.work.asset.selection.setId = "candidate-z";
+  injected.work.asset.selection.selectionDigest = "0".repeat(64);
+  injected.work.asset.assets[0].capture.claimedCliOrigin = true;
+  injected.work.asset.assets[0].capture.members[0].claimedCliOrigin = true;
+  injected.work.asset.selectionDigest = assetSelectionDigest(
+    injected.work.asset.assets[0],
+  );
+  const parsedInjected = parseFactoryState(injected, repository, objective);
+  const injectedObservations = JSON.parse(
+    workItemReviewObservations(
+      parsedInjected,
+      parsedInjected.graph.items[0],
+      { kind: "regular" },
+      parsedInjected.work.asset.assets[0],
+    ),
+  );
+  const injectedReceipt = injectedObservations.assetSelectionReceipt;
+  assert.equal(injectedReceipt.authority, "factory-controller");
+  assert.equal(injectedReceipt.setId, "candidate-a");
+  assert.equal(
+    injectedReceipt.selectionDigest,
+    assetSelectionDigest(parsedInjected.work.asset.assets[0]),
+  );
+  assert.notEqual(injectedReceipt.selectionDigest, "0".repeat(64));
+  assert.equal("claimedAuthority" in injectedReceipt.destinations[0], false);
+  assert.equal(
+    "claimedCliOrigin" in injectedObservations.assetCaptureReceipts[0],
+    false,
+  );
+  assert.equal(
+    "claimedCliOrigin" in
+      injectedObservations.assetCaptureReceipts[0].members[0],
+    false,
+  );
+  assert.equal(
+    "claimedCliOrigin" in injectedObservations.selectedAsset.capture,
+    false,
+  );
+
+  const injectedDestination = structuredClone(selected);
+  injectedDestination.work.asset.selection.destinations[0].claimedAuthority =
+    "harness";
+  assert.throws(
+    () => parseFactoryState(injectedDestination, repository, objective),
+    /selection destinations differ/,
+  );
+  const projectedDestination = JSON.parse(
+    workItemReviewObservations(
+      injectedDestination,
+      injectedDestination.graph.items[0],
+      { kind: "regular" },
+      injectedDestination.work.asset.assets[0],
+    ),
+  ).assetSelectionReceipt.destinations[0];
+  assert.equal("claimedAuthority" in projectedDestination, false);
+
   const missing = structuredClone(selected);
   delete missing.work.asset.assets[0].capture;
   missing.work.asset.selectionDigest = assetSelectionDigest(

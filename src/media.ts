@@ -191,6 +191,30 @@ async function putFile(
   }
 }
 
+function readRegularStagingFile(path: string, label: string): Buffer {
+  if (!lstatSync(path).isFile() || realpathSync(path) !== resolve(path))
+    throw new Error(`${label} is not a regular staging file`);
+  let descriptor: number | undefined;
+  try {
+    descriptor = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+    const opened = fstatSync(descriptor);
+    if (!opened.isFile())
+      throw new Error(`${label} is not a regular staging file`);
+    const bytes = readFileSync(descriptor);
+    const linked = lstatSync(path);
+    if (
+      !linked.isFile() ||
+      linked.dev !== opened.dev ||
+      linked.ino !== opened.ino ||
+      realpathSync(path) !== resolve(path)
+    )
+      throw new Error(`${label} changed while Factory read it`);
+    return bytes;
+  } finally {
+    if (descriptor !== undefined) closeSync(descriptor);
+  }
+}
+
 /** One ingress check for the worker manifest and controller collection. */
 export function parseProducedAssetSets(value: unknown): ProducedAssetSet[] {
   if (!Array.isArray(value))
@@ -360,12 +384,10 @@ export async function captureAssetSets(
   const declaration = join(worktree, ".factory-assets.json");
   let declarationDigest = "";
   if (sets.length && existsSync(declaration)) {
-    if (
-      !lstatSync(declaration).isFile() ||
-      realpathSync(declaration) !== resolve(declaration)
-    )
-      throw new Error("AssetSet manifest is not a regular staging file");
-    const declarationBytes = readFileSync(declaration);
+    const declarationBytes = readRegularStagingFile(
+      declaration,
+      "AssetSet manifest",
+    );
     const value: unknown = JSON.parse(declarationBytes.toString("utf8"));
     if (!value || typeof value !== "object" || Array.isArray(value))
       throw new Error("AssetSet manifest must be an object with sets");
