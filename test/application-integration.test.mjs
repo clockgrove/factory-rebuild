@@ -13,6 +13,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { once } from "node:events";
 import test from "node:test";
+import { parseFactoryState } from "../dist/state.js";
 import { readState, statePath } from "../dist/state-store.js";
 import { readDiagnostics, statusDocument } from "../dist/diagnostics.js";
 import {
@@ -1627,9 +1628,25 @@ test("asset selection preserves a complete multi-file set and hydrates target-ow
       Buffer.from([0, 1, 2]),
     ]);
     const target = createTarget(root, {
-      ".gitattributes": "approved/*.bin filter=lfs diff=lfs merge=lfs -text\n",
-      "inputs/source.bin": "source fixture bytes\n",
+      "approved/model.bin": selectedModel,
     });
+    writeFileSync(
+      join(target.checkout, ".gitattributes"),
+      "approved/*.bin filter=lfs diff=lfs merge=lfs -text\n",
+    );
+    git(target.checkout, "add", ".gitattributes");
+    git(
+      target.checkout,
+      "-c",
+      "user.name=Factory Test",
+      "-c",
+      "user.email=factory-test@example.com",
+      "commit",
+      "-m",
+      "Require LFS for approved binaries",
+    );
+    git(target.checkout, "push", "origin", "main");
+    target.baseSha = git(target.checkout, "rev-parse", "HEAD");
     git(target.checkout, "lfs", "install", "--local");
     const fakeRoot = join(root, "fake");
     const command =
@@ -1641,7 +1658,8 @@ test("asset selection preserves a complete multi-file set and hydrates target-ow
       ownedPaths: ["approved/model.bin", "approved/metadata.json"],
       sourceAssets: [
         {
-          path: "inputs/source.bin",
+          kind: "repository",
+          path: "approved/model.bin",
           role: "source",
           mediaType: "application/octet-stream",
           visibility: "repository",
@@ -1652,10 +1670,10 @@ test("asset selection preserves a complete multi-file set and hydrates target-ow
       requiredLfsRoles: ["model"],
     });
     const provenance = {
-      source: "inputs/source.bin",
+      source: "approved/model.bin",
       rights: "public integration fixture",
       visibility: "repository",
-      lineage: ["inputs/source.bin"],
+      lineage: ["approved/model.bin"],
     };
     const consumer = item("consumer", {
       path: "approved/consumed.txt",
@@ -1665,7 +1683,17 @@ test("asset selection preserves a complete multi-file set and hydrates target-ow
     const descriptor = {
       config: factoryConfig(target.checkout, "example/asset-integration"),
       graph: { objective, baseSha: target.baseSha, items: [media, consumer] },
-      objectiveBody: body([command, consumerCommand]),
+      objectiveBody: `# Deterministic Objective
+
+## Acceptance
+- Fresh-clone hydration preserves the selected bytes at approved/model.bin.
+- \`${command}\`
+- \`${consumerCommand}\`
+
+## Final validation
+- \`${command}\`
+- \`${consumerCommand}\`
+`,
       fakeRoot,
       actions: {
         media: {
@@ -1710,7 +1738,7 @@ test("asset selection preserves a complete multi-file set and hydrates target-ow
               ],
               relationships: [
                 {
-                  from: "inputs/source.bin",
+                  from: "approved/model.bin",
                   toRole: "model",
                   kind: "derived-from",
                 },
@@ -1754,6 +1782,15 @@ test("asset selection preserves a complete multi-file set and hydrates target-ow
     });
     const completed = await application.runObjective(objective);
     assert.equal(completed.finalValidation.passed, true);
+    assert.equal(completed.finalValidation.hydrationReceipt.passed, true);
+    assert.equal(
+      completed.finalValidation.hydrationReceipt.integratedSha,
+      completed.integratedSha,
+    );
+    assert.equal(
+      completed.finalValidation.hydrationReceipt.members[0].observedDigest,
+      completed.work.media.assets[1].members[0].ref.digest,
+    );
     assert.equal(completed.work.media.selectedAssetSet, "candidate-b");
     assert.equal(completed.work.media.selection.actor, "test-operator");
     assert.deepEqual(completed.work.media.selection.downstreamItems, [
@@ -1771,6 +1808,24 @@ test("asset selection preserves a complete multi-file set and hydrates target-ow
           event.outcome === "completed",
       ),
     );
+    const hydrationIndex = mediaTimeline.findIndex(
+      (event) =>
+        event.operation === "media-hydration-verification" &&
+        event.outcome === "completed",
+    );
+    const reviewIndex = mediaTimeline.findIndex(
+      (event) =>
+        event.operation === "objective-acceptance-review" &&
+        event.outcome === "started",
+    );
+    assert.ok(hydrationIndex >= 0 && hydrationIndex < reviewIndex);
+    const hydrationEvent = mediaTimeline[hydrationIndex];
+    assert.deepEqual(Object.keys(hydrationEvent.metadata).sort(), [
+      "integratedSha",
+      "members",
+      "treeSha",
+    ]);
+    assert.equal(hydrationEvent.detail, undefined);
     assert.ok(
       mediaTimeline.some(
         (event) =>
@@ -1817,6 +1872,14 @@ test("asset selection preserves a complete multi-file set and hydrates target-ow
     assert.equal(
       readFileSync(join(clone, "approved/consumed.txt"), "utf8"),
       `model:${selectedModel.toString("hex")}\nmetadata:${Buffer.from('{"candidate":"b"}\n').toString("hex")}\n`,
+    );
+    const tampered = structuredClone(completed);
+    tampered.finalValidation.hydrationReceipt.members[0].observedDigest =
+      "0".repeat(64);
+    assert.throws(
+      () =>
+        parseFactoryState(tampered, descriptor.config.repository, objective),
+      /hydration receipt differs/,
     );
   });
 });

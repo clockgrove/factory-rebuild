@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import {
+  chmodSync,
   closeSync,
   constants,
   createReadStream,
@@ -24,8 +25,13 @@ import type {
   WorkItem,
 } from "./contracts.js";
 import type { FactoryState } from "./state.js";
-import { command, pinnedGit } from "./process.js";
+import { command, pinnedGit, pinnedGitRaw } from "./process.js";
 import { checkStagedCandidate } from "./execution/staged-candidate.js";
+import { CONTROLLER_CAPABILITIES_DIGEST } from "./controller-capabilities.js";
+
+const LFS_POINTER_HEADER = Buffer.from(
+  "version https://git-lfs.github.com/spec/v1\n",
+);
 
 export function recognizedObjectiveAttachment(value: string): boolean {
   try {
@@ -110,6 +116,50 @@ function owned(path: string, scopes: string[]): boolean {
   return scopes.some((scope) =>
     scope.endsWith("/") ? path.startsWith(scope) : path === scope,
   );
+}
+
+function assertSafeMaterializationDestination(
+  worktree: string,
+  relative: string,
+): { destination: string; exists: boolean } {
+  const parts = relative.split("/");
+  let current = worktree;
+  let prefix = "";
+  for (const [index, part] of parts.entries()) {
+    current = join(current, part);
+    prefix = prefix ? `${prefix}/${part}` : part;
+    if (
+      pinnedGit(worktree, "ls-tree", "HEAD", "--", prefix).startsWith(
+        "160000 commit ",
+      )
+    )
+      throw new Error(
+        `Selected asset destination crosses a submodule: ${relative}`,
+      );
+    let type;
+    try {
+      type = lstatSync(current);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT")
+        return { destination: join(worktree, relative), exists: false };
+      throw error;
+    }
+    if (type.isSymbolicLink())
+      throw new Error(
+        `Selected asset destination crosses a symlink: ${relative}`,
+      );
+    if (index < parts.length - 1) {
+      if (!type.isDirectory())
+        throw new Error(
+          `Selected asset destination has a non-directory parent: ${relative}`,
+        );
+    } else if (!type.isFile()) {
+      throw new Error(
+        `Selected asset destination is not a regular file: ${relative}`,
+      );
+    }
+  }
+  return { destination: join(worktree, relative), exists: true };
 }
 
 async function putFile(
@@ -421,10 +471,11 @@ export async function materializeAssetSet(args: {
       )
         throw new Error("Selected AssetSet destination is invalid or unowned");
       destinations.add(member.destination);
-      const destination = join(worktree, member.destination);
-      if (existsSync(destination))
-        throw new Error(`Selected asset would overwrite ${member.destination}`);
-      await args.store.materialize(member.ref, destination);
+      const destinationState = assertSafeMaterializationDestination(
+        worktree,
+        member.destination,
+      );
+      const { destination } = destinationState;
       const filter = pinnedGit(
         worktree,
         "check-attr",
@@ -432,6 +483,66 @@ export async function materializeAssetSet(args: {
         "--",
         member.destination,
       );
+      if (destinationState.exists) {
+        const source = args.set.inputs?.find(
+          (input) =>
+            (input.binding.kind ?? "repository") === "repository" &&
+            input.binding.path === member.destination,
+        );
+        const tracked = pinnedGit(
+          worktree,
+          "ls-tree",
+          "HEAD",
+          "--",
+          member.destination,
+        );
+        const entry = /^(100644|100755) blob ([a-f0-9]{40,64})\t(.+)$/.exec(
+          tracked,
+        );
+        const baseBytes = entry
+          ? pinnedGitRaw(worktree, "cat-file", "blob", entry[2]!)
+          : undefined;
+        if (
+          !source ||
+          !args.item.requiredLfsRoles?.includes(member.role) ||
+          !filter.endsWith(": lfs") ||
+          source.ref.digest !== member.ref.digest ||
+          source.ref.bytes !== member.ref.bytes ||
+          source.ref.mediaType !== member.ref.mediaType ||
+          !entry ||
+          entry[3] !== member.destination ||
+          !baseBytes ||
+          baseBytes.length !== source.ref.bytes ||
+          createHash("sha256").update(baseBytes).digest("hex") !==
+            source.ref.digest ||
+          baseBytes
+            .subarray(0, LFS_POINTER_HEADER.length)
+            .equals(LFS_POINTER_HEADER) ||
+          !lstatSync(destination).isFile() ||
+          realpathSync(destination) !== resolve(destination)
+        )
+          throw new Error(
+            `Selected asset would overwrite ${member.destination}`,
+          );
+        const current = await putFile(
+          args.store,
+          destination,
+          source.binding.mediaType,
+        );
+        if (
+          current.digest !== source.ref.digest ||
+          current.bytes !== source.ref.bytes ||
+          current.mediaType !== source.ref.mediaType
+        )
+          throw new Error(
+            `Existing selected destination differs from its captured repository source: ${member.destination}`,
+          );
+        rmSync(destination);
+        await args.store.materialize(member.ref, destination);
+        if (entry[1] === "100755") chmodSync(destination, 0o755);
+      } else {
+        await args.store.materialize(member.ref, destination);
+      }
       if (
         args.item.requiredLfsRoles?.includes(member.role) &&
         !filter.endsWith(": lfs")
@@ -533,16 +644,89 @@ export function selectedInputsForItem(
   return inputs;
 }
 
+export interface HydrationReceipt {
+  schemaVersion: 1;
+  controllerCapabilitiesDigest: string;
+  integratedSha: string;
+  integratedTreeSha: string;
+  members: {
+    itemId: string;
+    setId: string;
+    role: string;
+    destination: string;
+    expectedBytes: number;
+    observedBytes: number;
+    expectedDigest: string;
+    observedDigest: string;
+    passed: true;
+  }[];
+  passed: true;
+}
+
+export interface SelectedAssetSet {
+  itemId: string;
+  set: CapturedAssetSet;
+}
+
+function expectedHydrationReceipt(
+  integratedSha: string,
+  integratedTreeSha: string,
+  selections: SelectedAssetSet[],
+): HydrationReceipt {
+  return {
+    schemaVersion: 1,
+    controllerCapabilitiesDigest: CONTROLLER_CAPABILITIES_DIGEST,
+    integratedSha,
+    integratedTreeSha,
+    members: selections.flatMap(({ itemId, set }) =>
+      set.members.map((member) => ({
+        itemId,
+        setId: set.id,
+        role: member.role,
+        destination: member.destination,
+        expectedBytes: member.ref.bytes,
+        observedBytes: member.ref.bytes,
+        expectedDigest: member.ref.digest,
+        observedDigest: member.ref.digest,
+        passed: true as const,
+      })),
+    ),
+    passed: true,
+  };
+}
+
+export function assertHydrationReceipt(
+  receipt: unknown,
+  integratedSha: string,
+  integratedTreeSha: string,
+  selections: SelectedAssetSet[],
+): asserts receipt is HydrationReceipt {
+  if (
+    JSON.stringify(receipt) !==
+    JSON.stringify(
+      expectedHydrationReceipt(integratedSha, integratedTreeSha, selections),
+    )
+  )
+    throw new Error(
+      "Final hydration receipt differs from the exact integrated selections",
+    );
+}
+
 export function verifyHydratedAssets(args: {
   checkout: string;
   workRoot: string;
   integratedSha: string;
-  sets: CapturedAssetSet[];
-}): void {
-  if (!args.sets.length) return;
+  selections: SelectedAssetSet[];
+}): HydrationReceipt | undefined {
+  if (!args.selections.length) return undefined;
   mkdirSync(args.workRoot, { recursive: true });
   const clone = join(args.workRoot, `fresh-${randomUUID()}`);
   const remote = pinnedGit(args.checkout, "remote", "get-url", "origin");
+  const integratedTreeSha = pinnedGit(
+    args.checkout,
+    "rev-parse",
+    `${args.integratedSha}^{tree}`,
+  );
   try {
     command("git", ["clone", "--no-checkout", remote, clone]);
     command("git", ["-C", clone, "lfs", "install", "--local"]);
@@ -550,7 +734,7 @@ export function verifyHydratedAssets(args: {
     command("git", ["-C", clone, "lfs", "pull"]);
     if (pinnedGit(clone, "rev-parse", "HEAD") !== args.integratedSha)
       throw new Error("Fresh clone resolved a different integrated commit");
-    for (const set of args.sets)
+    for (const { set } of args.selections)
       for (const member of set.members) {
         const path = join(clone, member.destination);
         if (!existsSync(path) || !lstatSync(path).isFile())
@@ -580,6 +764,11 @@ export function verifyHydratedAssets(args: {
             `Hydrated asset differs from selected bytes: ${member.destination}`,
           );
       }
+    return expectedHydrationReceipt(
+      args.integratedSha,
+      integratedTreeSha,
+      args.selections,
+    );
   } finally {
     rmSync(clone, { recursive: true, force: true });
   }

@@ -228,18 +228,33 @@ class ScriptedPlanningModel {
     this.observe(request);
     const source = request.sources.find((item) => item.path === "OBJECTIVE");
     return {
-      findings: request.criteria.map((criterion) => ({
-        criterion,
-        verdict: "pass",
-        source: "OBJECTIVE",
-        quote:
-          source.content
-            .split("\n")
-            .find((line) => line.includes("test -s"))
-            ?.trim() ?? source.content.split("\n").find(Boolean),
-        detail: "Scripted integration fixture confirms its declared result",
-        question: "",
-      })),
+      findings: request.criteria.map((criterion) => {
+        const hydration = request.evidence?.find(
+          (item) => item.path === "Controller hydration receipt",
+        );
+        if (/fresh-clone|hydrat|selected bytes/i.test(criterion) && hydration)
+          return {
+            criterion,
+            verdict: "pass",
+            source: hydration.path,
+            quote: '"passed":true',
+            detail:
+              "The controller receipt binds successful hydration to the reviewed result",
+            question: "",
+          };
+        return {
+          criterion,
+          verdict: "pass",
+          source: "OBJECTIVE",
+          quote:
+            source.content
+              .split("\n")
+              .find((line) => line.includes("test -s"))
+              ?.trim() ?? source.content.split("\n").find(Boolean),
+          detail: "Scripted integration fixture confirms its declared result",
+          question: "",
+        };
+      }),
     };
   }
 }

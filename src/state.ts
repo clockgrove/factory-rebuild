@@ -6,7 +6,7 @@ import type {
   WorkGraph,
 } from "./contracts.js";
 import type { AcceptanceDecision, ValidationEvidence } from "./validation.js";
-import { assetSelectionDigest } from "./media.js";
+import { assertHydrationReceipt, assetSelectionDigest } from "./media.js";
 
 export type WorkStatus =
   | "pending"
@@ -657,6 +657,23 @@ export function parseFactoryState(
       throw new Error(
         "Final validation receipts differ from declared Objective commands",
       );
+    const selections = (graph as unknown as WorkGraph).items.flatMap((item) => {
+      const itemWork = (work as Record<string, WorkState>)[item.id];
+      const set = itemWork?.assets?.find(
+        (candidate) => candidate.id === itemWork.selectedAssetSet,
+      );
+      return set ? [{ itemId: item.id, set }] : [];
+    });
+    if (selections.length) {
+      assertHydrationReceipt(
+        final.hydrationReceipt,
+        sha(state.integratedSha, "integratedSha"),
+        sha(final.treeSha, "finalValidation.treeSha"),
+        selections,
+      );
+    } else if (final.hydrationReceipt !== undefined) {
+      throw new Error("Final validation has unexpected hydration evidence");
+    }
     if (final.passed !== true)
       throw new Error("Final validation evidence is invalid");
   }

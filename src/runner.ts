@@ -462,6 +462,33 @@ export async function runObjective(
           entry.final,
         ),
     );
+    const selectedAssets = graph.items.flatMap((item) => {
+      const work = state.work[item.id];
+      const set = work?.assets?.find(
+        (candidate) => candidate.id === work.selectedAssetSet,
+      );
+      return set ? [{ itemId: item.id, set }] : [];
+    });
+    const hydrationReceipt = selectedAssets.length
+      ? await diagnostics.span(
+          {
+            runId: state.runId,
+            operation: "media-hydration-verification",
+            metadata: { integratedSha, treeSha: finalTree },
+          },
+          async () =>
+            verifyHydratedAssets({
+              checkout: config.checkout,
+              workRoot: join(root, "hydration"),
+              integratedSha,
+              selections: selectedAssets,
+            }),
+          (receipt) => ({ members: receipt?.members.length ?? 0 }),
+        )
+      : undefined;
+    const acceptanceEvidence = hydrationReceipt
+      ? { ...commandEvidence, hydrationReceipt }
+      : commandEvidence;
     let finalEvidence;
     try {
       const objectiveEvidence = objectiveReviewEvidence({
@@ -476,10 +503,20 @@ export async function runObjective(
           checkout: config.checkout,
           baseSha: state.baseSha,
           commit: integratedSha,
-          evidence: commandEvidence,
+          evidence: acceptanceEvidence,
           criteria: objectiveCriteria(issue.body),
           sources: planningSources(issue.body, state.baseSha, config.checkout),
-          evidenceSources: objectiveEvidence.evidence,
+          evidenceSources: [
+            ...objectiveEvidence.evidence,
+            ...(hydrationReceipt
+              ? [
+                  {
+                    path: "Controller hydration receipt",
+                    content: JSON.stringify(hydrationReceipt),
+                  },
+                ]
+              : []),
+          ],
           decisions: state.finalAcceptanceDecisions,
           observations: objectiveEvidence.observations,
           invocation: {
@@ -525,17 +562,6 @@ export async function runObjective(
       }
       throw error;
     }
-    verifyHydratedAssets({
-      checkout: config.checkout,
-      workRoot: join(root, "hydration"),
-      integratedSha,
-      sets: graph.items.flatMap((item) => {
-        const work = state.work[item.id];
-        return (
-          work?.assets?.filter((set) => set.id === work.selectedAssetSet) ?? []
-        );
-      }),
-    });
     state.finalValidation = { ...finalEvidence, passed: true };
     diagnostics.emit({
       runId: state.runId,

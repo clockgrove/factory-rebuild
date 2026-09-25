@@ -1,3 +1,5 @@
+import type { ControllerCapabilitiesManifest } from "./controller-capabilities.js";
+
 export type Repository = `${string}/${string}`;
 
 export interface SourceAssetBinding {
@@ -92,6 +94,8 @@ export interface PlanningRequest<T> {
   objective: string;
   baseSha: string;
   sources: { path: string; content: string }[];
+  controllerCapabilities: ControllerCapabilitiesManifest;
+  controllerCapabilitiesDigest: string;
   schema: unknown;
   resultType?: T;
   invocation?: ModelInvocationContext;
@@ -110,6 +114,8 @@ export interface PlanReviewRequest {
   objective: string;
   baseSha: string;
   sources: { path: string; content: string; heading?: string }[];
+  controllerCapabilities: ControllerCapabilitiesManifest;
+  controllerCapabilitiesDigest: string;
   graph: WorkGraph;
   commands: PlanCommandAuthorization[];
   finalCommands: string[];
