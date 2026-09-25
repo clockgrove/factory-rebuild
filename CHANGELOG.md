@@ -2,7 +2,7 @@
 
 This file records public releases of Factory. See [BUILD-STATUS.md](docs/BUILD-STATUS.md) for development acceptance evidence.
 
-## Unreleased
+## 0.1.11 — 2026-09-25
 
 - Expose a capability-checked package-root local `AgentHarness` registration seam with stable adapter identity, adapter-owned configuration, durable lifecycle handles, and a packed full-path conformance test.
 - Add pinned optional Claude Agent SDK 0.3.281 and GitHub Copilot SDK 1.0.13 Work Item adapters while preserving Codex as the default and planning/review provider.
