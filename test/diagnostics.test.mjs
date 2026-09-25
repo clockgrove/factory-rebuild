@@ -283,8 +283,17 @@ test("model diagnostics preserve safe correlation and aggregate only supplied us
       failureClass: "provider-capacity",
       detail: `private-prompt-secret is unavailable ${"x".repeat(5000)}`,
     });
+    const partial = emitter.modelObserver({ scopeId: "plan-attempt-1" });
+    partial({
+      invocationId: "invoke-3",
+      phase: "graph-review",
+      ordinal: 1,
+      type: "completed",
+      usageAvailable: true,
+      usage: { inputTokens: 100 },
+    });
     const events = readDiagnostics("example/model-diagnostics", 7);
-    assert.equal(events.length, 4);
+    assert.equal(events.length, 5);
     assert.ok(events.every((event) => event.operation === "model-invocation"));
     assert.equal(events[0].metadata.scopeId, "plan-attempt-1");
     assert.equal(events[2].metadata.inputTokens, 100);
@@ -296,25 +305,27 @@ test("model diagnostics preserve safe correlation and aggregate only supplied us
 
     const summary = summarizeModelInvocations(events);
     assert.deepEqual(summary.objective.tokenTotals, {
-      inputTokens: 100,
+      inputTokens: 200,
       cachedInputTokens: 40,
       cacheWriteInputTokens: 5,
       outputTokens: 12,
       reasoningOutputTokens: 3,
     });
-    assert.equal(summary.objective.invocationCount, 2);
-    assert.equal(summary.objective.completedCount, 1);
+    assert.equal(summary.objective.invocationCount, 3);
+    assert.equal(summary.objective.completedCount, 2);
     assert.equal(summary.objective.failedCount, 1);
-    assert.equal(summary.objective.usageAvailableCount, 1);
+    assert.equal(summary.objective.usageAvailableCount, 2);
     assert.equal(summary.objective.usageUnavailableCount, 1);
     assert.deepEqual(summary.objective.cacheReadRatio, {
       numeratorCachedInputTokens: 40,
       denominatorInputTokens: 100,
       value: 0.4,
     });
+    assert.equal(summary.objective.tokenAvailability.inputTokens, 2);
+    assert.equal(summary.objective.tokenAvailability.cachedInputTokens, 1);
     assert.equal(summary.byPhase.compile.invocationCount, 1);
     assert.equal(summary.byPhase["graph-review"].failedCount, 1);
-    assert.equal(summary.byScope["plan-attempt-1"].invocationCount, 2);
+    assert.equal(summary.byScope["plan-attempt-1"].invocationCount, 3);
   } finally {
     if (previous === undefined) delete process.env.XDG_STATE_HOME;
     else process.env.XDG_STATE_HOME = previous;

@@ -348,6 +348,9 @@ export function summarizeModelInvocations(
     let failedCount = 0;
     let usageAvailableCount = 0;
     let usageUnavailableCount = 0;
+    let cacheRatioInputTokens = 0;
+    let cacheRatioCachedInputTokens = 0;
+    let cacheRatioInvocationCount = 0;
     let lastProgressAt: string | undefined;
     for (const invocation of selected) {
       const observations = invocation.events.map(
@@ -374,6 +377,16 @@ export function summarizeModelInvocations(
         continue;
       }
       usageAvailableCount += 1;
+      const inputTokens = usageEvent.metadata?.inputTokens;
+      const cachedInputTokens = usageEvent.metadata?.cachedInputTokens;
+      if (
+        typeof inputTokens === "number" &&
+        typeof cachedInputTokens === "number"
+      ) {
+        cacheRatioInputTokens += inputTokens;
+        cacheRatioCachedInputTokens += cachedInputTokens;
+        cacheRatioInvocationCount += 1;
+      }
       for (const key of [
         "inputTokens",
         "cachedInputTokens",
@@ -388,8 +401,6 @@ export function summarizeModelInvocations(
         availability[key] = (availability[key] ?? 0) + 1;
       }
     }
-    const denominator = totals.inputTokens;
-    const numerator = totals.cachedInputTokens;
     return {
       invocationCount: selected.length,
       completedCount,
@@ -400,11 +411,11 @@ export function summarizeModelInvocations(
       tokenTotals: totals,
       tokenAvailability: availability,
       cacheReadRatio:
-        denominator !== undefined && denominator > 0 && numerator !== undefined
+        cacheRatioInvocationCount > 0 && cacheRatioInputTokens > 0
           ? {
-              numeratorCachedInputTokens: numerator,
-              denominatorInputTokens: denominator,
-              value: numerator / denominator,
+              numeratorCachedInputTokens: cacheRatioCachedInputTokens,
+              denominatorInputTokens: cacheRatioInputTokens,
+              value: cacheRatioCachedInputTokens / cacheRatioInputTokens,
             }
           : null,
       ...(lastProgressAt ? { lastProgressAt } : {}),

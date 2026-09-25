@@ -772,6 +772,7 @@ export async function reviewAcceptance(args: {
     ReturnType<NonNullable<PlanningModel["reviewResult"]>>
   >["findings"] = [];
   let reviewFailure: string | undefined;
+  let reviewFindingsAvailable = false;
   if (model.reviewResult) {
     try {
       const reviewed = await model.reviewResult({
@@ -792,6 +793,7 @@ export async function reviewAcceptance(args: {
         throw new Error("review response has no findings array");
       }
       findings = reviewed.findings;
+      reviewFindingsAvailable = true;
     } catch (error) {
       reviewFailure = error instanceof Error ? error.message : String(error);
     }
@@ -823,7 +825,7 @@ export async function reviewAcceptance(args: {
       groundedSources,
       patchExcerpts,
     );
-    if (rejection)
+    if (rejection && reviewFindingsAvailable)
       observeInvalidReview(args.invocation, rejection.field, rejection.reason);
     const finding = rejection ? undefined : candidate;
     if (finding?.verdict === "pass" && truncatedPaths.length === 0) {
