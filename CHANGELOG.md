@@ -2,7 +2,7 @@
 
 This file records public releases of Factory. See [BUILD-STATUS.md](docs/BUILD-STATUS.md) for development acceptance evidence.
 
-## Unreleased
+## 0.1.13 — 2026-09-25
 
 - Hydrate only the selected required-LFS members from Factory's verified local content store into exact-tree validation worktrees, verify their committed pointer and restored SHA-256/size before target commands, and fail closed before command zero when local selected bytes are missing or corrupt.
 - Reverify selected bytes after validation and compare the final worktree state with its controller-hydrated baseline, preserving clean-tree enforcement without globally enabling Git LFS smudging or fetching from the network.
