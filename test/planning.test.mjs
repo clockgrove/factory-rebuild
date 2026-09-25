@@ -397,14 +397,16 @@ test("graph review grounds a quote in any supplied heading with the same path", 
   });
 });
 
-test("review and verification bind commands, final commands, and installation config", async () => {
+test("review and verification bind controller capabilities, commands, and installation config", async () => {
   await fixture("review-packet", async (root) => {
     const target = createTarget(root, {
       "docs/plan.md": "# Plan\n\n## Wave 0\nCanonical obligation\n",
     });
+    const generated = [];
     const reviewed = [];
     const model = {
-      async generateStructured() {
+      async generateStructured(request) {
+        generated.push(structuredClone(request));
         return graph(target.baseSha);
       },
       async reviewGraph(request) {
@@ -422,6 +424,25 @@ test("review and verification bind commands, final commands, and installation co
       installationDigest,
     );
     assert.equal(reviewed.length, 1);
+    assert.equal(generated.length, 1);
+    assert.deepEqual(
+      generated[0].controllerCapabilities,
+      candidate.controllerCapabilities,
+    );
+    assert.equal(
+      generated[0].controllerCapabilitiesDigest,
+      candidate.controllerCapabilitiesDigest,
+    );
+    assert.deepEqual(
+      reviewed[0].controllerCapabilities,
+      candidate.controllerCapabilities,
+    );
+    assert.equal(
+      reviewed[0].controllerCapabilitiesDigest,
+      candidate.controllerCapabilitiesDigest,
+    );
+    assert.equal(candidate.controllerCapabilities.schemaVersion, 1);
+    assert.equal(candidate.controllerCapabilitiesDigest.length, 64);
     assert.deepEqual(reviewed[0].commands, candidate.commands);
     assert.deepEqual(reviewed[0].finalCommands, candidate.finalCommands);
     assert.equal(reviewed[0].objective, body);
@@ -453,6 +474,33 @@ test("review and verification bind commands, final commands, and installation co
             installationDigest,
           ),
         /differs from the current Objective/,
+      );
+    }
+    for (const mutated of [
+      { ...candidate, controllerCapabilities: undefined },
+      {
+        ...candidate,
+        controllerCapabilities: {
+          ...candidate.controllerCapabilities,
+          schemaVersion: 2,
+        },
+      },
+      {
+        ...candidate,
+        controllerCapabilitiesDigest: "f".repeat(64),
+      },
+    ]) {
+      assert.throws(
+        () =>
+          verifyPlanCandidate(
+            mutated,
+            1,
+            body,
+            target.baseSha,
+            target.checkout,
+            installationDigest,
+          ),
+        /controller capabilities differ from the installed Factory artifact/,
       );
     }
     assert.throws(

@@ -24,6 +24,12 @@ import type {
   WorkGraph,
 } from "./contracts.js";
 import type { CodexModelSelection } from "./config.js";
+import {
+  assertInstalledControllerCapabilities,
+  CONTROLLER_CAPABILITIES_DIGEST,
+  installedControllerCapabilities,
+  type ControllerCapabilitiesManifest,
+} from "./controller-capabilities.js";
 
 function observeModelInvocation(
   invocation: ModelInvocationContext | undefined,
@@ -316,14 +322,18 @@ export class CodexPlanningModel implements PlanningModel {
   }
 
   async generateStructured<T>(request: PlanningRequest<T>): Promise<T> {
-    const prompt = `Compile this human Objective into the smallest complete dependency-aware Work Item graph. Use parallel lanes only when ownership and resources allow them. Return the requested JSON only. Use exact supplied base SHA and Objective number. Cite only supplied source paths. Give each item explicit non-goals. Choose observable acceptance and owned paths. For every validation command, set provenance to base-observed or source-declared and name its exact source path. A source-declared command must be an exact command line in a supplied source (OBJECTIVE or a pinned source). A base-observed command must identify a tracked file in the exact base containing that command as an exact line, or a package.json script invoked by npm test/npm run NAME/pnpm test/pnpm check/pnpm run NAME. The exact source-declared command pnpm install --frozen-lockfile --ignore-scripts may precede pnpm checks in a fresh validation worktree when supplied; plain install is unsupported. Do not invent commands or use a vague source. For each source asset, bind its path, role, media type, visibility, and kind: repository for a pinned checkout path, local for an explicitly approved absolute private file, or github-attachment for a recognized URL literally present in the Objective. Use an explicitly declared media type when available, otherwise application/octet-stream; never infer format from an extension. List expected output roles for media work; use empty arrays for ordinary work. Set minimumAssetSets from the Objective candidate count, or 1 for unspecified media and 0 for ordinary work. List requiredLfsRoles only when a supplied source requires them; the target repository .gitattributes is authoritative. Do not add deployment, paid services, providers, recovery, or later scope.\n\nObjective:\n${request.objective}\n\nBase: ${request.baseSha}\n\nSources:\n${request.sources.map((s) => `--- ${s.path} ---\n${s.content}`).join("\n")}`;
+    const prompt = `Compile this human Objective into the smallest complete dependency-aware Work Item graph. Use parallel lanes only when ownership and resources allow them. Return the requested JSON only. Use exact supplied base SHA and Objective number. Cite only supplied source paths. Give each item explicit non-goals. Choose observable acceptance and owned paths. For every validation command, set provenance to base-observed or source-declared and name its exact source path. A source-declared command must be an exact command line in a supplied source (OBJECTIVE or a pinned source). A base-observed command must identify a tracked file in the exact base containing that command as an exact line, or a package.json script invoked by npm test/npm run NAME/pnpm test/pnpm check/pnpm run NAME. The exact source-declared command pnpm install --frozen-lockfile --ignore-scripts may precede pnpm checks in a fresh validation worktree when supplied; plain install is unsupported. Do not invent commands or use a vague source. For each source asset, bind its path, role, media type, visibility, and kind: repository for a pinned checkout path, local for an explicitly approved absolute private file, or github-attachment for a recognized URL literally present in the Objective. Use an explicitly declared media type when available, otherwise application/octet-stream; never infer format from an extension. List expected output roles for media work; use empty arrays for ordinary work. Set minimumAssetSets from the Objective candidate count, or 1 for unspecified media and 0 for ordinary work. List requiredLfsRoles only when a supplied source requires them; the target repository .gitattributes is authoritative. The supplied Factory controller capabilities are immutable supervisor guarantees enforced outside target Work Items and target Final commands. Do not create a target Work Item or invent target command authority solely to reimplement an Objective obligation that an exact supplied guarantee covers. Do not use a guarantee for an obligation it does not cover. Do not add deployment, paid services, providers, recovery, or later scope.\n\nObjective:\n${request.objective}\n\nBase: ${request.baseSha}\n\nFactory controller capabilities digest: ${request.controllerCapabilitiesDigest}\nFactory controller capabilities:\n${JSON.stringify(request.controllerCapabilities)}\n\nSources:\n${request.sources.map((s) => `--- ${s.path} ---\n${s.content}`).join("\n")}`;
     return this.runStructured<T>({
       selection: this.planner,
       prompt,
       schema: request.schema,
       invocation: request.invocation,
       defaultPhase: "compile",
-      sourcePacket: JSON.stringify(request.sources),
+      sourcePacket: JSON.stringify({
+        sources: request.sources,
+        controllerCapabilities: request.controllerCapabilities,
+        controllerCapabilitiesDigest: request.controllerCapabilitiesDigest,
+      }),
     });
   }
 
@@ -338,13 +348,17 @@ export class CodexPlanningModel implements PlanningModel {
     const sourcePaths = [
       ...new Set(request.sources.map((source) => source.path)),
     ];
-    const prompt = `Independently review this complete proposed Factory plan against the exact pinned Objective and source packet. The Work Item graph, command-authority receipts, and final integrated-head commands are one review surface. Check every Objective obligation, unsupported scope, citations, dependencies, path/resource ownership, observable acceptance, exact command authority, and final validation. The separate Final commands and Command authority receipts sections are authoritative supervisor fields outside the inner WorkGraph; do not report them missing when they are present there. First decide whether a material source-grounded defect exists. If none exists, return exactly {"findings":[]}; do not emit advisory observations, confirmations, or speculative questions merely to avoid an empty array. A finding means the plan cannot be called clean. Return only material findings with a short exact quote from the cited source. For each finding, set source to exactly one value from this supplied-path JSON list: ${JSON.stringify(sourcePaths)}. Do not append a heading, section name, separator, or explanation to that value. Give a specific operator question for unresolved authority. Do not edit the plan, grant authority, or treat a malformed finding as approval.\n\nObjective:\n${request.objective}\nBase: ${request.baseSha}\nSources:\n${request.sources.map((s) => `--- ${s.path} ---\n${s.content}`).join("\n")}\nGraph:\n${JSON.stringify(request.graph)}\nCommand authority receipts:\n${JSON.stringify(request.commands)}\nFinal commands:\n${JSON.stringify(request.finalCommands)}`;
+    const prompt = `Independently review this complete proposed Factory plan against the exact pinned Objective and source packet. The Work Item graph, command-authority receipts, final integrated-head commands, and immutable Factory controller capabilities are one review surface. Check every Objective obligation, unsupported scope, citations, dependencies, path/resource ownership, observable acceptance, exact command authority, and final validation. The separate Final commands, Command authority receipts, and Factory controller capabilities sections are authoritative supervisor fields outside the inner WorkGraph; do not report them missing when they are present there. Do not demand a target Work Item or target command for an obligation covered by an exact supplied controller guarantee, and do not use a guarantee for an obligation it does not cover. First decide whether a material source-grounded defect exists. If none exists, return exactly {"findings":[]}; do not emit advisory observations, confirmations, or speculative questions merely to avoid an empty array. A finding means the plan cannot be called clean. Return only material findings with a short exact quote from the cited source. For each finding, set source to exactly one value from this supplied-path JSON list: ${JSON.stringify(sourcePaths)}. Do not append a heading, section name, separator, or explanation to that value. Give a specific operator question for unresolved authority. Do not edit the plan, grant authority, or treat a malformed finding as approval.\n\nObjective:\n${request.objective}\nBase: ${request.baseSha}\nFactory controller capabilities digest: ${request.controllerCapabilitiesDigest}\nFactory controller capabilities:\n${JSON.stringify(request.controllerCapabilities)}\nSources:\n${request.sources.map((s) => `--- ${s.path} ---\n${s.content}`).join("\n")}\nGraph:\n${JSON.stringify(request.graph)}\nCommand authority receipts:\n${JSON.stringify(request.commands)}\nFinal commands:\n${JSON.stringify(request.finalCommands)}`;
     return this.runStructured({
       selection: this.reviewer,
       prompt,
       invocation: request.invocation,
       defaultPhase: "graph-review",
-      sourcePacket: JSON.stringify(request.sources),
+      sourcePacket: JSON.stringify({
+        sources: request.sources,
+        controllerCapabilities: request.controllerCapabilities,
+        controllerCapabilitiesDigest: request.controllerCapabilitiesDigest,
+      }),
       schema: {
         type: "object",
         properties: {
@@ -385,10 +399,10 @@ export class CodexPlanningModel implements PlanningModel {
     const promptSources = [...request.sources, ...(request.evidence ?? [])];
     request = { ...request, sources: promptSources };
     const identityInstructions =
-      "The result identity is a Git tree. Delivery observations separately name every Git commit and Git tree; never compare them as the same object type. Command pass evidence is an ordered array of canonical receipts. Each receipt names its stable zero-based index, command, successful exit code 0, and exact result tree, produced only after Factory verified the result commit resolves to that tree. Sources whose path begins with Work Item Git delta are supervisor-generated exact result evidence: they bind accepted path ownership and that item's execution base, actual result base, result commit/tree, integrated commit/tree, changed paths, and raw patch excerpts. Treat each such path as an allowed supplied source path. Use those sources for criteria about one Work Item's exact delta or its relationship to another item's owned paths. Copy quotes exactly as serialized; never decode an escaped string into a quote. ";
+      'The result identity is a Git tree. Delivery observations separately name every Git commit and Git tree; never compare them as the same object type. Command pass evidence is an ordered array of canonical receipts. Each receipt names its stable zero-based index, command, successful exit code 0, and exact result tree, produced only after Factory verified the result commit resolves to that tree. Sources whose path begins with Work Item Git delta are supervisor-generated exact result evidence: they bind accepted path ownership and that item\'s execution base, actual result base, result commit/tree, integrated commit/tree, changed paths, and raw patch excerpts. "Controller hydration receipt" is supervisor-generated evidence that Factory completed fresh-clone hydration and exact selected-byte verification before this review. Treat each such path as an allowed supplied source path. Use those sources only for criteria their exact content proves. Copy quotes exactly as serialized; never decode an escaped string into a quote. ';
     const prompt =
       identityInstructions +
-      `Independently review the exact result of a Factory Objective. Decide each criterion only from the supplied pinned source, command pass evidence, delivery observations when supplied, and exact Git change packet. The packet has bounded text patch excerpts, explicit truncation flags, line counts, and exact blob identities/sizes. Never pass a criterion when relevant text is truncated or omitted unless other supplied evidence independently proves it. Blob identity alone does not prove opaque content semantics; ask for a focused human decision when missing evidence matters. A shell exit code alone proves only that command's assertion. Return one finding per criterion in the given order. Pass only when the evidence proves that criterion; otherwise needs-human with one specific question. Use refuse for a directly disproved criterion. For source, use exactly a supplied pinned source path, or exactly one of "Exact Git change packet", "Command pass evidence", or "Delivery observations". For quote, copy an exact contiguous fragment from that named input. Never invent a source label or paraphrase a quote. Never edit or run commands.\n\nBase: ${request.baseSha}\nResult tree: ${request.treeSha}\nCriteria: ${JSON.stringify(request.criteria)}\nCommands: ${JSON.stringify(request.commands)}\nDelivery observations: ${request.observations ?? "none"}\nSources: ${request.sources.map((s) => `--- ${s.path} ---\n${s.content}`).join("\n")}\nChange packet:\n${request.change}`;
+      `Independently review the exact result of a Factory Objective. Decide each criterion only from the supplied pinned source, command pass evidence, delivery observations when supplied, supervisor-generated evidence sources when supplied, and exact Git change packet. The packet has bounded text patch excerpts, explicit truncation flags, line counts, and exact blob identities/sizes. Never pass a criterion when relevant text is truncated or omitted unless other supplied evidence independently proves it. Blob identity alone does not prove opaque content semantics; ask for a focused human decision when missing evidence matters. A shell exit code alone proves only that command's assertion. Return one finding per criterion in the given order. Pass only when the evidence proves that criterion; otherwise needs-human with one specific question. Use refuse for a directly disproved criterion. For source, use exactly a supplied source path, including the exact labels "Exact Git change packet", "Command pass evidence", "Delivery observations", or "Controller hydration receipt" when present. For quote, copy an exact contiguous fragment from that named input. Never invent a source label or paraphrase a quote. Never edit or run commands.\n\nBase: ${request.baseSha}\nResult tree: ${request.treeSha}\nCriteria: ${JSON.stringify(request.criteria)}\nCommands: ${JSON.stringify(request.commands)}\nDelivery observations: ${request.observations ?? "none"}\nSources: ${request.sources.map((s) => `--- ${s.path} ---\n${s.content}`).join("\n")}\nChange packet:\n${request.change}`;
     return this.runStructured({
       selection: this.reviewer,
       prompt,
@@ -470,6 +484,8 @@ export interface PlanCandidate {
   bodyDigest: string;
   sources: PlanningSource[];
   sourceDigests: { path: string; heading?: string; digest: string }[];
+  controllerCapabilities: ControllerCapabilitiesManifest;
+  controllerCapabilitiesDigest: string;
   graph: WorkGraph;
   graphDigest: string;
   commands: PlanCommandAuthorization[];
@@ -517,6 +533,8 @@ function planReviewPacket(
     objective,
     baseSha,
     sources,
+    controllerCapabilities: installedControllerCapabilities(),
+    controllerCapabilitiesDigest: CONTROLLER_CAPABILITIES_DIGEST,
     graph,
     commands: commandAuthorizations(graph, sources, checkout),
     finalCommands: finalObjectiveCommands(objective),
@@ -915,6 +933,8 @@ export async function compileObjective(
       objective: prompt,
       baseSha,
       sources,
+      controllerCapabilities: installedControllerCapabilities(),
+      controllerCapabilitiesDigest: CONTROLLER_CAPABILITIES_DIGEST,
       schema: graphSchema,
       invocation,
     })
@@ -1241,6 +1261,8 @@ export async function compilePlan(
       ...(heading ? { heading } : {}),
       digest: digest(content),
     })),
+    controllerCapabilities: packet.controllerCapabilities,
+    controllerCapabilitiesDigest: packet.controllerCapabilitiesDigest,
     graph,
     graphDigest: digest(JSON.stringify(graph)),
     commands: packet.commands,
@@ -1278,6 +1300,10 @@ export function verifyPlanCandidate(
   configDigest = digest("unbound-test-configuration"),
   allowPending = false,
 ): void {
+  assertInstalledControllerCapabilities(
+    candidate.controllerCapabilities,
+    candidate.controllerCapabilitiesDigest,
+  );
   const expectedSources = planningSources(body, baseSha, checkout);
   const expectedPacket = planReviewPacket(
     body,
@@ -1292,6 +1318,10 @@ export function verifyPlanCandidate(
     candidate.baseSha !== baseSha ||
     candidate.bodyDigest !== digest(body) ||
     candidate.configDigest !== configDigest ||
+    JSON.stringify(candidate.controllerCapabilities) !==
+      JSON.stringify(expectedPacket.controllerCapabilities) ||
+    candidate.controllerCapabilitiesDigest !==
+      expectedPacket.controllerCapabilitiesDigest ||
     JSON.stringify(candidate.sources) !== JSON.stringify(expectedSources) ||
     candidate.graphDigest !== digest(JSON.stringify(candidate.graph)) ||
     JSON.stringify(candidate.commands) !==

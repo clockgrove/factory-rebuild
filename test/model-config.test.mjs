@@ -7,6 +7,10 @@ import test from "node:test";
 import { Codex } from "@openai/codex-sdk";
 import { CodexPlanningModel } from "../dist/compiler.js";
 import * as configModule from "../dist/config.js";
+import {
+  CONTROLLER_CAPABILITIES_DIGEST,
+  installedControllerCapabilities,
+} from "../dist/controller-capabilities.js";
 import { codexWorkerInput } from "../dist/execution/local.js";
 import * as publicModule from "../dist/index.js";
 import { createTarget, factoryConfig } from "./support/integration-fixture.mjs";
@@ -285,6 +289,8 @@ test("Codex adapter passes phase selections to every planning and review thread"
       objective: "private-objective-marker",
       baseSha,
       sources: [{ path: "OBJECTIVE", content: "private-source-marker" }],
+      controllerCapabilities: installedControllerCapabilities(),
+      controllerCapabilitiesDigest: CONTROLLER_CAPABILITIES_DIGEST,
       schema: { type: "object" },
       invocation: invocation("compile", 0),
     });
@@ -309,6 +315,8 @@ test("Codex adapter passes phase selections to every planning and review thread"
       graph: { objective: 1, baseSha, items: [] },
       commands: [],
       finalCommands: [],
+      controllerCapabilities: installedControllerCapabilities(),
+      controllerCapabilitiesDigest: CONTROLLER_CAPABILITIES_DIGEST,
       invocation: invocation("graph-review", 0),
     });
     const treeSha = "b".repeat(40);
@@ -360,6 +368,19 @@ test("Codex adapter passes phase selections to every planning and review thread"
       /Do not append a heading, section name, separator, or explanation/,
     );
     assert.match(captured[1].prompt, /return exactly \{"findings":\[\]\}/);
+    assert.match(captured[0].prompt, /immutable supervisor guarantees/);
+    assert.match(
+      captured[0].prompt,
+      new RegExp(CONTROLLER_CAPABILITIES_DIGEST),
+    );
+    assert.match(
+      captured[1].prompt,
+      /immutable Factory controller capabilities/,
+    );
+    assert.match(
+      captured[1].prompt,
+      new RegExp(CONTROLLER_CAPABILITIES_DIGEST),
+    );
     assert.match(
       captured[1].prompt,
       /do not emit advisory observations, confirmations, or speculative questions/,
@@ -372,6 +393,7 @@ test("Codex adapter passes phase selections to every planning and review thread"
     assert.match(captured[2].prompt, /stable zero-based index/);
     assert.match(captured[2].prompt, /Work Item Git delta: one/);
     assert.match(captured[2].prompt, /supervisor item delta/);
+    assert.match(captured[2].prompt, /Controller hydration receipt/);
     assert.match(captured[2].prompt, new RegExp(treeSha));
     for (const [index, phase] of [
       "compile",
@@ -469,6 +491,8 @@ test("Codex adapter reports unavailable usage, malformed output, and provider fa
         objective: "objective",
         baseSha: "a".repeat(40),
         sources: [],
+        controllerCapabilities: installedControllerCapabilities(),
+        controllerCapabilitiesDigest: CONTROLLER_CAPABILITIES_DIGEST,
         schema: { type: "object" },
         invocation: {
           invocationId: "malformed",
@@ -496,6 +520,8 @@ test("Codex adapter reports unavailable usage, malformed output, and provider fa
         graph: { objective: 1, baseSha: "a".repeat(40), items: [] },
         commands: [],
         finalCommands: [],
+        controllerCapabilities: installedControllerCapabilities(),
+        controllerCapabilitiesDigest: CONTROLLER_CAPABILITIES_DIGEST,
         invocation: {
           invocationId: "provider-failure",
           phase: "graph-review",
@@ -517,6 +543,8 @@ test("Codex adapter reports unavailable usage, malformed output, and provider fa
       graph: { objective: 1, baseSha: "a".repeat(40), items: [] },
       commands: [],
       finalCommands: [],
+      controllerCapabilities: installedControllerCapabilities(),
+      controllerCapabilitiesDigest: CONTROLLER_CAPABILITIES_DIGEST,
       invocation: {
         invocationId: "usage-unavailable",
         phase: "graph-review",
@@ -534,6 +562,8 @@ test("Codex adapter reports unavailable usage, malformed output, and provider fa
         objective: "objective",
         baseSha: "a".repeat(40),
         sources: [],
+        controllerCapabilities: installedControllerCapabilities(),
+        controllerCapabilitiesDigest: CONTROLLER_CAPABILITIES_DIGEST,
         schema: { type: "object" },
         invocation: {
           invocationId: "setup-failure",
