@@ -532,8 +532,8 @@ test("malformed graph review pauses on the pinned graph and an explicit decision
         return {
           findings: [
             {
-              source: "not a supplied source",
-              quote: "invented quote",
+              source: "OBJECTIVE — Acceptance",
+              quote: "## Acceptance",
               detail: "Unsupported finding",
               question: "Approve this?",
             },
