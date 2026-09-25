@@ -30,6 +30,14 @@ import {
   installedControllerCapabilities,
   type ControllerCapabilitiesManifest,
 } from "./controller-capabilities.js";
+import {
+  DEFAULT_PROVIDER_TURN_IDLE_TIMEOUT_MS,
+  ProviderTurnGuard,
+  ProviderTurnIncompleteError,
+  ProviderTurnTimeoutError,
+  closeProviderEventStream,
+  requireCompletedProviderTurn,
+} from "./provider-turn.js";
 
 function observeModelInvocation(
   invocation: ModelInvocationContext | undefined,
@@ -54,6 +62,9 @@ function observeModelInvocation(
 }
 
 function providerFailureClass(error: unknown): string {
+  if (error instanceof ProviderTurnTimeoutError) return "provider-timeout";
+  if (error instanceof ProviderTurnIncompleteError)
+    return "provider-interrupted";
   const detail = error instanceof Error ? error.message : String(error);
   if (/rate.?limit|\b429\b/i.test(detail)) return "provider-rate-limit";
   if (/capacity|overloaded|temporarily unavailable/i.test(detail))
@@ -160,6 +171,7 @@ export class CodexPlanningModel implements PlanningModel {
     private checkout: string,
     private planner: CodexModelSelection,
     private reviewer: CodexModelSelection,
+    private providerTurnIdleTimeoutMs = DEFAULT_PROVIDER_TURN_IDLE_TIMEOUT_MS,
   ) {}
 
   private startThread(selection: CodexModelSelection) {
@@ -193,6 +205,8 @@ export class CodexPlanningModel implements PlanningModel {
     let finalResponse = "";
     let usage: ModelInvocationUsage | undefined;
     let invalidStructuredOutput = false;
+    let turnCompleted = false;
+    const turn = new ProviderTurnGuard(this.providerTurnIdleTimeoutMs);
     observeModelInvocation(invocation, {
       type: "started",
       provider,
@@ -211,56 +225,87 @@ export class CodexPlanningModel implements PlanningModel {
     });
     try {
       thread = this.startThread(args.selection);
-      const streamed = await thread.runStreamed(args.prompt, {
-        outputSchema: args.schema,
-      });
-      for await (const event of streamed.events) {
-        if (
-          event.type === "item.completed" &&
-          event.item.type === "agent_message"
-        )
-          finalResponse = event.item.text;
-        if (event.type === "turn.completed") {
-          usage = {
-            inputTokens: event.usage.input_tokens,
-            cachedInputTokens: event.usage.cached_input_tokens,
-            cacheWriteInputTokens: event.usage.cache_write_input_tokens,
-            outputTokens: event.usage.output_tokens,
-            reasoningOutputTokens: event.usage.reasoning_output_tokens,
-          };
+      const streamed = await turn.race(
+        thread.runStreamed(args.prompt, {
+          outputSchema: args.schema,
+          signal: turn.signal,
+        }),
+      );
+      const events = streamed.events[Symbol.asyncIterator]();
+      let closeStarted = false;
+      try {
+        for (;;) {
+          const next = await turn.race(events.next());
+          if (next.done) break;
+          const event = next.value;
+          turn.progress();
+          if (
+            event.type === "item.completed" &&
+            event.item.type === "agent_message"
+          )
+            finalResponse = event.item.text;
+          if (event.type === "turn.completed") {
+            turnCompleted = true;
+            if (event.usage)
+              usage = {
+                inputTokens: event.usage.input_tokens,
+                cachedInputTokens: event.usage.cached_input_tokens,
+                cacheWriteInputTokens: event.usage.cache_write_input_tokens,
+                outputTokens: event.usage.output_tokens,
+                reasoningOutputTokens: event.usage.reasoning_output_tokens,
+              };
+          }
+          const item =
+            event.type === "item.started" ||
+            event.type === "item.updated" ||
+            event.type === "item.completed"
+              ? event.item
+              : undefined;
+          const tool =
+            item?.type === "mcp_tool_call"
+              ? `${item.server}/${item.tool}`
+              : item?.type === "command_execution"
+                ? "shell"
+                : item?.type === "file_change"
+                  ? "apply_patch"
+                  : undefined;
+          observeModelInvocation(invocation, {
+            type: "progress",
+            provider,
+            model: args.selection.model,
+            reasoningEffort: args.selection.reasoningEffort,
+            providerThreadId:
+              event.type === "thread.started"
+                ? event.thread_id
+                : (thread.id ?? undefined),
+            providerEvent: event.type,
+            providerItemId: item?.id,
+            providerItemType: item?.type,
+            tool,
+            ...(usage ? { usage, usageAvailable: true } : {}),
+          });
+          if (event.type === "turn.failed")
+            throw new Error(event.error.message);
+          if (event.type === "error") throw new Error(event.message);
+          if (turnCompleted) break;
         }
-        const item =
-          event.type === "item.started" ||
-          event.type === "item.updated" ||
-          event.type === "item.completed"
-            ? event.item
-            : undefined;
-        const tool =
-          item?.type === "mcp_tool_call"
-            ? `${item.server}/${item.tool}`
-            : item?.type === "command_execution"
-              ? "shell"
-              : item?.type === "file_change"
-                ? "apply_patch"
-                : undefined;
-        observeModelInvocation(invocation, {
-          type: "progress",
-          provider,
-          model: args.selection.model,
-          reasoningEffort: args.selection.reasoningEffort,
-          providerThreadId:
-            event.type === "thread.started"
-              ? event.thread_id
-              : (thread.id ?? undefined),
-          providerEvent: event.type,
-          providerItemId: item?.id,
-          providerItemType: item?.type,
-          tool,
-          ...(usage ? { usage, usageAvailable: true } : {}),
-        });
-        if (event.type === "turn.failed") throw new Error(event.error.message);
-        if (event.type === "error") throw new Error(event.message);
+        closeStarted = true;
+        await closeProviderEventStream(events, turn, true);
+      } catch (error) {
+        if (!closeStarted && !turn.signal.aborted) {
+          closeStarted = true;
+          try {
+            await closeProviderEventStream(events, turn, true);
+          } catch {
+            // Preserve the provider failure that required cleanup.
+          }
+        }
+        throw error;
+      } finally {
+        if (!closeStarted) void closeProviderEventStream(events, turn, false);
       }
+      requireCompletedProviderTurn(turnCompleted);
+      turn.finish();
       const responseBytes = Buffer.byteLength(finalResponse);
       const responseDigest = digest(finalResponse);
       let parsed: T;
@@ -318,6 +363,8 @@ export class CodexPlanningModel implements PlanningModel {
           detail: error instanceof Error ? error.message : String(error),
         });
       throw error;
+    } finally {
+      turn.finish();
     }
   }
 
