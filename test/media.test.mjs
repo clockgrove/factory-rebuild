@@ -147,6 +147,65 @@ test("harness AssetSet manifest rejects missing member bindings", () => {
   );
 });
 
+test("a non-manifest harness keeps verified capture evidence without claiming manifest origin", async () => {
+  const root = mkdtempSync(join(tmpdir(), "factory-non-manifest-media-"));
+  try {
+    const staging = join(root, "staging");
+    const media = join(staging, ".factory-media", "candidate-a");
+    mkdirSync(media, { recursive: true });
+    writeFileSync(join(media, "image.png"), Buffer.from([1, 2, 3]));
+    const sets = [
+      {
+        id: "candidate-a",
+        members: [
+          {
+            role: "image",
+            path: ".factory-media/candidate-a/image.png",
+            mediaType: "image/png",
+            destination: "approved/image.png",
+          },
+        ],
+        provenance: {
+          source: "generated",
+          rights: "fixture",
+          visibility: "repository",
+          lineage: [],
+        },
+      },
+    ];
+    const externalManifest = join(root, "external-manifest.json");
+    writeFileSync(externalManifest, `${JSON.stringify({ sets })}\n`);
+    symlinkSync(externalManifest, join(staging, ".factory-assets.json"));
+    await assert.rejects(
+      captureAssetSets(
+        new LocalContentStore(join(root, "rejected-content")),
+        staging,
+        { ownedPaths: ["approved/image.png"], expectedOutputRoles: ["image"] },
+        sets,
+        { harness: "provider-neutral" },
+      ),
+      /not a regular staging file/,
+    );
+    rmSync(join(staging, ".factory-assets.json"));
+    const [captured] = await captureAssetSets(
+      new LocalContentStore(join(root, "content")),
+      staging,
+      { ownedPaths: ["approved/image.png"], expectedOutputRoles: ["image"] },
+      sets,
+      { harness: "provider-neutral" },
+    );
+    assert.equal(captured.capture.authority, "factory-controller");
+    assert.equal(captured.capture.declarationPath, undefined);
+    assert.equal(captured.capture.declarationDigest, undefined);
+    assert.equal(
+      captured.capture.members[0].stagingPath,
+      ".factory-media/candidate-a/image.png",
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("an exact repository source can migrate its existing path to required LFS without worker deletion", async () => {
   const root = mkdtempSync(join(tmpdir(), "factory-same-path-lfs-"));
   try {
@@ -469,6 +528,25 @@ test("opaque 3D source and multi-file output retain bindings, relationships, met
         },
       },
     ];
+    writeFileSync(
+      join(staging, ".factory-assets.json"),
+      `${JSON.stringify({ sets: [{ ...sets[0], id: "mismatch" }] })}\n`,
+    );
+    await assert.rejects(
+      captureAssetSets(
+        store,
+        staging,
+        item,
+        sets,
+        { harness: "scripted" },
+        imported,
+      ),
+      /differ from \.factory-assets\.json/,
+    );
+    writeFileSync(
+      join(staging, ".factory-assets.json"),
+      `${JSON.stringify({ sets })}\n`,
+    );
     const captured = await captureAssetSets(
       store,
       staging,
@@ -485,6 +563,26 @@ test("opaque 3D source and multi-file output retain bindings, relationships, met
       captured[0].members[0].formatMetadata,
       sets[0].members[0].formatMetadata,
     );
+    assert.deepEqual(
+      captured[0].capture.members.map((member) => [
+        member.role,
+        member.stagingPath,
+        member.destination,
+      ]),
+      [
+        [
+          "model",
+          ".factory-media/candidate-a/model.blend",
+          "models/output.blend",
+        ],
+        [
+          "metadata",
+          ".factory-media/candidate-a/details.json",
+          "models/output.json",
+        ],
+      ],
+    );
+    assert.match(captured[0].capture.declarationDigest, /^[0-9a-f]{64}$/);
     const result = await materializeAssetSet({
       checkout,
       workRoot: join(root, "worktrees"),
@@ -644,6 +742,10 @@ test("a complete selected AssetSet is retained by digest and committed through t
       };
     });
     const store = new LocalContentStore(join(root, "content"));
+    writeFileSync(
+      join(staging, ".factory-assets.json"),
+      `${JSON.stringify({ sets })}\n`,
+    );
     const captured = await captureAssetSets(store, staging, item, sets, {
       harness: "scripted",
     });

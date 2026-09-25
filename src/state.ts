@@ -6,7 +6,11 @@ import type {
   WorkGraph,
 } from "./contracts.js";
 import type { AcceptanceDecision, ValidationEvidence } from "./validation.js";
-import { assertHydrationReceipt, assetSelectionDigest } from "./media.js";
+import {
+  assertAssetCaptureReceipt,
+  assertHydrationReceipt,
+  assetSelectionDigest,
+} from "./media.js";
 
 export type WorkStatus =
   | "pending"
@@ -436,6 +440,11 @@ export function parseFactoryState(
       if (decision.reason !== undefined && typeof decision.reason !== "string")
         throw new Error("Selection reason is invalid");
       if (
+        decision.surface !== undefined &&
+        !["factory-cli", "application"].includes(String(decision.surface))
+      )
+        throw new Error("Selection surface is invalid");
+      if (
         !Array.isArray(decision.downstreamItems) ||
         !decision.downstreamItems.every(
           (name: unknown) => typeof name === "string" && !!name,
@@ -556,6 +565,8 @@ export function parseFactoryState(
           )
             throw new Error("AssetSet relationships are invalid");
         }
+        if (set.capture !== undefined)
+          assertAssetCaptureReceipt(set as unknown as CapturedAssetSet);
       }
     }
     if (item.selectedAssetSet !== undefined) {

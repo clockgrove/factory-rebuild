@@ -92,6 +92,91 @@ export function workItemReviewObservations(
   delivery: ReviewDeliveryObservation,
   selectedAsset?: CapturedAssetSet,
 ): string {
+  const current = state.work[item.id]!;
+  const captureReceipt = (asset: CapturedAssetSet) =>
+    asset.capture
+      ? {
+          authority: "factory-controller" as const,
+          ...(asset.capture.declarationPath &&
+            asset.capture.declarationDigest && {
+              declarationPath: asset.capture.declarationPath,
+              declarationDigest: asset.capture.declarationDigest,
+            }),
+          mediaRoot: ".factory-media" as const,
+          complete: true as const,
+          setId: asset.id,
+          members: asset.capture.members.map((member) => ({
+            role: member.role,
+            stagingPath: member.stagingPath,
+            destination: member.destination,
+            digest: member.digest,
+            bytes: member.bytes,
+            mediaType: member.mediaType,
+          })),
+        }
+      : null;
+  const contentRef = (ref: CapturedAssetSet["members"][number]["ref"]) => ({
+    digest: ref.digest,
+    bytes: ref.bytes,
+    mediaType: ref.mediaType,
+  });
+  const provenance = (asset: CapturedAssetSet) => ({
+    source: asset.provenance.source,
+    rights: asset.provenance.rights,
+    visibility: asset.provenance.visibility,
+    lineage: asset.provenance.lineage,
+  });
+  const selectedAssetObservation = (asset: CapturedAssetSet) => ({
+    id: asset.id,
+    ...(asset.inputs && {
+      inputs: asset.inputs.map((input) => ({
+        binding: {
+          ...(input.binding.kind && { kind: input.binding.kind }),
+          path: input.binding.path,
+          role: input.binding.role,
+          mediaType: input.binding.mediaType,
+          visibility: input.binding.visibility,
+        },
+        ref: contentRef(input.ref),
+      })),
+    }),
+    members: asset.members.map((member) => ({
+      role: member.role,
+      ref: contentRef(member.ref),
+      destination: member.destination,
+      ...(member.formatMetadata && {
+        formatMetadata: {
+          source: member.formatMetadata.source,
+          values: member.formatMetadata.values,
+        },
+      }),
+    })),
+    ...(asset.relationships && {
+      relationships: asset.relationships.map((relationship) => ({
+        from: relationship.from,
+        toRole: relationship.toRole,
+        kind: relationship.kind,
+      })),
+    }),
+    provenance: provenance(asset),
+    ...(asset.production && {
+      production: {
+        ...(asset.production.model && { model: asset.production.model }),
+        ...(asset.production.tool && { tool: asset.production.tool }),
+        ...(asset.production.request !== undefined && {
+          request: asset.production.request,
+        }),
+        ...(asset.production.parameters !== undefined && {
+          parameters: asset.production.parameters,
+        }),
+      },
+    }),
+    evidence: {
+      harnessIdentity: asset.evidence.harnessIdentity,
+      resultDigest: asset.evidence.resultDigest,
+    },
+    ...(asset.capture && { capture: captureReceipt(asset) }),
+  });
   const criterionText = item.acceptance.join("\n");
   const namedByCriterion = (id: string): boolean => {
     const escaped = id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -133,7 +218,32 @@ export function workItemReviewObservations(
         integratedCommitSha: work.integratedSha ?? null,
       };
     }),
-    selectedAsset: selectedAsset ?? null,
+    assetCaptureReceipts: (current.assets ?? []).map(captureReceipt),
+    selectedAsset: selectedAsset
+      ? selectedAssetObservation(selectedAsset)
+      : null,
+    assetSelectionReceipt:
+      selectedAsset && current.selection
+        ? {
+            authority: "factory-controller",
+            setId: selectedAsset.id,
+            selectionDigest: current.selectionDigest ?? null,
+            actor: current.selection.actor,
+            at: current.selection.at,
+            ...(current.selection.reason && {
+              reason: current.selection.reason,
+            }),
+            ...(current.selection.surface && {
+              surface: current.selection.surface,
+            }),
+            destinations: current.selection.destinations.map((destination) => ({
+              role: destination.role,
+              path: destination.path,
+              digest: destination.digest,
+            })),
+            downstreamItems: current.selection.downstreamItems,
+          }
+        : null,
   });
 }
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, resolve, sep } from "node:path";
+import { dirname, join, resolve, sep } from "node:path";
 import type { PlanCandidate } from "./compiler.js";
 import {
   configPath,
@@ -12,6 +12,8 @@ import {
   validateConfig,
 } from "./config.js";
 import { compose, composePlanning } from "./index.js";
+import { LocalContentStore } from "./content/local.js";
+import { selectAssetSetFromCli } from "./runner.js";
 import { readState } from "./state-store.js";
 import { itemsConflict } from "./scheduler.js";
 import { linearDeliveryUnits } from "./delivery/plan.js";
@@ -383,11 +385,18 @@ async function main(): Promise<void> {
     const item = option(args, "item");
     const set = option(args, "set");
     if (!item || !set) throw new Error("select requires --item and --set");
-    await application.selectAssetSet(objective, item, set, {
-      actor: option(args, "actor"),
-      reason: option(args, "reason"),
-      downstreamItems: options(args, "bind"),
-    });
+    await selectAssetSetFromCli(
+      config,
+      objective,
+      item,
+      set,
+      new LocalContentStore(join(stateRoot(config.repository), "content")),
+      {
+        actor: option(args, "actor"),
+        reason: option(args, "reason"),
+        downstreamItems: options(args, "bind"),
+      },
+    );
     console.log(
       `Selected AssetSet ${set} for Work Item ${item}; run the Objective to continue`,
     );

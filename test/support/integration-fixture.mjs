@@ -226,6 +226,12 @@ class ScriptedPlanningModel {
 
   async reviewResult(request) {
     this.observe(request);
+    appendEvent(this.logPath, {
+      type: "result-review",
+      observations: request.observations
+        ? JSON.parse(request.observations)
+        : null,
+    });
     const source = request.sources.find((item) => item.path === "OBJECTIVE");
     return {
       findings: request.criteria.map((criterion) => {
@@ -405,6 +411,8 @@ class ScriptedHarness {
       ...(set.relationships && { relationships: set.relationships }),
       provenance: set.provenance,
     }));
+    if (assets.length)
+      writeJson(join(data.worktree, ".factory-assets.json"), { sets: assets });
     const result = {
       ...(assets.length && { assets }),
       evidence: { harness: "scripted", threadId: handle.identity },
@@ -657,6 +665,7 @@ export class StatefulGitHubFake {
 export function makeApplication(descriptor) {
   const root = stateRoot(descriptor.config.repository);
   const eventsPath = join(descriptor.fakeRoot, "harness.ndjson");
+  const planningPath = join(descriptor.fakeRoot, "planning.ndjson");
   const contentStore = new LocalContentStore(join(root, "content"));
   const github = new StatefulGitHubFake(
     descriptor.fakeRoot,
@@ -679,17 +688,16 @@ export function makeApplication(descriptor) {
     application: createApplication(descriptor.config, {
       planningModel:
         descriptor.planningModel ??
-        new ScriptedPlanningModel(
-          descriptor.graph,
-          join(descriptor.fakeRoot, "planning.ndjson"),
-        ),
+        new ScriptedPlanningModel(descriptor.graph, planningPath),
       driver,
       github,
       delivery: new RegularDelivery(descriptor.config.checkout, github),
       contentStore,
     }),
     eventsPath,
+    planningPath,
     github,
+    contentStore,
   };
 }
 

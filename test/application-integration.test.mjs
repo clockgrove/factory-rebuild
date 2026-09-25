@@ -17,6 +17,7 @@ import test from "node:test";
 import { parseFactoryState } from "../dist/state.js";
 import { readState, statePath } from "../dist/state-store.js";
 import { readDiagnostics, statusDocument } from "../dist/diagnostics.js";
+import { selectAssetSetFromCli } from "../dist/runner.js";
 import {
   createTarget,
   factoryConfig,
@@ -1763,7 +1764,8 @@ test("regular and native asset selection preserve a complete set and hydrate tar
           },
         },
       };
-      const { application, github } = makeApplication(descriptor);
+      const { application, github, planningPath, contentStore } =
+        makeApplication(descriptor);
       const publish = github.publish.bind(github);
       let lfsObjectObservedBeforePublication = false;
       github.publish = async (request) => {
@@ -1810,11 +1812,25 @@ test("regular and native asset selection preserve a complete set and hydrate tar
         readFileSync(join(review, "metadata-metadata.json"), "utf8"),
         '{"candidate":"b"}\n',
       );
-      await application.selectAssetSet(objective, "media", "candidate-b", {
+      const selection = {
         actor: "test-operator",
         reason: "reviewed opaque pair",
         downstreamItems: ["consumer"],
-      });
+      };
+      if (delivery === "regular")
+        await selectAssetSetFromCli(
+          descriptor.config,
+          objective,
+          "media",
+          "candidate-b",
+          contentStore,
+          selection,
+        );
+      else
+        await application.selectAssetSet(objective, "media", "candidate-b", {
+          ...selection,
+          surface: "factory-cli",
+        });
       const completed = await application.runObjective(objective);
       assert.equal(lfsObjectObservedBeforePublication, true);
       assert.ok(
@@ -1838,6 +1854,32 @@ test("regular and native asset selection preserve a complete set and hydrate tar
       );
       assert.equal(completed.work.media.selectedAssetSet, "candidate-b");
       assert.equal(completed.work.media.selection.actor, "test-operator");
+      const mediaReview = readEvents(planningPath)
+        .filter(
+          (event) =>
+            event.type === "result-review" &&
+            event.observations?.reviewedItemId === "media",
+        )
+        .at(-1);
+      assert.equal(mediaReview.observations.delivery.kind, delivery);
+      assert.equal(mediaReview.observations.assetCaptureReceipts.length, 2);
+      assert.ok(
+        mediaReview.observations.assetCaptureReceipts.every(
+          (receipt) =>
+            receipt.authority === "factory-controller" &&
+            receipt.declarationPath === ".factory-assets.json" &&
+            receipt.mediaRoot === ".factory-media" &&
+            receipt.complete === true,
+        ),
+      );
+      assert.equal(
+        mediaReview.observations.assetSelectionReceipt.setId,
+        "candidate-b",
+      );
+      assert.equal(
+        mediaReview.observations.assetSelectionReceipt.surface,
+        delivery === "regular" ? "factory-cli" : "application",
+      );
       assert.deepEqual(completed.work.media.selection.downstreamItems, [
         "consumer",
       ]);
