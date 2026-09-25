@@ -6,7 +6,7 @@ This file records public releases of Factory. See [BUILD-STATUS.md](docs/BUILD-S
 
 - Bind planning and independent graph review to a canonical installed-artifact manifest of controller-enforced media and Git LFS guarantees, rejecting edited or stale capability identities before activation.
 - Let the controller migrate an explicitly captured repository asset from an ordinary Git blob to required Git LFS at the same path only when the selected, captured, and current bytes are identical; workers may not mutate final asset destinations.
-- Verify post-integration fresh-clone hydration before final Objective review and persist an exact commit/tree/member receipt that the reviewer can cite and resumed state must reproduce.
+- Verify post-integration fresh-clone hydration before final Objective review, persist an exact commit/tree/member receipt that the reviewer can cite and resumed state must reproduce, and bound clone/LFS failures without exposing origin URLs.
 
 ## 0.1.11 — 2026-09-25
 

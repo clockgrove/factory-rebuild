@@ -721,19 +721,29 @@ export function verifyHydratedAssets(args: {
   if (!args.selections.length) return undefined;
   mkdirSync(args.workRoot, { recursive: true });
   const clone = join(args.workRoot, `fresh-${randomUUID()}`);
-  const remote = pinnedGit(args.checkout, "remote", "get-url", "origin");
-  const integratedTreeSha = pinnedGit(
-    args.checkout,
-    "rev-parse",
-    `${args.integratedSha}^{tree}`,
-  );
+  let phase = "origin-resolution";
+  let receipt: HydrationReceipt | undefined;
+  let failure: Error | undefined;
   try {
+    const remote = pinnedGit(args.checkout, "remote", "get-url", "origin");
+    phase = "tree-resolution";
+    const integratedTreeSha = pinnedGit(
+      args.checkout,
+      "rev-parse",
+      `${args.integratedSha}^{tree}`,
+    );
+    phase = "clone";
     command("git", ["clone", "--no-checkout", remote, clone]);
+    phase = "lfs-setup";
     command("git", ["-C", clone, "lfs", "install", "--local"]);
+    phase = "integrated-checkout";
     command("git", ["-C", clone, "checkout", "--detach", args.integratedSha]);
+    phase = "lfs-pull";
     command("git", ["-C", clone, "lfs", "pull"]);
+    phase = "integrated-identity";
     if (pinnedGit(clone, "rev-parse", "HEAD") !== args.integratedSha)
       throw new Error("Fresh clone resolved a different integrated commit");
+    phase = "selected-byte-verification";
     for (const { set } of args.selections)
       for (const member of set.members) {
         const path = join(clone, member.destination);
@@ -764,12 +774,23 @@ export function verifyHydratedAssets(args: {
             `Hydrated asset differs from selected bytes: ${member.destination}`,
           );
       }
-    return expectedHydrationReceipt(
+    receipt = expectedHydrationReceipt(
       args.integratedSha,
       integratedTreeSha,
       args.selections,
     );
-  } finally {
-    rmSync(clone, { recursive: true, force: true });
+  } catch {
+    failure = new Error(
+      `Fresh-clone hydration verification failed during ${phase}`,
+    );
   }
+  try {
+    rmSync(clone, { recursive: true, force: true });
+  } catch {
+    failure ??= new Error(
+      "Fresh-clone hydration verification failed during cleanup",
+    );
+  }
+  if (failure) throw failure;
+  return receipt;
 }

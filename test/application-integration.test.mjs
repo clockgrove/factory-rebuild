@@ -1621,14 +1621,321 @@ test("native retry stops when its stack already has a published layer", async ()
   });
 });
 
-test("asset selection preserves a complete multi-file set and hydrates target-owned LFS bytes", async () => {
-  await fixture("asset-integration", async (root) => {
-    const selectedModel = Buffer.concat([
-      Buffer.from("selected model bytes", "utf8"),
-      Buffer.from([0, 1, 2]),
-    ]);
+test("regular and native asset selection preserve a complete set and hydrate target-owned LFS bytes", async () => {
+  for (const delivery of ["regular", "native-stack"])
+    await fixture(`asset-integration-${delivery}`, async (root) => {
+      const selectedModel = Buffer.concat([
+        Buffer.from("selected model bytes", "utf8"),
+        Buffer.from([0, 1, 2]),
+      ]);
+      const target = createTarget(root, {
+        "approved/model.bin": selectedModel,
+      });
+      writeFileSync(
+        join(target.checkout, ".gitattributes"),
+        "approved/*.bin filter=lfs diff=lfs merge=lfs -text\n",
+      );
+      git(target.checkout, "add", ".gitattributes");
+      git(
+        target.checkout,
+        "-c",
+        "user.name=Factory Test",
+        "-c",
+        "user.email=factory-test@example.com",
+        "commit",
+        "-m",
+        "Require LFS for approved binaries",
+      );
+      git(target.checkout, "push", "origin", "main");
+      target.baseSha = git(target.checkout, "rev-parse", "HEAD");
+      git(target.checkout, "lfs", "install", "--local");
+      const fakeRoot = join(root, "fake");
+      const command =
+        'test -s approved/model.bin && test "$(cat approved/metadata.json)" = \'{"candidate":"b"}\'';
+      const consumerCommand = "test -s approved/consumed.txt";
+      const media = item("media", {
+        path: "approved/model.bin",
+        command,
+        ownedPaths: ["approved/model.bin", "approved/metadata.json"],
+        sourceAssets: [
+          {
+            kind: "repository",
+            path: "approved/model.bin",
+            role: "source",
+            mediaType: "application/octet-stream",
+            visibility: "repository",
+          },
+        ],
+        expectedOutputRoles: ["model", "metadata"],
+        minimumAssetSets: 2,
+        requiredLfsRoles: ["model"],
+      });
+      const provenance = {
+        source: "approved/model.bin",
+        rights: "public integration fixture",
+        visibility: "repository",
+        lineage: ["approved/model.bin"],
+      };
+      const consumer = item("consumer", {
+        path: "approved/consumed.txt",
+        command: consumerCommand,
+        dependencies: ["media"],
+      });
+      const descriptor = {
+        config: factoryConfig(
+          target.checkout,
+          `example/asset-integration-${delivery}`,
+          delivery,
+        ),
+        graph: { objective, baseSha: target.baseSha, items: [media, consumer] },
+        objectiveBody: `# Deterministic Objective
+
+## Acceptance
+- Fresh-clone hydration preserves the selected bytes at approved/model.bin.
+- \`${command}\`
+- \`${consumerCommand}\`
+
+## Final validation
+- \`${command}\`
+- \`${consumerCommand}\`
+`,
+        fakeRoot,
+        actions: {
+          media: {
+            assets: [
+              {
+                id: "candidate-a",
+                members: [
+                  {
+                    role: "model",
+                    file: "model.bin",
+                    mediaType: "application/octet-stream",
+                    destination: "approved/model.bin",
+                    text: "other model bytes",
+                  },
+                  {
+                    role: "metadata",
+                    file: "metadata.json",
+                    mediaType: "application/json",
+                    destination: "approved/metadata.json",
+                    text: '{"candidate":"a"}\n',
+                  },
+                ],
+                provenance,
+              },
+              {
+                id: "candidate-b",
+                members: [
+                  {
+                    role: "model",
+                    file: "model.bin",
+                    mediaType: "application/octet-stream",
+                    destination: "approved/model.bin",
+                    base64: selectedModel.toString("base64"),
+                  },
+                  {
+                    role: "metadata",
+                    file: "metadata.json",
+                    mediaType: "application/json",
+                    destination: "approved/metadata.json",
+                    text: '{"candidate":"b"}\n',
+                  },
+                ],
+                relationships: [
+                  {
+                    from: "approved/model.bin",
+                    toRole: "model",
+                    kind: "derived-from",
+                  },
+                ],
+                provenance,
+              },
+            ],
+          },
+          consumer: {
+            consumeSelected: {
+              roles: ["model", "metadata"],
+              output: "approved/consumed.txt",
+            },
+          },
+        },
+      };
+      const { application, github } = makeApplication(descriptor);
+      const publish = github.publish.bind(github);
+      let lfsObjectObservedBeforePublication = false;
+      github.publish = async (request) => {
+        const pointer = git(
+          target.checkout,
+          "show",
+          `origin/${request.branch}:approved/model.bin`,
+        );
+        const digest = pointer.match(/oid sha256:([a-f0-9]{64})/)?.[1];
+        if (digest) {
+          assert.equal(
+            existsSync(
+              join(
+                target.origin,
+                "lfs",
+                "objects",
+                digest.slice(0, 2),
+                digest.slice(2, 4),
+                digest,
+              ),
+            ),
+            true,
+          );
+          lfsObjectObservedBeforePublication = true;
+        }
+        return publish(request);
+      };
+      const waiting = await application.runObjective(objective);
+      assert.equal(waiting.work.media.status, "waiting");
+      assert.equal(waiting.work.media.assets.length, 2);
+      assert.equal(waiting.work.media.assets[1].members.length, 2);
+      const review = join(root, "review");
+      await application.exportAssetSetForReview(
+        objective,
+        "media",
+        "candidate-b",
+        review,
+      );
+      assert.deepEqual(
+        readFileSync(join(review, "model-model.bin")),
+        selectedModel,
+      );
+      assert.equal(
+        readFileSync(join(review, "metadata-metadata.json"), "utf8"),
+        '{"candidate":"b"}\n',
+      );
+      await application.selectAssetSet(objective, "media", "candidate-b", {
+        actor: "test-operator",
+        reason: "reviewed opaque pair",
+        downstreamItems: ["consumer"],
+      });
+      const completed = await application.runObjective(objective);
+      assert.equal(lfsObjectObservedBeforePublication, true);
+      assert.ok(
+        github
+          .state()
+          .events.some((event) =>
+            delivery === "native-stack"
+              ? event.type === "merge-stack"
+              : event.type === "merge",
+          ),
+      );
+      assert.equal(completed.finalValidation.passed, true);
+      assert.equal(completed.finalValidation.hydrationReceipt.passed, true);
+      assert.equal(
+        completed.finalValidation.hydrationReceipt.integratedSha,
+        completed.integratedSha,
+      );
+      assert.equal(
+        completed.finalValidation.hydrationReceipt.members[0].observedDigest,
+        completed.work.media.assets[1].members[0].ref.digest,
+      );
+      assert.equal(completed.work.media.selectedAssetSet, "candidate-b");
+      assert.equal(completed.work.media.selection.actor, "test-operator");
+      assert.deepEqual(completed.work.media.selection.downstreamItems, [
+        "consumer",
+      ]);
+      const mediaTimeline = readDiagnostics(
+        descriptor.config.repository,
+        objective,
+      );
+      assert.ok(
+        mediaTimeline.some(
+          (event) =>
+            event.itemId === "media" &&
+            event.operation === "media-review-export" &&
+            event.outcome === "completed",
+        ),
+      );
+      const hydrationIndex = mediaTimeline.findIndex(
+        (event) =>
+          event.operation === "media-hydration-verification" &&
+          event.outcome === "completed",
+      );
+      const reviewIndex = mediaTimeline.findIndex(
+        (event) =>
+          event.operation === "objective-acceptance-review" &&
+          event.outcome === "started",
+      );
+      assert.ok(hydrationIndex >= 0 && hydrationIndex < reviewIndex);
+      const hydrationEvent = mediaTimeline[hydrationIndex];
+      assert.deepEqual(Object.keys(hydrationEvent.metadata).sort(), [
+        "integratedSha",
+        "members",
+        "treeSha",
+      ]);
+      assert.equal(hydrationEvent.detail, undefined);
+      assert.ok(
+        mediaTimeline.some(
+          (event) =>
+            event.itemId === "media" &&
+            event.operation === "media-selection" &&
+            event.metadata?.setId === "candidate-b",
+        ),
+      );
+      assert.ok(
+        mediaTimeline.some(
+          (event) =>
+            event.itemId === "media" &&
+            event.operation === "media-materialization" &&
+            event.outcome === "completed" &&
+            event.durationMs >= 0,
+        ),
+      );
+      assert.deepEqual(
+        completed.work.media.selection.destinations.map((entry) => entry.role),
+        ["model", "metadata"],
+      );
+      git(target.checkout, "fetch", "origin", "main");
+      const pointer = git(
+        target.checkout,
+        "show",
+        `${completed.integratedSha}:approved/model.bin`,
+      );
+      assert.match(pointer, /oid sha256:/);
+      const clone = join(root, "hydrated");
+      execFileSync("git", ["clone", "--no-checkout", target.origin, clone], {
+        stdio: "ignore",
+      });
+      git(clone, "lfs", "install", "--local");
+      git(clone, "checkout", "--detach", completed.integratedSha);
+      git(clone, "lfs", "pull");
+      assert.deepEqual(
+        readFileSync(join(clone, "approved/model.bin")),
+        selectedModel,
+      );
+      assert.equal(
+        readFileSync(join(clone, "approved/metadata.json"), "utf8"),
+        '{"candidate":"b"}\n',
+      );
+      assert.equal(
+        readFileSync(join(clone, "approved/consumed.txt"), "utf8"),
+        `model:${selectedModel.toString("hex")}\nmetadata:${Buffer.from('{"candidate":"b"}\n').toString("hex")}\n`,
+      );
+      const tampered = structuredClone(completed);
+      tampered.finalValidation.hydrationReceipt.members[0].observedDigest =
+        "0".repeat(64);
+      assert.throws(
+        () =>
+          parseFactoryState(tampered, descriptor.config.repository, objective),
+        /hydration receipt differs/,
+      );
+    });
+});
+
+test("hydration failure is URL-free and blocks final review, evidence, and closure on replay", async () => {
+  await fixture("hydration-failure", async (root) => {
+    const selectedModel = Buffer.from([0, 7, 0, 8, 255]);
+    const privateOrigin = join(
+      root,
+      "private-origin-arbitrary-secret-missing.git",
+    );
     const target = createTarget(root, {
       "approved/model.bin": selectedModel,
+      "sabotage.mjs": `import { execFileSync } from "node:child_process";\nexecFileSync("git", ["remote", "set-url", "origin", ${JSON.stringify(privateOrigin)}]);\n`,
     });
     writeFileSync(
       join(target.checkout, ".gitattributes"),
@@ -1648,14 +1955,10 @@ test("asset selection preserves a complete multi-file set and hydrates target-ow
     git(target.checkout, "push", "origin", "main");
     target.baseSha = git(target.checkout, "rev-parse", "HEAD");
     git(target.checkout, "lfs", "install", "--local");
-    const fakeRoot = join(root, "fake");
-    const command =
-      'test -s approved/model.bin && test "$(cat approved/metadata.json)" = \'{"candidate":"b"}\'';
-    const consumerCommand = "test -s approved/consumed.txt";
+    const command = "test -s approved/model.bin";
     const media = item("media", {
       path: "approved/model.bin",
       command,
-      ownedPaths: ["approved/model.bin", "approved/metadata.json"],
       sourceAssets: [
         {
           kind: "repository",
@@ -1665,61 +1968,29 @@ test("asset selection preserves a complete multi-file set and hydrates target-ow
           visibility: "repository",
         },
       ],
-      expectedOutputRoles: ["model", "metadata"],
-      minimumAssetSets: 2,
+      expectedOutputRoles: ["model"],
+      minimumAssetSets: 1,
       requiredLfsRoles: ["model"],
     });
-    const provenance = {
-      source: "approved/model.bin",
-      rights: "public integration fixture",
-      visibility: "repository",
-      lineage: ["approved/model.bin"],
-    };
-    const consumer = item("consumer", {
-      path: "approved/consumed.txt",
-      command: consumerCommand,
-      dependencies: ["media"],
-    });
     const descriptor = {
-      config: factoryConfig(target.checkout, "example/asset-integration"),
-      graph: { objective, baseSha: target.baseSha, items: [media, consumer] },
+      config: factoryConfig(target.checkout, "example/hydration-failure"),
+      graph: { objective, baseSha: target.baseSha, items: [media] },
       objectiveBody: `# Deterministic Objective
 
 ## Acceptance
 - Fresh-clone hydration preserves the selected bytes at approved/model.bin.
 - \`${command}\`
-- \`${consumerCommand}\`
 
 ## Final validation
 - \`${command}\`
-- \`${consumerCommand}\`
+- \`node sabotage.mjs\`
 `,
-      fakeRoot,
+      fakeRoot: join(root, "fake"),
       actions: {
         media: {
           assets: [
             {
-              id: "candidate-a",
-              members: [
-                {
-                  role: "model",
-                  file: "model.bin",
-                  mediaType: "application/octet-stream",
-                  destination: "approved/model.bin",
-                  text: "other model bytes",
-                },
-                {
-                  role: "metadata",
-                  file: "metadata.json",
-                  mediaType: "application/json",
-                  destination: "approved/metadata.json",
-                  text: '{"candidate":"a"}\n',
-                },
-              ],
-              provenance,
-            },
-            {
-              id: "candidate-b",
+              id: "byte-identical",
               members: [
                 {
                   role: "model",
@@ -1728,159 +1999,75 @@ test("asset selection preserves a complete multi-file set and hydrates target-ow
                   destination: "approved/model.bin",
                   base64: selectedModel.toString("base64"),
                 },
-                {
-                  role: "metadata",
-                  file: "metadata.json",
-                  mediaType: "application/json",
-                  destination: "approved/metadata.json",
-                  text: '{"candidate":"b"}\n',
-                },
               ],
-              relationships: [
-                {
-                  from: "approved/model.bin",
-                  toRole: "model",
-                  kind: "derived-from",
-                },
-              ],
-              provenance,
+              provenance: {
+                source: "approved/model.bin",
+                rights: "public integration fixture",
+                visibility: "repository",
+                lineage: ["approved/model.bin"],
+              },
             },
           ],
         },
-        consumer: {
-          consumeSelected: {
-            roles: ["model", "metadata"],
-            output: "approved/consumed.txt",
-          },
-        },
       },
     };
-    const { application } = makeApplication(descriptor);
+    const { application, github } = makeApplication(descriptor);
     const waiting = await application.runObjective(objective);
     assert.equal(waiting.work.media.status, "waiting");
-    assert.equal(waiting.work.media.assets.length, 2);
-    assert.equal(waiting.work.media.assets[1].members.length, 2);
-    const review = join(root, "review");
-    await application.exportAssetSetForReview(
-      objective,
-      "media",
-      "candidate-b",
-      review,
-    );
-    assert.deepEqual(
-      readFileSync(join(review, "model-model.bin")),
-      selectedModel,
-    );
-    assert.equal(
-      readFileSync(join(review, "metadata-metadata.json"), "utf8"),
-      '{"candidate":"b"}\n',
-    );
-    await application.selectAssetSet(objective, "media", "candidate-b", {
+    await application.selectAssetSet(objective, "media", "byte-identical", {
       actor: "test-operator",
-      reason: "reviewed opaque pair",
-      downstreamItems: ["consumer"],
+      reason: "failure-path fixture",
+      downstreamItems: [],
     });
-    const completed = await application.runObjective(objective);
-    assert.equal(completed.finalValidation.passed, true);
-    assert.equal(completed.finalValidation.hydrationReceipt.passed, true);
-    assert.equal(
-      completed.finalValidation.hydrationReceipt.integratedSha,
-      completed.integratedSha,
-    );
-    assert.equal(
-      completed.finalValidation.hydrationReceipt.members[0].observedDigest,
-      completed.work.media.assets[1].members[0].ref.digest,
-    );
-    assert.equal(completed.work.media.selectedAssetSet, "candidate-b");
-    assert.equal(completed.work.media.selection.actor, "test-operator");
-    assert.deepEqual(completed.work.media.selection.downstreamItems, [
-      "consumer",
-    ]);
-    const mediaTimeline = readDiagnostics(
-      descriptor.config.repository,
-      objective,
-    );
-    assert.ok(
-      mediaTimeline.some(
-        (event) =>
-          event.itemId === "media" &&
-          event.operation === "media-review-export" &&
-          event.outcome === "completed",
-      ),
-    );
-    const hydrationIndex = mediaTimeline.findIndex(
-      (event) =>
-        event.operation === "media-hydration-verification" &&
-        event.outcome === "completed",
-    );
-    const reviewIndex = mediaTimeline.findIndex(
-      (event) =>
-        event.operation === "objective-acceptance-review" &&
-        event.outcome === "started",
-    );
-    assert.ok(hydrationIndex >= 0 && hydrationIndex < reviewIndex);
-    const hydrationEvent = mediaTimeline[hydrationIndex];
-    assert.deepEqual(Object.keys(hydrationEvent.metadata).sort(), [
-      "integratedSha",
-      "members",
-      "treeSha",
-    ]);
-    assert.equal(hydrationEvent.detail, undefined);
-    assert.ok(
-      mediaTimeline.some(
-        (event) =>
-          event.itemId === "media" &&
-          event.operation === "media-selection" &&
-          event.metadata?.setId === "candidate-b",
-      ),
-    );
-    assert.ok(
-      mediaTimeline.some(
-        (event) =>
-          event.itemId === "media" &&
-          event.operation === "media-materialization" &&
-          event.outcome === "completed" &&
-          event.durationMs >= 0,
-      ),
-    );
-    assert.deepEqual(
-      completed.work.media.selection.destinations.map((entry) => entry.role),
-      ["model", "metadata"],
-    );
-    git(target.checkout, "fetch", "origin", "main");
-    const pointer = git(
-      target.checkout,
-      "show",
-      `${completed.integratedSha}:approved/model.bin`,
-    );
-    assert.match(pointer, /oid sha256:/);
-    const clone = join(root, "hydrated");
-    execFileSync("git", ["clone", "--no-checkout", target.origin, clone], {
-      stdio: "ignore",
-    });
-    git(clone, "lfs", "install", "--local");
-    git(clone, "checkout", "--detach", completed.integratedSha);
-    git(clone, "lfs", "pull");
-    assert.deepEqual(
-      readFileSync(join(clone, "approved/model.bin")),
-      selectedModel,
-    );
-    assert.equal(
-      readFileSync(join(clone, "approved/metadata.json"), "utf8"),
-      '{"candidate":"b"}\n',
-    );
-    assert.equal(
-      readFileSync(join(clone, "approved/consumed.txt"), "utf8"),
-      `model:${selectedModel.toString("hex")}\nmetadata:${Buffer.from('{"candidate":"b"}\n').toString("hex")}\n`,
-    );
-    const tampered = structuredClone(completed);
-    tampered.finalValidation.hydrationReceipt.members[0].observedDigest =
-      "0".repeat(64);
-    assert.throws(
-      () =>
-        parseFactoryState(tampered, descriptor.config.repository, objective),
-      /hydration receipt differs/,
-    );
+
+    for (let attempt = 0; attempt < 2; attempt++) {
+      if (attempt)
+        git(target.checkout, "remote", "set-url", "origin", target.origin);
+      await assert.rejects(application.runObjective(objective), (error) => {
+        assert.equal(
+          error.message,
+          attempt
+            ? "Objective stopped: Fresh-clone hydration verification failed during clone. Use explicit retry or operator direction."
+            : "Fresh-clone hydration verification failed during clone",
+        );
+        assert.doesNotMatch(error.message, /arbitrary-secret|private-origin/);
+        return true;
+      });
+      const failed = readState(descriptor.config.repository, objective);
+      assert.equal(failed.finalAcceptancePending, undefined);
+      assert.equal(failed.finalAcceptanceDecisions, undefined);
+      assert.equal(failed.finalValidation, undefined);
+      assert.equal(failed.objectiveClosure, undefined);
+      assert.equal(
+        failed.error,
+        attempt
+          ? "Objective stopped: Fresh-clone hydration verification failed during clone. Use explicit retry or operator direction."
+          : "Fresh-clone hydration verification failed during clone",
+      );
+      assert.equal(github.state().closedIssues[objective], undefined);
+      assert.doesNotMatch(
+        JSON.stringify(failed),
+        /arbitrary-secret|private-origin/,
+      );
+      const timeline = readDiagnostics(descriptor.config.repository, objective);
+      assert.ok(
+        timeline.some(
+          (event) =>
+            event.operation === "media-hydration-verification" &&
+            event.outcome === "failed",
+        ),
+      );
+      assert.equal(
+        timeline.some(
+          (event) => event.operation === "objective-acceptance-review",
+        ),
+        false,
+      );
+      assert.doesNotMatch(
+        JSON.stringify(timeline),
+        /arbitrary-secret|private-origin/,
+      );
+    }
   });
 });
 
