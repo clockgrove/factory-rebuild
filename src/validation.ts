@@ -115,6 +115,68 @@ export function workItemReviewObservations(
           })),
         }
       : null;
+  const contentRef = (ref: CapturedAssetSet["members"][number]["ref"]) => ({
+    digest: ref.digest,
+    bytes: ref.bytes,
+    mediaType: ref.mediaType,
+  });
+  const provenance = (asset: CapturedAssetSet) => ({
+    source: asset.provenance.source,
+    rights: asset.provenance.rights,
+    visibility: asset.provenance.visibility,
+    lineage: asset.provenance.lineage,
+  });
+  const selectedAssetObservation = (asset: CapturedAssetSet) => ({
+    id: asset.id,
+    ...(asset.inputs && {
+      inputs: asset.inputs.map((input) => ({
+        binding: {
+          ...(input.binding.kind && { kind: input.binding.kind }),
+          path: input.binding.path,
+          role: input.binding.role,
+          mediaType: input.binding.mediaType,
+          visibility: input.binding.visibility,
+        },
+        ref: contentRef(input.ref),
+      })),
+    }),
+    members: asset.members.map((member) => ({
+      role: member.role,
+      ref: contentRef(member.ref),
+      destination: member.destination,
+      ...(member.formatMetadata && {
+        formatMetadata: {
+          source: member.formatMetadata.source,
+          values: member.formatMetadata.values,
+        },
+      }),
+    })),
+    ...(asset.relationships && {
+      relationships: asset.relationships.map((relationship) => ({
+        from: relationship.from,
+        toRole: relationship.toRole,
+        kind: relationship.kind,
+      })),
+    }),
+    provenance: provenance(asset),
+    ...(asset.production && {
+      production: {
+        ...(asset.production.model && { model: asset.production.model }),
+        ...(asset.production.tool && { tool: asset.production.tool }),
+        ...(asset.production.request !== undefined && {
+          request: asset.production.request,
+        }),
+        ...(asset.production.parameters !== undefined && {
+          parameters: asset.production.parameters,
+        }),
+      },
+    }),
+    evidence: {
+      harnessIdentity: asset.evidence.harnessIdentity,
+      resultDigest: asset.evidence.resultDigest,
+    },
+    ...(asset.capture && { capture: captureReceipt(asset) }),
+  });
   const criterionText = item.acceptance.join("\n");
   const namedByCriterion = (id: string): boolean => {
     const escaped = id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -158,12 +220,7 @@ export function workItemReviewObservations(
     }),
     assetCaptureReceipts: (current.assets ?? []).map(captureReceipt),
     selectedAsset: selectedAsset
-      ? {
-          ...selectedAsset,
-          ...(selectedAsset.capture && {
-            capture: captureReceipt(selectedAsset),
-          }),
-        }
+      ? selectedAssetObservation(selectedAsset)
       : null,
     assetSelectionReceipt:
       selectedAsset && current.selection

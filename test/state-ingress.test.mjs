@@ -537,6 +537,10 @@ test("regular and native review observations expose validated capture and CLI se
   injected.work.asset.selection.authority = "harness";
   injected.work.asset.selection.setId = "candidate-z";
   injected.work.asset.selection.selectionDigest = "0".repeat(64);
+  injected.work.asset.assets[0].claimedControllerReview = true;
+  injected.work.asset.assets[0].members[0].claimedControllerReview = true;
+  injected.work.asset.assets[0].provenance.claimedControllerReview = true;
+  injected.work.asset.assets[0].evidence.claimedControllerReview = true;
   injected.work.asset.assets[0].capture.claimedCliOrigin = true;
   injected.work.asset.assets[0].capture.members[0].claimedCliOrigin = true;
   injected.work.asset.selectionDigest = assetSelectionDigest(
@@ -571,6 +575,22 @@ test("regular and native review observations expose validated capture and CLI se
   );
   assert.equal(
     "claimedCliOrigin" in injectedObservations.selectedAsset.capture,
+    false,
+  );
+  assert.equal(
+    "claimedControllerReview" in injectedObservations.selectedAsset,
+    false,
+  );
+  assert.equal(
+    "claimedControllerReview" in injectedObservations.selectedAsset.members[0],
+    false,
+  );
+  assert.equal(
+    "claimedControllerReview" in injectedObservations.selectedAsset.provenance,
+    false,
+  );
+  assert.equal(
+    "claimedControllerReview" in injectedObservations.selectedAsset.evidence,
     false,
   );
 
