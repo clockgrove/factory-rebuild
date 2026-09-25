@@ -2,7 +2,7 @@
 
 This file records public releases of Factory. See [BUILD-STATUS.md](docs/BUILD-STATUS.md) for development acceptance evidence.
 
-## Unreleased
+## 0.1.11 — 2026-09-25
 
 - Default planner and reviewer execution to `gpt-5.6-sol` with medium reasoning, and Work Item execution to `gpt-5.6-luna` with medium reasoning, while preserving independent explicit overrides for every role.
 - Stream provider-neutral diagnostics for compile and review model invocations, preserving explicit model policy, provider progress, supplied token/cache usage, safe request/response digests, and parse or semantic rejection reasons.
