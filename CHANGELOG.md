@@ -7,6 +7,7 @@ This file records public releases of Factory. See [BUILD-STATUS.md](docs/BUILD-S
 - Default planner and reviewer execution to `gpt-5.6-sol` with medium reasoning, and Work Item execution to `gpt-5.6-luna` with medium reasoning, while preserving independent explicit overrides for every role.
 - Stream provider-neutral diagnostics for compile and review model invocations, preserving explicit model policy, provider progress, supplied token/cache usage, safe request/response digests, and parse or semantic rejection reasons.
 - Add `factory diagnostics --summary` with per-Objective, phase, and invocation-scope counts, explicit unavailable usage, available token totals, and cache-read numerator/denominator.
+- Constrain graph-review finding sources to the exact supplied path enum so heading-qualified aliases cannot produce invalid independent-review evidence.
 
 ## 0.1.10 — 2026-09-24
 

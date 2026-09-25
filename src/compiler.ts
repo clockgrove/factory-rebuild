@@ -335,7 +335,10 @@ export class CodexPlanningModel implements PlanningModel {
       question: string;
     }[];
   }> {
-    const prompt = `Independently review this complete proposed Factory plan against the exact pinned Objective and source packet. The Work Item graph, command-authority receipts, and final integrated-head commands are one review surface. Check every Objective obligation, unsupported scope, citations, dependencies, path/resource ownership, observable acceptance, exact command authority, and final validation. The separate Final commands and Command authority receipts sections are authoritative supervisor fields outside the inner WorkGraph; do not report them missing when they are present there. Return only material findings with the supplied source path and a short exact quote from that source. Give a specific operator question for unresolved authority. Do not edit the plan or grant authority. A clean plan has an empty findings array.\n\nObjective:\n${request.objective}\nBase: ${request.baseSha}\nSources:\n${request.sources.map((s) => `--- ${s.path} ---\n${s.content}`).join("\n")}\nGraph:\n${JSON.stringify(request.graph)}\nCommand authority receipts:\n${JSON.stringify(request.commands)}\nFinal commands:\n${JSON.stringify(request.finalCommands)}`;
+    const sourcePaths = [
+      ...new Set(request.sources.map((source) => source.path)),
+    ];
+    const prompt = `Independently review this complete proposed Factory plan against the exact pinned Objective and source packet. The Work Item graph, command-authority receipts, and final integrated-head commands are one review surface. Check every Objective obligation, unsupported scope, citations, dependencies, path/resource ownership, observable acceptance, exact command authority, and final validation. The separate Final commands and Command authority receipts sections are authoritative supervisor fields outside the inner WorkGraph; do not report them missing when they are present there. Return only material findings with a short exact quote from the cited source. For each finding, set source to exactly one value from this supplied-path JSON list: ${JSON.stringify(sourcePaths)}. Do not append a heading, section name, separator, or explanation to that value. Give a specific operator question for unresolved authority. Do not edit the plan or grant authority. A clean plan has an empty findings array.\n\nObjective:\n${request.objective}\nBase: ${request.baseSha}\nSources:\n${request.sources.map((s) => `--- ${s.path} ---\n${s.content}`).join("\n")}\nGraph:\n${JSON.stringify(request.graph)}\nCommand authority receipts:\n${JSON.stringify(request.commands)}\nFinal commands:\n${JSON.stringify(request.finalCommands)}`;
     return this.runStructured({
       selection: this.reviewer,
       prompt,
@@ -350,7 +353,7 @@ export class CodexPlanningModel implements PlanningModel {
             items: {
               type: "object",
               properties: {
-                source: { type: "string" },
+                source: { type: "string", enum: sourcePaths },
                 quote: { type: "string" },
                 detail: { type: "string" },
                 question: { type: "string" },
