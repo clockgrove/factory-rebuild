@@ -2,6 +2,12 @@
 
 This file records public releases of Factory. See [BUILD-STATUS.md](docs/BUILD-STATUS.md) for development acceptance evidence.
 
+## 0.1.14 — 2026-09-25
+
+- Emit controller-owned capture receipts only after Factory verifies every complete candidate member beneath `.factory-media/`, and bind optional `.factory-assets.json` provenance only after a descriptor-based regular-file read matches the harness declaration exactly.
+- Emit controller-owned selection receipts with fixed CLI/application invocation provenance, selected-set identity, exact destinations, actor, time, optional reason, and downstream bindings.
+- Bound every authoritative receipt and selected-asset review observation to its validated schema, strip unknown persisted claims, preserve provider-neutral non-manifest harnesses and documented harness metadata, and treat absent legacy evidence as non-proof.
+
 ## 0.1.13 — 2026-09-25
 
 - Hydrate only the selected required-LFS members from Factory's verified local content store into exact-tree validation worktrees, verify their committed pointer and restored SHA-256/size before target commands, and fail closed before command zero when local selected bytes are missing or corrupt.
