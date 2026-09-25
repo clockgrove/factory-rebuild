@@ -577,6 +577,14 @@ export class StatefulGitHubFake {
       git(directory, "checkout", "main");
       git(
         directory,
+        "-c",
+        "filter.lfs.process=",
+        "-c",
+        "filter.lfs.clean=cat",
+        "-c",
+        "filter.lfs.smudge=cat",
+        "-c",
+        "filter.lfs.required=false",
         "merge",
         "--no-ff",
         `origin/${branch}`,
