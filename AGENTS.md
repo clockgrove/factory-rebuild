@@ -14,6 +14,40 @@ The installed local harness seam and its second-provider proof are trunk issue #
 
 Start from the current issue's outcome and the relevant section of the public plan. A finding is a blocker only when it prevents that path; record useful follow-ups without making them blockers. Stop when accepted behavior and focused validation pass. The target repository owns product requirements, documentation authority, commands, branch protection, and Objective exit conditions. Work Item completion does not imply Objective completion.
 
+## GitHub issue hygiene
+
+Treat issue metadata as part of issue creation, not as optional cleanup. Before opening a Factory contributor issue, search both open and closed issues for the behavior and exact error. Prefer updating an existing issue when its accepted scope covers the finding. When a closed predecessor or active parent only partially covers it, file a focused follow-up and link the predecessor, parent tracking issue, relevant pull request, and durable public reproduction. Do not publish private adopter content, credentials, raw model prompts or responses, or local-only evidence.
+
+The repository's [Development Objective form](.github/ISSUE_TEMPLATE/objective.yml) is for an Objective in the repository that owns target work; it is not the template for Factory implementation findings. Use this minimum structure for a Factory contributor issue, adapting headings only when the subject genuinely requires it:
+
+```markdown
+## Outcome
+
+State the user- or operator-visible result, not an implementation task.
+
+## Reproducible gap
+
+Give the current behavior, exact public identities or evidence, and why existing issues do not already resolve it.
+
+## Acceptance
+
+- List observable behavior and focused regression coverage.
+- Preserve relevant safety, authority, privacy, and compatibility invariants.
+
+## Non-goals
+
+- Bound adjacent work, retries, migrations, provider changes, and release claims.
+```
+
+Apply metadata in the same operation whenever the interface permits it. Every issue must normally have exactly one delivery-scope label:
+
+- `trunk` for a required vertical slice or correction on the shippable Factory path;
+- `branch` for a named post-trunk capability branch;
+- `leaf` for bounded optional follow-up work after trunk;
+- `release-gate` for acceptance or adopter evidence with no Factory implementation scope.
+
+Add `bug`, `enhancement`, `decision`, or `blocked` only when each label adds accurate information; those labels do not replace the delivery-scope label. Use a milestone, project, or assignee when the operator names one or when the active parent and neighboring issues establish that convention; do not invent one. After creation, inspect the issue's title, body, state, labels, milestone, project items, assignees, and links. Do not report the issue as filed until the body and metadata are verified. If later evidence changes scope, update the issue and its metadata together.
+
 ## Design
 
 Build successive vertical slices. Define narrow contracts for the named variation points: PlanningModel, ExecutionDriver, AgentHarness, SandboxProvider, DeliveryStrategy, ContentStore, and GitHubGateway. Compose only implementations needed by the current slice. Do not abstract the state store, scheduler, lifecycle, validator, runner, Git model, or controller host.
