@@ -22,6 +22,7 @@ import type {
   ProducedAssetSet,
   SourceAssetBinding,
   SelectedAssetInput,
+  ValidationLfsMember,
   WorkItem,
 } from "./contracts.js";
 import type { FactoryState } from "./state.js";
@@ -642,6 +643,64 @@ export function selectedInputsForItem(
     }
   }
   return inputs;
+}
+
+function selectedRequiredLfsMembers(
+  state: FactoryState,
+  itemIds: ReadonlySet<string>,
+): ValidationLfsMember[] {
+  const members: ValidationLfsMember[] = [];
+  for (const item of state.graph.items) {
+    if (!itemIds.has(item.id)) continue;
+    const work = state.work[item.id];
+    if (!work?.selectedAssetSet) continue;
+    const set = work.assets?.find(
+      (candidate) => candidate.id === work.selectedAssetSet,
+    );
+    if (!set || work.selectionDigest !== assetSelectionDigest(set))
+      throw new Error(`Selected asset binding from ${item.id} is invalid`);
+    const requiredRoles = new Set(item.requiredLfsRoles ?? []);
+    for (const member of set.members) {
+      if (!requiredRoles.has(member.role)) continue;
+      members.push({
+        itemId: item.id,
+        setId: set.id,
+        role: member.role,
+        destination: member.destination,
+        digest: member.ref.digest,
+        bytes: member.ref.bytes,
+        mediaType: member.ref.mediaType,
+      });
+    }
+  }
+  return members;
+}
+
+/** Selected required-LFS bytes present in this Work Item's dependency tree. */
+export function validationLfsMembersForItem(
+  state: FactoryState,
+  item: WorkItem,
+): ValidationLfsMember[] {
+  const items = new Map(state.graph.items.map((entry) => [entry.id, entry]));
+  const relevant = new Set<string>();
+  const visit = (id: string): void => {
+    if (relevant.has(id)) return;
+    relevant.add(id);
+    for (const dependency of items.get(id)?.dependencies ?? [])
+      visit(dependency);
+  };
+  visit(item.id);
+  return selectedRequiredLfsMembers(state, relevant);
+}
+
+/** Every selected required-LFS member expected in the integrated Objective tree. */
+export function finalValidationLfsMembers(
+  state: FactoryState,
+): ValidationLfsMember[] {
+  return selectedRequiredLfsMembers(
+    state,
+    new Set(state.graph.items.map((item) => item.id)),
+  );
 }
 
 export interface HydrationReceipt {

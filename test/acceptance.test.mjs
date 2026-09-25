@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import {
   chmodSync,
   existsSync,
@@ -31,6 +32,7 @@ import {
   factoryConfig,
   git,
 } from "./support/integration-fixture.mjs";
+import { LocalContentStore } from "../dist/content/local.js";
 
 function item(baseSha, validation) {
   return {
@@ -729,6 +731,116 @@ test("a newly declared script cannot smuggle a lifecycle hook", async () => {
       /new script check cannot add lifecycle hook precheck/,
     );
   });
+});
+
+test("validation fails closed before commands when selected LFS bytes are unavailable or corrupt", async () => {
+  const selected = Buffer.from("selected validation bytes\u0000\u0001", "utf8");
+  await withTarget(
+    "missing-validation-lfs",
+    { "assets/selected.bin": selected },
+    async (root, target) => {
+      git(target.checkout, "lfs", "install", "--local");
+      writeFileSync(
+        join(target.checkout, ".gitattributes"),
+        "assets/*.bin filter=lfs diff=lfs merge=lfs -text\n",
+      );
+      git(target.checkout, "add", ".gitattributes");
+      git(target.checkout, "add", "--renormalize", "assets/selected.bin");
+      git(
+        target.checkout,
+        "-c",
+        "user.name=Factory Test",
+        "-c",
+        "user.email=factory-test@example.com",
+        "commit",
+        "-m",
+        "Store selected asset in LFS",
+      );
+      const commit = git(target.checkout, "rev-parse", "HEAD");
+      const treeSha = git(target.checkout, "rev-parse", "HEAD^{tree}");
+      const digest = createHash("sha256").update(selected).digest("hex");
+      const object = join(
+        target.checkout,
+        ".git",
+        "lfs",
+        "objects",
+        digest.slice(0, 2),
+        digest.slice(2, 4),
+        digest,
+      );
+      assert.equal(existsSync(object), true);
+      rmSync(object);
+      const commandMarker = join(root, "validation-command-ran");
+      const contentStore = new LocalContentStore(join(root, "content"));
+      await assert.rejects(
+        validateTree(
+          target.checkout,
+          join(root, "validation"),
+          commit,
+          treeSha,
+          [`touch '${commandMarker}'`],
+          undefined,
+          undefined,
+          [
+            {
+              itemId: "media",
+              setId: "candidate-a",
+              role: "model",
+              destination: "assets/selected.bin",
+              digest,
+              bytes: selected.length,
+              mediaType: "application/octet-stream",
+            },
+          ],
+          contentStore,
+        ),
+        /Validation could not restore selected LFS bytes: assets\/selected\.bin/,
+      );
+      assert.equal(existsSync(commandMarker), false);
+
+      const corruptRoot = join(root, "corrupt-content");
+      const corruptStore = new LocalContentStore(corruptRoot);
+      const stored = await corruptStore.put(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(selected);
+            controller.close();
+          },
+        }),
+        { mediaType: "application/octet-stream" },
+      );
+      assert.equal(stored.digest, digest);
+      writeFileSync(
+        join(corruptRoot, digest.slice(0, 2), digest),
+        Buffer.alloc(selected.length, 0x78),
+      );
+      await assert.rejects(
+        validateTree(
+          target.checkout,
+          join(root, "corrupt-validation"),
+          commit,
+          treeSha,
+          [`touch '${commandMarker}'`],
+          undefined,
+          undefined,
+          [
+            {
+              itemId: "media",
+              setId: "candidate-a",
+              role: "model",
+              destination: "assets/selected.bin",
+              digest,
+              bytes: selected.length,
+              mediaType: "application/octet-stream",
+            },
+          ],
+          corruptStore,
+        ),
+        /Validation could not restore selected LFS bytes: assets\/selected\.bin/,
+      );
+      assert.equal(existsSync(commandMarker), false);
+    },
+  );
 });
 
 test("result review auto-accepts sourced evidence, otherwise asks one exact-tree decision", async () => {
