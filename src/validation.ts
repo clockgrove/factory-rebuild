@@ -26,6 +26,7 @@ import {
   pinnedGitEnvironment,
   sanitizedWorkerEnvironment,
 } from "./process.js";
+import type { HydrationReceipt } from "./media.js";
 
 export interface CriterionEvidence {
   criterion: string;
@@ -55,6 +56,7 @@ export class AcceptanceDecisionRequired extends Error {
 export interface ValidationEvidence {
   treeSha: string;
   commands: ValidationCommandReceipt[];
+  hydrationReceipt?: HydrationReceipt;
   criteria?: CriterionEvidence[];
 }
 

@@ -14,6 +14,10 @@ import { Codex } from "@openai/codex-sdk";
 import { CodexPlanningModel } from "../dist/compiler.js";
 import * as configModule from "../dist/config.js";
 import {
+  CONTROLLER_CAPABILITIES_DIGEST,
+  installedControllerCapabilities,
+} from "../dist/controller-capabilities.js";
+import {
   claudeWorkerEnvironment,
   claudeWorkerInput,
 } from "../dist/execution/claude.js";
@@ -87,6 +91,46 @@ test("shared worker prompt preserves exact controller validation constraints", (
   assert.match(prompt, /Controller-run validation constraints/);
   assert.match(prompt, /Factory, not the worker, executes/);
   for (const check of checks) assert.ok(prompt.includes(JSON.stringify(check)));
+});
+
+test("shared worker prompt preserves controller-owned media destinations", () => {
+  const prompt = workItemPrompt({
+    worktree: "/tmp/factory-shared-media-prompt-test",
+    sourceAssets: [
+      {
+        binding: {
+          kind: "repository",
+          path: "assets/source.png",
+          role: "image",
+          mediaType: "image/png",
+          visibility: "repository",
+        },
+        ref: { digest: "a".repeat(64), bytes: 77 },
+      },
+    ],
+    item: {
+      id: "shared-media-prompt",
+      title: "Stage an exact media candidate",
+      goal: "Preserve the repository source bytes.",
+      acceptance: ["The staged candidate is byte-identical."],
+      nonGoals: ["Do not materialize the final destination."],
+      citations: [{ path: "OBJECTIVE" }],
+      dependencies: [],
+      ownedPaths: ["assets/source.png"],
+      validation: [],
+      brief: "Stage one bounded candidate.",
+      expectedOutputRoles: ["image"],
+      minimumAssetSets: 1,
+      requiredLfsRoles: ["image"],
+    },
+  });
+
+  assert.match(
+    prompt,
+    /Do not write, remove, or otherwise change final destinations directly/,
+  );
+  assert.match(prompt, /controller owns final selected-set materialization/i);
+  assert.match(prompt, /authorized byte-identical same-path LFS replacement/);
 });
 
 test("package root exports only role-specific model defaults", () => {
@@ -1087,6 +1131,8 @@ test("Codex adapter passes phase selections to every planning and review thread"
       objective: "private-objective-marker",
       baseSha,
       sources: [{ path: "OBJECTIVE", content: "private-source-marker" }],
+      controllerCapabilities: installedControllerCapabilities(),
+      controllerCapabilitiesDigest: CONTROLLER_CAPABILITIES_DIGEST,
       schema: { type: "object" },
       invocation: invocation("compile", 0),
     });
@@ -1111,6 +1157,8 @@ test("Codex adapter passes phase selections to every planning and review thread"
       graph: { objective: 1, baseSha, items: [] },
       commands: [],
       finalCommands: [],
+      controllerCapabilities: installedControllerCapabilities(),
+      controllerCapabilitiesDigest: CONTROLLER_CAPABILITIES_DIGEST,
       invocation: invocation("graph-review", 0),
     });
     const treeSha = "b".repeat(40);
@@ -1162,6 +1210,19 @@ test("Codex adapter passes phase selections to every planning and review thread"
       /Do not append a heading, section name, separator, or explanation/,
     );
     assert.match(captured[1].prompt, /return exactly \{"findings":\[\]\}/);
+    assert.match(captured[0].prompt, /immutable supervisor guarantees/);
+    assert.match(
+      captured[0].prompt,
+      new RegExp(CONTROLLER_CAPABILITIES_DIGEST),
+    );
+    assert.match(
+      captured[1].prompt,
+      /immutable Factory controller capabilities/,
+    );
+    assert.match(
+      captured[1].prompt,
+      new RegExp(CONTROLLER_CAPABILITIES_DIGEST),
+    );
     assert.match(
       captured[1].prompt,
       /do not emit advisory observations, confirmations, or speculative questions/,
@@ -1174,6 +1235,7 @@ test("Codex adapter passes phase selections to every planning and review thread"
     assert.match(captured[2].prompt, /stable zero-based index/);
     assert.match(captured[2].prompt, /Work Item Git delta: one/);
     assert.match(captured[2].prompt, /supervisor item delta/);
+    assert.match(captured[2].prompt, /Controller hydration receipt/);
     assert.match(captured[2].prompt, new RegExp(treeSha));
     for (const [index, phase] of [
       "compile",
@@ -1271,6 +1333,8 @@ test("Codex adapter reports unavailable usage, malformed output, and provider fa
         objective: "objective",
         baseSha: "a".repeat(40),
         sources: [],
+        controllerCapabilities: installedControllerCapabilities(),
+        controllerCapabilitiesDigest: CONTROLLER_CAPABILITIES_DIGEST,
         schema: { type: "object" },
         invocation: {
           invocationId: "malformed",
@@ -1298,6 +1362,8 @@ test("Codex adapter reports unavailable usage, malformed output, and provider fa
         graph: { objective: 1, baseSha: "a".repeat(40), items: [] },
         commands: [],
         finalCommands: [],
+        controllerCapabilities: installedControllerCapabilities(),
+        controllerCapabilitiesDigest: CONTROLLER_CAPABILITIES_DIGEST,
         invocation: {
           invocationId: "provider-failure",
           phase: "graph-review",
@@ -1319,6 +1385,8 @@ test("Codex adapter reports unavailable usage, malformed output, and provider fa
       graph: { objective: 1, baseSha: "a".repeat(40), items: [] },
       commands: [],
       finalCommands: [],
+      controllerCapabilities: installedControllerCapabilities(),
+      controllerCapabilitiesDigest: CONTROLLER_CAPABILITIES_DIGEST,
       invocation: {
         invocationId: "usage-unavailable",
         phase: "graph-review",
@@ -1336,6 +1404,8 @@ test("Codex adapter reports unavailable usage, malformed output, and provider fa
         objective: "objective",
         baseSha: "a".repeat(40),
         sources: [],
+        controllerCapabilities: installedControllerCapabilities(),
+        controllerCapabilitiesDigest: CONTROLLER_CAPABILITIES_DIGEST,
         schema: { type: "object" },
         invocation: {
           invocationId: "setup-failure",

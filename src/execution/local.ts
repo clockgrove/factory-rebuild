@@ -17,6 +17,7 @@ import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import type {
   AgentHarness,
+  CapturedAssetSet,
   ContentRef,
   ContentStore,
   ExecutionDriver,
@@ -306,6 +307,40 @@ function assertDurableHandle(handle: HarnessHandle): void {
     assertDurableValue(handle.data, "Harness handle data");
 }
 
+async function preserveControllerAssetDestinations(
+  worktree: string,
+  assets: CapturedAssetSet[],
+): Promise<string[]> {
+  const destinations = [
+    ...new Set(
+      assets.flatMap((set) => set.members.map((member) => member.destination)),
+    ),
+  ];
+  for (const destination of destinations) {
+    const source = assets
+      .flatMap((set) => set.inputs ?? [])
+      .find(
+        (input) =>
+          (input.binding.kind ?? "repository") === "repository" &&
+          input.binding.path === destination,
+      );
+    const path = join(worktree, destination);
+    if (!existsSync(path)) {
+      if (source)
+        throw new Error(
+          `Worker removed controller-owned asset destination ${destination}`,
+        );
+      continue;
+    }
+    if (!source)
+      throw new Error(
+        `Worker wrote controller-owned asset destination ${destination}`,
+      );
+    await verifyBoundInput(path, source.ref);
+  }
+  return destinations;
+}
+
 export class LocalExecutionDriver implements ExecutionDriver {
   private active = new Map<string, Active>();
 
@@ -492,7 +527,13 @@ export class LocalExecutionDriver implements ExecutionDriver {
         throw new Error(
           "Media Work Item did not produce the requested AssetSets",
         );
+      const assetDestinations = await preserveControllerAssetDestinations(
+        active.worktree,
+        assets,
+      );
       pinnedGit(active.worktree, "add", "-A");
+      if (assetDestinations.length)
+        pinnedGit(active.worktree, "reset", "HEAD", "--", ...assetDestinations);
       const paths = checkStagedCandidate(
         active.worktree,
         this.checkout,

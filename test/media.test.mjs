@@ -3,10 +3,12 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   cpSync,
+  existsSync,
   mkdtempSync,
   mkdirSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -143,6 +145,241 @@ test("harness AssetSet manifest rejects missing member bindings", () => {
       ]),
     /binding is incomplete/,
   );
+});
+
+test("an exact repository source can migrate its existing path to required LFS without worker deletion", async () => {
+  const root = mkdtempSync(join(tmpdir(), "factory-same-path-lfs-"));
+  try {
+    const checkout = join(root, "target");
+    mkdirSync(join(checkout, "approved"), { recursive: true });
+    git(checkout, "init", "-b", "main");
+    const destination = "approved/original.bin";
+    const bytes = Buffer.from([0, 81, 0, 255, 14, 92]);
+    writeFileSync(join(checkout, destination), bytes);
+    git(checkout, "add", destination);
+    git(
+      checkout,
+      "-c",
+      "user.name=Test",
+      "-c",
+      "user.email=test@example.com",
+      "commit",
+      "-m",
+      "ordinary source",
+    );
+    writeFileSync(
+      join(checkout, ".gitattributes"),
+      "approved/*.bin filter=lfs diff=lfs merge=lfs -text\n",
+    );
+    git(checkout, "add", ".gitattributes");
+    git(
+      checkout,
+      "-c",
+      "user.name=Test",
+      "-c",
+      "user.email=test@example.com",
+      "commit",
+      "-m",
+      "require LFS",
+    );
+    const baseCommit = git(checkout, "rev-parse", "HEAD");
+    const item = {
+      id: "same-path",
+      ownedPaths: [destination],
+      sourceAssets: [
+        {
+          kind: "repository",
+          path: destination,
+          role: "original",
+          mediaType: "application/octet-stream",
+          visibility: "repository",
+        },
+      ],
+      requiredLfsRoles: ["model"],
+    };
+    const store = new LocalContentStore(join(root, "content"));
+    const inputs = await importSourceAssets(store, checkout, item);
+    const set = {
+      id: "byte-identical",
+      members: [
+        {
+          role: "model",
+          ref: inputs[0].ref,
+          destination,
+        },
+      ],
+      inputs,
+      provenance: {
+        source: destination,
+        rights: "repository fixture",
+        visibility: "repository",
+        lineage: [inputs[0].ref.digest],
+      },
+      evidence: { harnessIdentity: "fixture", resultDigest: "fixture" },
+    };
+
+    const result = await materializeAssetSet({
+      checkout,
+      workRoot: join(root, "worktrees"),
+      baseCommit,
+      item,
+      set,
+      store,
+    });
+    const pointer = git(checkout, "show", `${result.changeRef}:${destination}`);
+    assert.match(pointer, /version https:\/\/git-lfs.github.com\/spec\/v1/);
+    assert.match(pointer, new RegExp(inputs[0].ref.digest));
+    assert.match(pointer, new RegExp(`size ${bytes.length}`));
+
+    await assert.rejects(
+      materializeAssetSet({
+        checkout,
+        workRoot: join(root, "worktrees"),
+        baseCommit,
+        item,
+        set: { ...set, inputs: [] },
+        store,
+      }),
+      /would overwrite approved\/original\.bin/,
+    );
+    const changedPath = join(root, "changed.bin");
+    writeFileSync(changedPath, Buffer.from([9, 8, 7]));
+    const changedRef = await store.importFile(changedPath, {
+      mediaType: "application/octet-stream",
+    });
+    await assert.rejects(
+      materializeAssetSet({
+        checkout,
+        workRoot: join(root, "worktrees"),
+        baseCommit,
+        item,
+        set: {
+          ...set,
+          members: [{ ...set.members[0], ref: changedRef }],
+        },
+        store,
+      }),
+      /would overwrite approved\/original\.bin/,
+    );
+    await assert.rejects(
+      materializeAssetSet({
+        checkout,
+        workRoot: join(root, "worktrees"),
+        baseCommit,
+        item: { ...item, requiredLfsRoles: [] },
+        set,
+        store,
+      }),
+      /would overwrite approved\/original\.bin/,
+    );
+    assert.deepEqual(readFileSync(join(checkout, destination)), bytes);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("asset materialization rejects symlink parents and submodule boundaries before writing", async () => {
+  const root = mkdtempSync(join(tmpdir(), "factory-media-boundary-"));
+  try {
+    const checkout = join(root, "target");
+    const outside = join(root, "outside");
+    mkdirSync(checkout);
+    mkdirSync(outside);
+    git(checkout, "init", "-b", "main");
+    symlinkSync(outside, join(checkout, "linked"));
+    writeFileSync(join(checkout, "README.md"), "boundary fixture\n");
+    git(checkout, "add", "README.md", "linked");
+    git(
+      checkout,
+      "-c",
+      "user.name=Test",
+      "-c",
+      "user.email=test@example.com",
+      "commit",
+      "-m",
+      "symlink boundary",
+    );
+
+    const nested = join(root, "nested");
+    mkdirSync(nested);
+    git(nested, "init", "-b", "main");
+    writeFileSync(join(nested, "README.md"), "nested fixture\n");
+    git(nested, "add", "README.md");
+    git(
+      nested,
+      "-c",
+      "user.name=Test",
+      "-c",
+      "user.email=test@example.com",
+      "commit",
+      "-m",
+      "nested",
+    );
+    git(
+      checkout,
+      "-c",
+      "protocol.file.allow=always",
+      "submodule",
+      "add",
+      nested,
+      "vendor",
+    );
+    git(checkout, "add", ".gitmodules", "vendor");
+    git(
+      checkout,
+      "-c",
+      "user.name=Test",
+      "-c",
+      "user.email=test@example.com",
+      "commit",
+      "-m",
+      "submodule boundary",
+    );
+
+    const source = join(root, "source.bin");
+    writeFileSync(source, Buffer.from([1, 2, 3, 4]));
+    const store = new LocalContentStore(join(root, "content"));
+    const ref = await store.importFile(source, {
+      mediaType: "application/octet-stream",
+    });
+    const setFor = (destination) => ({
+      id: "candidate",
+      members: [{ role: "model", ref, destination }],
+      provenance: {
+        source: "fixture",
+        rights: "fixture",
+        visibility: "repository",
+        lineage: [ref.digest],
+      },
+      evidence: { harnessIdentity: "fixture", resultDigest: "fixture" },
+    });
+    const baseCommit = git(checkout, "rev-parse", "HEAD");
+    await assert.rejects(
+      materializeAssetSet({
+        checkout,
+        workRoot: join(root, "worktrees"),
+        baseCommit,
+        item: { id: "linked", ownedPaths: ["linked/output.bin"] },
+        set: setFor("linked/output.bin"),
+        store,
+      }),
+      /crosses a symlink/,
+    );
+    assert.equal(existsSync(join(outside, "output.bin")), false);
+    await assert.rejects(
+      materializeAssetSet({
+        checkout,
+        workRoot: join(root, "worktrees"),
+        baseCommit,
+        item: { id: "vendor", ownedPaths: ["vendor/output.bin"] },
+        set: setFor("vendor/output.bin"),
+        store,
+      }),
+      /crosses a submodule/,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("opaque 3D source and multi-file output retain bindings, relationships, metadata, and target LFS policy", async () => {

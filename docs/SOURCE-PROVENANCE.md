@@ -102,3 +102,7 @@ The Claude Agent SDK and GitHub Copilot SDK adapters were designed from their cu
 ## Role-specific Factory defaults (#59)
 
 Issue #59 and the current explicit-selection implementation supplied this change. No additional archived source or provider policy was inspected or copied. Factory now resolves planner, reviewer, and worker defaults separately at installation, persists the resulting explicit values, and keeps provider-neutral harness work in issue #55. A post-merge boundary audit rejected a shared-default compatibility alias that was not required by #59; the package root exposes only the role-specific defaults.
+
+## Controller media guarantees and same-path LFS migration (#81)
+
+Issue #81 and the current public compiler, media, delivery, validation, and atomic-state contracts supplied this correction. No additional archived source, test, receipt format, or media protocol was inspected or copied. The clean implementation adds one code-owned versioned controller-capability manifest, a narrowly authorized byte-identical repository-source-to-LFS migration at the same path, and one bounded hydration receipt inside existing final validation evidence. It does not add a second receipt journal, target command authority, provider-specific media behavior, or worker control over final destinations.

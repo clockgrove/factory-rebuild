@@ -237,6 +237,129 @@ test("LFS working bytes are scanned even when the staged blob is only a pointer"
   );
 });
 
+test("a media worker cannot mutate a controller-owned final destination", async () => {
+  const root = mkdtempSync(join(tmpdir(), "factory-media-destination-"));
+  try {
+    const checkout = join(root, "target");
+    mkdirSync(join(checkout, "approved"), { recursive: true });
+    git(checkout, "init", "-b", "main");
+    const original = Buffer.from([1, 3, 3, 7]);
+    writeFileSync(join(checkout, "approved/original.bin"), original);
+    git(checkout, "add", "approved/original.bin");
+    git(
+      checkout,
+      "-c",
+      "user.name=Fixture",
+      "-c",
+      "user.email=fixture@example.test",
+      "commit",
+      "-m",
+      "ordinary source",
+    );
+    writeFileSync(
+      join(checkout, ".gitattributes"),
+      "approved/*.bin filter=lfs diff=lfs merge=lfs -text\n",
+    );
+    git(checkout, "add", ".gitattributes");
+    git(
+      checkout,
+      "-c",
+      "user.name=Fixture",
+      "-c",
+      "user.email=fixture@example.test",
+      "commit",
+      "-m",
+      "LFS policy",
+    );
+    const harness = {
+      capabilities: {
+        protocolVersion: 1,
+        worktree: "factory-owned-read-write",
+        head: "preserve",
+        lifecycle: "restart-safe-durable-handle",
+        publication: "controller-only",
+        assetSets: true,
+        authentication: "none",
+      },
+      async start(request) {
+        writeFileSync(
+          join(request.worktree, "approved/original.bin"),
+          "worker mutation",
+        );
+        const directory = join(request.worktree, ".factory-media/candidate");
+        mkdirSync(directory, { recursive: true });
+        writeFileSync(join(directory, "model.bin"), original);
+        return { identity: request.attemptId, data: {} };
+      },
+      async observe() {
+        return { state: "complete" };
+      },
+      async cancel() {},
+      async collect() {
+        return {
+          evidence: { harness: "scripted" },
+          assets: [
+            {
+              id: "candidate",
+              members: [
+                {
+                  role: "model",
+                  path: ".factory-media/candidate/model.bin",
+                  mediaType: "application/octet-stream",
+                  destination: "approved/original.bin",
+                },
+              ],
+              provenance: {
+                source: "approved/original.bin",
+                rights: "fixture",
+                visibility: "repository",
+                lineage: ["approved/original.bin"],
+              },
+            },
+          ],
+        };
+      },
+    };
+    const driver = new LocalExecutionDriver(
+      checkout,
+      join(root, "worktrees"),
+      harness,
+      1,
+      new LocalContentStore(join(root, "content")),
+      "scripted-media-test@1",
+    );
+    const item = {
+      id: "media",
+      title: "Media fixture",
+      ownedPaths: ["approved/original.bin"],
+      sourceAssets: [
+        {
+          kind: "repository",
+          path: "approved/original.bin",
+          role: "source",
+          mediaType: "application/octet-stream",
+          visibility: "repository",
+        },
+      ],
+      expectedOutputRoles: ["model"],
+      minimumAssetSets: 1,
+      requiredLfsRoles: ["model"],
+    };
+    const handle = await driver.start({
+      attemptId: "attempt",
+      baseSha: git(checkout, "rev-parse", "HEAD"),
+      item,
+      objectiveBody: "media fixture",
+    });
+    await assert.rejects(
+      driver.collect(handle),
+      /Bound asset input differs from its captured digest/,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("operator-owned external scanner config can handle a reviewed false positive", async () => {
   const root = mkdtempSync(join(tmpdir(), "factory-secret-config-"));
   const config = join(root, "secretlint.json");
