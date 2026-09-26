@@ -535,6 +535,7 @@ export class CodexPlanningModel implements PlanningModel {
   }
 
   async reviewResult(request: {
+    reviewPhase?: "result-review" | "objective-review";
     criteria: string[];
     baseSha: string;
     treeSha: string;
@@ -556,7 +557,7 @@ export class CodexPlanningModel implements PlanningModel {
       selection: this.reviewer,
       prompt,
       invocation: request.invocation,
-      defaultPhase: "result-review",
+      defaultPhase: request.reviewPhase ?? "result-review",
       sourcePacket: JSON.stringify(promptSources),
       schema: {
         type: "object",

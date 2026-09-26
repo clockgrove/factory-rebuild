@@ -176,6 +176,7 @@ export interface PlanningModel {
     }[];
   }>;
   reviewResult?(request: {
+    reviewPhase?: "result-review" | "objective-review";
     criteria: string[];
     baseSha: string;
     treeSha: string;

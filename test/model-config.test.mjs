@@ -803,6 +803,7 @@ test("Codex adapter exhausts bounded capacity retries for final review without c
     const treeSha = "b".repeat(40);
     await assert.rejects(
       model.reviewResult({
+        reviewPhase: "objective-review",
         criteria: ["Criterion"],
         baseSha: "a".repeat(40),
         treeSha,
@@ -811,7 +812,7 @@ test("Codex adapter exhausts bounded capacity retries for final review without c
         commands: [],
         invocation: {
           invocationId: "exhausted-capacity",
-          phase: "objective-review",
+          phase: "compile",
           ordinal: 0,
           observe: (event) => observations.push(event),
         },
@@ -849,6 +850,9 @@ test("Codex adapter exhausts bounded capacity retries for final review without c
     assert.equal(
       observations.filter((event) => event.type === "failed").length,
       3,
+    );
+    assert.ok(
+      observations.every((event) => event.phase === "objective-review"),
     );
   } finally {
     Codex.prototype.startThread = original;
