@@ -814,6 +814,7 @@ export function makeApplication(descriptor) {
       github,
       delivery: new RegularDelivery(descriptor.config.checkout, github),
       contentStore,
+      reportRunStatus: descriptor.reportRunStatus,
     }),
     eventsPath,
     planningPath,
