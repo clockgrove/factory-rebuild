@@ -19,10 +19,134 @@ import {
   redactDiagnosticDetail,
   StateDiagnostics,
   summarizeModelInvocations,
+  summarizeDiagnosticUsage,
 } from "../dist/diagnostics.js";
 import { validateTree } from "../dist/validation.js";
 import { stateRoot } from "../dist/config.js";
 import { createTarget } from "./support/integration-fixture.mjs";
+
+test("worker usage separates scopes, deduplicates cumulative counters and reports coverage", () => {
+  const worker = (attemptId, type, usage, providerAttempt = 1) => ({
+    operation: "worker-usage",
+    at: "2026-01-01T00:00:00Z",
+    attemptId,
+    runId: "run",
+    workItemId: "item",
+    workerUsage: {
+      invocationId: attemptId,
+      providerAttempt,
+      type,
+      role: "worker",
+      phase: "implementation",
+      provider: "not-codex",
+      usage,
+    },
+  });
+  const model = {
+    operation: "model-invocation",
+    at: "2026-01-01T00:00:00Z",
+    metadata: {
+      invocationId: "model",
+      scopeId: "plan",
+      phase: "compile",
+      observationType: "completed",
+      usageAvailable: true,
+      inputTokens: 89961,
+      cachedInputTokens: 13696,
+      outputTokens: 5160,
+    },
+  };
+  const first = {
+    inputTokens: 300000,
+    cachedInputTokens: 280000,
+    outputTokens: 3000,
+  };
+  const second = {
+    inputTokens: 384069,
+    cachedInputTokens: 337728,
+    outputTokens: 4280,
+  };
+  const events = [
+    model,
+    worker("a", "progress", { inputTokens: 50 }),
+    worker("a", "progress", first),
+    worker("a", "completed", first),
+    worker("a", "completed", first),
+    worker("b", "failed", second),
+  ];
+  const summary = summarizeDiagnosticUsage(events);
+  assert.equal(summary.scope, "planning-and-review-model-invocations");
+  assert.deepEqual(summary.objective.tokenTotals, {
+    inputTokens: 89961,
+    cachedInputTokens: 13696,
+    outputTokens: 5160,
+  });
+  assert.deepEqual(summary.workerUsage.tokenTotals, {
+    inputTokens: 684069,
+    cachedInputTokens: 617728,
+    outputTokens: 7280,
+  });
+  assert.deepEqual(summary.combinedUsage.tokenTotals, {
+    inputTokens: 774030,
+    cachedInputTokens: 631424,
+    outputTokens: 12440,
+  });
+  assert.equal(summary.workerUsage.invocationCount, 2);
+  assert.equal(summary.workerUsage.failedCount, 1);
+  assert.equal(
+    summary.workerUsage.coverage.byCategory.inputTokens,
+    "available",
+  );
+  assert.equal(
+    summary.workerUsage.coverage.byCategory.totalTokens,
+    "unavailable",
+  );
+  assert.equal(
+    summary.combinedUsage.cacheReadRatio.denominatorInputTokens,
+    774030,
+  );
+  assert.deepEqual(summarizeDiagnosticUsage([...events, ...events]), summary);
+  const partial = summarizeDiagnosticUsage([
+    ...events,
+    worker("c", "completed", { outputTokens: 0, inputTokens: -1 }),
+    worker("d", "failed", undefined),
+    worker("e", "completed", {
+      inputTokens: 10,
+      cachedInputTokens: 20,
+      outputTokens: Infinity,
+      totalTokens: 1.5,
+    }),
+    worker("f", "failed", { inputTokens: 20 }, 1),
+    worker("f", "completed", { inputTokens: 30, cachedInputTokens: 15 }, 2),
+    worker("active", "started", {}),
+    {
+      operation: "harness",
+      attemptId: "no-telemetry",
+      outcome: "completed",
+      evidence: { usage: { inputTokens: 99999 } },
+    },
+    { operation: "turn.completed", usage: { input_tokens: 99999 } },
+  ]);
+  assert.equal(partial.workerUsage.invocationCount, 8);
+  assert.equal(partial.workerUsage.activeCount, 1);
+  assert.equal(partial.workerUsage.usageUnavailableCount, 1);
+  assert.equal(partial.workerUsage.tokenTotals.inputTokens, 684129);
+  assert.equal(partial.workerUsage.tokenTotals.outputTokens, 7280);
+  assert.equal(partial.workerUsage.coverage.unobservedAttemptCount, 1);
+  assert.equal(
+    partial.combinedUsage.coverage.byCategory.inputTokens,
+    "partial",
+  );
+  assert.equal(
+    partial.workerUsage.cacheReadRatio.denominatorInputTokens,
+    684099,
+  );
+  assert.ok(
+    Object.values(partial.workerUsage.byInvocation).every(
+      (entry) => entry.runId === "run" && entry.itemId === "item",
+    ),
+  );
+});
 
 test("private diagnostics redact secrets and validation streams command output", async () => {
   const root = mkdtempSync(join(tmpdir(), "factory-diagnostics-"));

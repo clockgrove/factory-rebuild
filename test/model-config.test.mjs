@@ -1439,8 +1439,26 @@ test("Codex worker closes completed streams and durably fails nonterminal stream
                 text: "provider prose is not terminal authority",
               },
             };
-            if (scenario === "complete") {
-              yield { type: "turn.completed", usage: null };
+            if (
+              ["complete", "partial", "no-usage", "validation-fail"].includes(
+                scenario,
+              )
+            ) {
+              yield {
+                type: "turn.completed",
+                usage:
+                  scenario === "no-usage"
+                    ? null
+                    : scenario === "partial"
+                      ? { input_tokens: 10 }
+                      : {
+                          input_tokens: 100,
+                          cached_input_tokens: 70,
+                          output_tokens: 12,
+                          cache_write_input_tokens: 4,
+                          reasoning_output_tokens: 2,
+                        },
+              };
               return;
             }
             if (scenario === "eof") return;
@@ -1454,7 +1472,14 @@ test("Codex worker closes completed streams and durably fails nonterminal stream
     };
   };
   try {
-    for (scenario of ["complete", "eof", "silent"]) {
+    for (scenario of [
+      "complete",
+      "partial",
+      "no-usage",
+      "eof",
+      "silent",
+      "validation-fail",
+    ]) {
       const inputPath = join(root, `${scenario}.request.json`);
       const resultPath = join(root, `${scenario}.result.json`);
       writeFileSync(
@@ -1487,16 +1512,58 @@ test("Codex worker closes completed streams and durably fails nonterminal stream
           providerTurnIdleTimeoutMs: 20,
         })}\n`,
       );
+      if (scenario === "validation-fail")
+        writeFileSync(join(root, ".factory-assets.json"), "not-json");
       const completed = await runCodexWorker(inputPath, resultPath);
       const result = JSON.parse(readFileSync(resultPath, "utf8"));
-      if (scenario === "complete") {
+      const observations = readFileSync(
+        resultPath.replace(/\.result\.json$/, ".progress.ndjson"),
+        "utf8",
+      )
+        .trim()
+        .split("\n")
+        .map(JSON.parse)
+        .filter((event) => event.operation === "worker-usage");
+      const terminal = observations.at(-1).workerUsage;
+      assert.equal(terminal.role, "worker");
+      assert.equal(terminal.phase, "implementation");
+      assert.equal(terminal.invocationId, `attempt-${scenario}`);
+      assert.equal(terminal.providerAttempt, 1);
+      assert.equal(terminal.model, "worker-choice");
+      assert.doesNotMatch(
+        JSON.stringify(observations),
+        /provider prose|Brief|Acceptance/,
+      );
+      if (["complete", "partial", "no-usage"].includes(scenario)) {
         assert.equal(completed, true);
         assert.equal(result.state, "complete");
-        assert.equal(closed.has("complete"), true);
+        assert.equal(closed.has(scenario), true);
+        assert.equal(terminal.type, "completed");
+        assert.deepEqual(
+          terminal.usage,
+          scenario === "no-usage"
+            ? {}
+            : scenario === "partial"
+              ? { inputTokens: 10 }
+              : {
+                  inputTokens: 100,
+                  cachedInputTokens: 70,
+                  cacheWriteInputTokens: 4,
+                  outputTokens: 12,
+                  reasoningOutputTokens: 2,
+                },
+        );
         continue;
       }
       assert.equal(completed, false);
       assert.equal(result.state, "failed");
+      assert.equal(terminal.type, "failed");
+      if (scenario === "validation-fail") {
+        assert.equal(terminal.usage.inputTokens, 100);
+        assert.equal(result.evidence, undefined);
+        continue;
+      }
+      assert.deepEqual(terminal.usage, {});
       assert.match(
         result.error,
         scenario === "eof"

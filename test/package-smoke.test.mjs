@@ -254,6 +254,40 @@ test("fresh packed artifact installs and exposes documented install/status/plan 
       "not-json\n",
       { mode: 0o600 },
     );
+    const workerAttempt = "22222222-2222-4222-8222-222222222222";
+    const diagnosticsFile = join(
+      installedPackage.stateRoot("example/package-smoke"),
+      "objectives",
+      "1",
+      "diagnostics.ndjson",
+    );
+    const { appendFileSync } = await import("node:fs");
+    appendFileSync(
+      diagnosticsFile,
+      `${JSON.stringify({
+        eventId: "worker-start",
+        at: new Date().toISOString(),
+        operation: "harness",
+        outcome: "started",
+        attemptId: workerAttempt,
+        itemId: "worker-item",
+        runId: "worker-run",
+      })}\n`,
+    );
+    const workerUsage = {
+      type: "completed",
+      invocationId: "worker-invocation",
+      providerAttempt: 1,
+      role: "worker",
+      phase: "implementation",
+      provider: "generic-harness",
+      usage: { inputTokens: 100, cachedInputTokens: 80, outputTokens: 9 },
+    };
+    writeFileSync(
+      join(unrelatedHarnessRoot, `${workerAttempt}.progress.ndjson`),
+      `${JSON.stringify({ eventId: "worker-complete", at: new Date().toISOString(), operation: "worker-usage", workerUsage })}\n`,
+      { mode: 0o600 },
+    );
     const summary = JSON.parse(
       execFileSync(
         cli,
@@ -274,6 +308,20 @@ test("fresh packed artifact installs and exposes documented install/status/plan 
       denominatorInputTokens: 22,
       value: 10 / 22,
     });
+    assert.equal(summary.scope, "planning-and-review-model-invocations");
+    assert.equal(summary.workerUsage.tokenTotals.inputTokens, 100);
+    assert.equal(summary.combinedUsage.tokenTotals.inputTokens, 122);
+    assert.equal(summary.combinedUsage.tokenTotals.cachedInputTokens, 90);
+    assert.equal(summary.combinedUsage.tokenTotals.outputTokens, 15);
+    assert.equal(summary.workerUsage.coverage.unobservedAttemptCount, 0);
+    assert.equal(
+      Object.values(summary.workerUsage.byInvocation)[0].itemId,
+      "worker-item",
+    );
+    assert.equal(
+      Object.values(summary.workerUsage.byInvocation)[0].runId,
+      "worker-run",
+    );
   } finally {
     if (previousStateRoot === undefined) delete process.env.XDG_STATE_HOME;
     else process.env.XDG_STATE_HOME = previousStateRoot;
