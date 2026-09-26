@@ -231,6 +231,13 @@ function citationChoices(
   return choices;
 }
 
+function exactStringPattern(values: string[]): string {
+  const alternatives = values.map((value) =>
+    value.replace(/[\\^$.*+?()[\]{}|]/g, "\\$&"),
+  );
+  return `^(?:${alternatives.join("|")})$`;
+}
+
 export function graphSchemaForSources(
   sources: { path: string; content: string; heading?: string }[],
 ): unknown {
@@ -256,7 +263,7 @@ export function graphSchemaForSources(
         path: { type: "string", enum: [path] },
         heading: {
           type: "string",
-          enum: headings,
+          pattern: exactStringPattern(headings),
           description:
             "Exact bare Markdown heading text without # markers, or the empty string for the whole source.",
         },

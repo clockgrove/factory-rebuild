@@ -177,7 +177,7 @@ test("compiler schema binds citations to exact supplied path and bare heading pa
       choices.some(
         (choice) =>
           choice.properties.path.enum[0] === path &&
-          choice.properties.heading.enum.includes(heading),
+          new RegExp(choice.properties.heading.pattern).test(heading),
       );
     assert.ok(allows("OBJECTIVE", "Acceptance"));
     assert.ok(allows("docs/plan.md", "Wave 0"));
@@ -190,9 +190,7 @@ test("compiler schema binds citations to exact supplied path and bare heading pa
     assert.equal(allows("docs/plan.md", "Acceptance"), false);
     assert.equal(
       choices.some((choice) =>
-        choice.properties.heading.enum.some((heading) =>
-          heading.startsWith("#"),
-        ),
+        new RegExp(choice.properties.heading.pattern).test("## Acceptance"),
       ),
       false,
     );

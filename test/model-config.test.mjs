@@ -29,6 +29,24 @@ const {
   validateConfig,
 } = configModule;
 
+function structuredOutputSchemaBudget(schema) {
+  const budget = { objectProperties: 0, enumValues: 0 };
+  const visit = (value) => {
+    if (Array.isArray(value)) {
+      for (const item of value) visit(item);
+      return;
+    }
+    if (!value || typeof value !== "object") return;
+    if (value.properties && typeof value.properties === "object") {
+      budget.objectProperties += Object.keys(value.properties).length;
+    }
+    if (Array.isArray(value.enum)) budget.enumValues += value.enum.length;
+    for (const child of Object.values(value)) visit(child);
+  };
+  visit(schema);
+  return budget;
+}
+
 test("package root exports only role-specific model defaults", () => {
   assert.equal(
     Object.hasOwn(publicModule, "DEFAULT_CODEX_MODEL_SELECTION"),
@@ -382,22 +400,22 @@ test("Codex adapter passes phase selections to every planning and review thread"
       compileCitationChoices.some(
         (choice) =>
           choice.properties.path.enum[0] === "OBJECTIVE" &&
-          choice.properties.heading.enum.includes("Acceptance"),
+          new RegExp(choice.properties.heading.pattern).test("Acceptance"),
       ),
     );
     assert.ok(
       compileCitationChoices.some(
         (choice) =>
           choice.properties.path.enum[0] === "AGENTS.md" &&
-          choice.properties.heading.enum.includes(
+          new RegExp(choice.properties.heading.pattern).test(
             "Disposable target instructions",
           ),
       ),
     );
     assert.equal(
       compileCitationChoices.some((choice) =>
-        choice.properties.heading.enum.some((heading) =>
-          heading.startsWith("#"),
+        new RegExp(choice.properties.heading.pattern).test(
+          "## Disposable target instructions",
         ),
       ),
       false,
@@ -491,6 +509,48 @@ test("Codex adapter passes phase selections to every planning and review thread"
   } finally {
     Codex.prototype.startThread = original;
   }
+});
+
+test("citation schema preserves exact headings without heading-heavy enum growth", () => {
+  const specialHeading = "Cost ($5)? [draft] | exact.*";
+  const headings = [
+    specialHeading,
+    ...Array.from({ length: 999 }, (_, index) => `Heading ${index}`),
+  ];
+  const sources = [
+    {
+      path: "docs/many.md",
+      content: headings.map((heading) => `## ${heading}\nbody`).join("\n"),
+    },
+  ];
+  const schema = graphSchemaForSources(sources);
+  const choices =
+    schema.properties.items.items.properties.citations.items.anyOf;
+  assert.equal(choices.length, 1);
+  assert.deepEqual(choices[0].properties.path.enum, ["docs/many.md"]);
+  const headingPattern = new RegExp(choices[0].properties.heading.pattern);
+  assert.equal(headingPattern.test(""), true);
+  assert.equal(headingPattern.test(specialHeading), true);
+  assert.equal(headingPattern.test("Heading 998"), true);
+  assert.equal(headingPattern.test("## Heading 998"), false);
+  assert.equal(headingPattern.test("Heading 999"), false);
+  assert.equal(headingPattern.test(`${specialHeading} extra`), false);
+
+  const smallBudget = structuredOutputSchemaBudget(
+    graphSchemaForSources([
+      { path: "docs/many.md", content: "## One heading\nbody" },
+    ]),
+  );
+  const headingHeavyBudget = structuredOutputSchemaBudget(schema);
+  assert.deepEqual(headingHeavyBudget, smallBudget);
+  assert.ok(
+    headingHeavyBudget.objectProperties <= 5_000,
+    "official Structured Outputs object-property budget",
+  );
+  assert.ok(
+    headingHeavyBudget.enumValues <= 1_000,
+    "official Structured Outputs total-enum budget",
+  );
 });
 
 test("Codex adapter reports unavailable usage, malformed output, and provider failure", async () => {
