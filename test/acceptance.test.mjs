@@ -1973,6 +1973,353 @@ test("truncated per-Work-Item evidence cannot ground an automatic pass", async (
   });
 });
 
+test("final review shares one text budget across ordinary and materialization packets", async () => {
+  await withTarget(
+    "objective-materialization-budget",
+    {},
+    async (root, target) => {
+      const makeItem = (id, title, dependencies, ownedPaths) => ({
+        id,
+        title,
+        goal: `Create ${title}`,
+        acceptance: [`${title} is complete`],
+        nonGoals: ["No deployment"],
+        citations: [{ path: "OBJECTIVE" }],
+        dependencies,
+        ownedPaths,
+        resources: [],
+        validation: [],
+        brief: `Create ${title}`,
+        sourceAssets: [],
+        expectedOutputRoles: ["text"],
+        minimumAssetSets: 1,
+        requiredLfsRoles: [],
+      });
+      const commit = (message) => {
+        git(target.checkout, "add", ".");
+        git(
+          target.checkout,
+          "-c",
+          "user.name=Factory Test",
+          "-c",
+          "user.email=factory-test@example.com",
+          "commit",
+          "-m",
+          message,
+        );
+        return {
+          sha: git(target.checkout, "rev-parse", "HEAD"),
+          tree: git(target.checkout, "rev-parse", "HEAD^{tree}"),
+        };
+      };
+      const merge = (base, result, tree, message) =>
+        git(
+          target.checkout,
+          "-c",
+          "user.name=Factory Test",
+          "-c",
+          "user.email=factory-test@example.com",
+          "commit-tree",
+          tree,
+          "-p",
+          base,
+          "-p",
+          result,
+          "-m",
+          message,
+        );
+      const selected = (id, path, content) => {
+        const bytes = Buffer.from(content);
+        const set = {
+          id,
+          members: [
+            {
+              role: "text",
+              ref: {
+                digest: createHash("sha256").update(bytes).digest("hex"),
+                bytes: bytes.length,
+                mediaType: "text/plain",
+              },
+              destination: path,
+            },
+          ],
+          provenance: {
+            source: "test fixture",
+            rights: "test fixture",
+            visibility: "repository",
+            lineage: ["test fixture"],
+          },
+          evidence: { harnessIdentity: "test", resultDigest: id },
+        };
+        return { bytes, set };
+      };
+
+      const one = makeItem(
+        "media-one",
+        "Media One",
+        [],
+        ["media-one.txt", "selected-one.txt"],
+      );
+      const selectedOne = selected(
+        "candidate-one",
+        "selected-one.txt",
+        "selected one content that exceeds the packet budget\n",
+      );
+      writeFileSync(
+        join(target.checkout, "media-one.txt"),
+        "worker one content that exceeds the packet budget\n",
+      );
+      const workerOne = commit("Factory: Media One");
+      writeFileSync(
+        join(target.checkout, "selected-one.txt"),
+        selectedOne.bytes,
+      );
+      const materializedOne = commit("Factory: selected candidate-one assets");
+      const integratedOne = merge(
+        target.baseSha,
+        materializedOne.sha,
+        materializedOne.tree,
+        "Merge media one",
+      );
+
+      git(target.checkout, "checkout", "--detach", integratedOne);
+      const two = makeItem(
+        "media-two",
+        "Media Two",
+        ["media-one"],
+        ["media-two.txt", "selected-two.txt"],
+      );
+      const selectedTwo = selected(
+        "candidate-two",
+        "selected-two.txt",
+        "selected two content that exceeds the packet budget\n",
+      );
+      writeFileSync(
+        join(target.checkout, "media-two.txt"),
+        "worker two content that exceeds the packet budget\n",
+      );
+      const workerTwo = commit("Factory: Media Two");
+      writeFileSync(
+        join(target.checkout, "selected-two.txt"),
+        selectedTwo.bytes,
+      );
+      const materializedTwo = commit("Factory: selected candidate-two assets");
+      const integratedTwo = merge(
+        integratedOne,
+        materializedTwo.sha,
+        materializedTwo.tree,
+        "Merge media two",
+      );
+
+      const workState = (
+        baseSha,
+        integratedShaAtStart,
+        materialized,
+        integratedSha,
+        asset,
+      ) => ({
+        status: "done",
+        executionBaseSha: baseSha,
+        integratedShaAtStart,
+        baseSha,
+        changeRef: materialized.sha,
+        treeSha: materialized.tree,
+        integratedSha,
+        validation: { treeSha: materialized.tree, commands: [] },
+        assets: [asset.set],
+        selectedAssetSet: asset.set.id,
+        selectionDigest: assetSelectionDigest(asset.set),
+        selection: {
+          actor: "test-operator",
+          at: new Date().toISOString(),
+          destinations: asset.set.members.map((member) => ({
+            role: member.role,
+            path: member.destination,
+            digest: member.ref.digest,
+          })),
+          downstreamItems: [],
+        },
+      });
+      const state = {
+        schemaVersion: 2,
+        repository: "example/objective-materialization-budget",
+        objective: 1,
+        runId: "materialization-budget",
+        configDigest: "a".repeat(64),
+        baseSha: target.baseSha,
+        graph: {
+          objective: 1,
+          baseSha: target.baseSha,
+          items: [one, two],
+        },
+        issueByItemId: { "media-one": 2, "media-two": 3 },
+        integratedSha: integratedTwo,
+        work: {
+          "media-one": workState(
+            target.baseSha,
+            null,
+            materializedOne,
+            integratedOne,
+            selectedOne,
+          ),
+          "media-two": workState(
+            integratedOne,
+            integratedOne,
+            materializedTwo,
+            integratedTwo,
+            selectedTwo,
+          ),
+        },
+      };
+      const previous = process.env.FACTORY_RESULT_REVIEW_TEXT_BUDGET_BYTES;
+      process.env.FACTORY_RESULT_REVIEW_TEXT_BUDGET_BYTES = "12";
+      try {
+        const objectiveEvidence = objectiveReviewEvidence({
+          state,
+          checkout: target.checkout,
+          integratedCommitSha: integratedTwo,
+          integratedTreeSha: materializedTwo.tree,
+        });
+        assert.deepEqual(
+          objectiveEvidence.evidence.map((source) => source.path),
+          [
+            "Work Item Git delta: media-one",
+            "Work Item Git delta: media-one controller materialization",
+            "Work Item Git delta: media-two",
+            "Work Item Git delta: media-two controller materialization",
+          ],
+        );
+        assert.ok(
+          objectiveEvidence.evidence.every(
+            (source) => source.complete === false,
+          ),
+        );
+
+        const expectedById = {
+          "media-one": {
+            base: target.baseSha,
+            worker: workerOne,
+            materialized: materializedOne,
+            workerPath: "media-one.txt",
+            destination: "selected-one.txt",
+          },
+          "media-two": {
+            base: integratedOne,
+            worker: workerTwo,
+            materialized: materializedTwo,
+            workerPath: "media-two.txt",
+            destination: "selected-two.txt",
+          },
+        };
+        let allocatedTextBudget = 0;
+        for (const id of ["media-one", "media-two"]) {
+          const expected = expectedById[id];
+          const ordinary = objectiveEvidence.evidence.find(
+            (source) => source.path === `Work Item Git delta: ${id}`,
+          );
+          const ordinaryIdentity = JSON.parse(ordinary.content.split("\n")[0]);
+          assert.equal(ordinaryIdentity.workItemId, id);
+          assert.equal(
+            ordinaryIdentity.resultCommitSha,
+            expected.materialized.sha,
+          );
+          assert.equal(
+            ordinaryIdentity.resultTreeSha,
+            expected.materialized.tree,
+          );
+          assert.equal(ordinaryIdentity.textBudget, 2);
+          assert.ok(
+            ordinaryIdentity.patches.every((patch) => patch.truncated === true),
+          );
+          allocatedTextBudget += ordinaryIdentity.textBudget;
+
+          const materialization = objectiveEvidence.evidence.find(
+            (source) =>
+              source.path ===
+              `Work Item Git delta: ${id} controller materialization`,
+          );
+          const packet = JSON.parse(materialization.content);
+          assert.equal(packet.workItemId, id);
+          assert.equal(packet.resultBaseCommitSha, expected.base);
+          assert.equal(packet.workerResultCommitSha, expected.worker.sha);
+          assert.equal(packet.workerResultTreeSha, expected.worker.tree);
+          assert.equal(
+            packet.materializationCommitSha,
+            expected.materialized.sha,
+          );
+          assert.equal(
+            packet.materializationTreeSha,
+            expected.materialized.tree,
+          );
+          assert.deepEqual(
+            packet.workerChange.changes.map((change) => change.path),
+            [expected.workerPath],
+          );
+          assert.deepEqual(
+            packet.materializationChange.changes.map((change) => change.path),
+            [expected.destination],
+          );
+          assert.equal(packet.workerChange.textBudget, 2);
+          assert.equal(packet.materializationChange.textBudget, 2);
+          assert.equal(packet.workerChange.patches[0].truncated, true);
+          assert.equal(packet.materializationChange.patches[0].truncated, true);
+          allocatedTextBudget +=
+            packet.workerChange.textBudget +
+            packet.materializationChange.textBudget;
+        }
+        assert.equal(allocatedTextBudget, 12);
+
+        const truncatedMaterialization = objectiveEvidence.evidence[1];
+        await assert.rejects(
+          reviewAcceptance({
+            checkout: target.checkout,
+            baseSha: target.baseSha,
+            commit: integratedTwo,
+            evidence: { treeSha: materializedTwo.tree, commands: [] },
+            criteria: ["both selected assets are grounded"],
+            sources: [
+              {
+                path: "OBJECTIVE",
+                content: "both selected assets are grounded",
+              },
+            ],
+            evidenceSources: objectiveEvidence.evidence,
+            model: {
+              async reviewResult() {
+                return {
+                  findings: [
+                    {
+                      criterion: "both selected assets are grounded",
+                      verdict: "pass",
+                      source: truncatedMaterialization.path,
+                      quote: "media-one",
+                      detail:
+                        "The bounded materialization source identifies it.",
+                      question: "",
+                    },
+                  ],
+                };
+              },
+            },
+          }),
+          (error) => {
+            assert.ok(error instanceof AcceptanceDecisionRequired);
+            assert.deepEqual(error.pending.reviewRejection, {
+              field: "source",
+              reason: "source-truncated",
+            });
+            return true;
+          },
+        );
+      } finally {
+        if (previous === undefined)
+          delete process.env.FACTORY_RESULT_REVIEW_TEXT_BUDGET_BYTES;
+        else process.env.FACTORY_RESULT_REVIEW_TEXT_BUDGET_BYTES = previous;
+      }
+    },
+  );
+});
+
 test("large binary results reach independent review as descriptors, and reviewer failure is explicit", async () => {
   await withTarget("binary-review", {}, async (root, target) => {
     writeFileSync(join(target.checkout, "image.bin"), Buffer.alloc(150_000));
