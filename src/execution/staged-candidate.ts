@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { createRequire } from "node:module";
+import { fileURLToPath } from "node:url";
 import {
   closeSync,
   existsSync,
@@ -139,12 +139,7 @@ function checkWorktreeEntries(worktree: string): void {
   inspect(worktree, "");
 }
 
-const require = createRequire(import.meta.url);
-const secretlint = join(
-  dirname(require.resolve("secretlint/package.json")),
-  "bin",
-  "secretlint.js",
-);
+const secretlint = fileURLToPath(new URL("./secret-scan.js", import.meta.url));
 const recommendedRules = JSON.stringify({
   rules: [{ id: "@secretlint/secretlint-rule-preset-recommend" }],
 });
@@ -171,12 +166,8 @@ function scanChangedFile(
     );
   const args = [
     secretlint,
-    "--no-glob",
     source,
-    "--format=compact",
-    "--no-gitignore",
-    "--secretlintignore=/dev/null",
-    `--secretlintrcJSON=${config ? readFileSync(config, "utf8") : recommendedRules}`,
+    config ? readFileSync(config, "utf8") : recommendedRules,
   ];
   const output = openSync(report, "w", 0o600);
   let result;
