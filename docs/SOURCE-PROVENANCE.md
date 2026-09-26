@@ -4,6 +4,18 @@ The clean implementation starts from the Factory plan reviewed September 22, 202
 
 The MIT license text is retained from the archived repository. Runtime code does not read this ledger.
 
+## Repository quality tooling (#105)
+
+Issue #105, the repository's effective ESLint/TypeScript-ESLint and Prettier
+configuration, and official Biome 2.5.14 release, package, migration, formatter,
+and rule-source documentation supplied the tooling migration. No archived
+Factory source, test, fixture, state, or qualification implementation was
+inspected or copied. Biome owns supported TypeScript lint and repository format
+checks; current supported ESLint and Prettier versions retain only the rules and
+file formats Biome cannot cover. Secretlint remains the unchanged packaged
+prepublication security check. [QUALITY-TOOLING.md](QUALITY-TOOLING.md) records
+the complete old/new mapping.
+
 ## Trunk issue #24 — changed-file safety
 
 Inspected the archived `docs/THREAT-MODEL.md`, `src/runtime/pinned-git-environment.ts`, and `src/execution/artifacts.ts` at commit `994bbfcadb317aed2dfa932ec9d128e7d0d8c7a8`. The clean local driver retains exact-base collection, pinned Git environment, changed-path ownership, and the trusted-local worker boundary. It checks staged candidate modes and traversal, rejects newly introduced special entries, scans only changed staged and working bytes with maintained Secretlint rules, and filters the worker's effective environment to a small ambient allowlist. The archived artifact protocol, blanket file-size/count limits, receipt machinery, and claim of hostile-code containment were not retained. A reviewed operator-owned Secretlint config outside the target checkout is the explicit false-positive path.

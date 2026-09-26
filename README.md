@@ -51,6 +51,9 @@ npm pack
 npm install --prefix /tmp/factory-candidate ./clockgrove-factory-0.1.20.tgz
 ```
 
+The repository's [quality-tooling map](docs/QUALITY-TOOLING.md) records the
+pinned Biome release and the exact remaining compatibility checks.
+
 Bind one target checkout, inspect a read-only plan, and run that exact candidate with the installed CLI:
 
 ```sh

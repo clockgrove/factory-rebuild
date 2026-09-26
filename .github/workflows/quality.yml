@@ -21,8 +21,10 @@ jobs:
       - run: git lfs version
       - run: npm run build
       - run: npm run typecheck
-      - run: npm run lint
-      - run: npm run format:check
+      - name: Run Biome lint and compatibility rules
+        run: npm run lint
+      - name: Check Biome and fallback formatting
+        run: npm run format:check
       - run: npm run notices:check
       - run: npm test
       - run: npm run package

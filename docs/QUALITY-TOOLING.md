@@ -1,0 +1,122 @@
+# Quality tooling
+
+Factory uses Biome for repository-owned TypeScript linting and for every file
+format that Biome supports. Narrow ESLint and Prettier checks remain only where
+Biome 2.5.14 does not provide equivalent coverage. The public `npm run lint`,
+`npm run format:check`, and `npm run format` interfaces stay stable.
+
+## Version and scope
+
+`@biomejs/biome` is pinned exactly to `2.5.14`. At migration time, that was the
+npm `latest` release and the matching signed upstream release. The selection was
+checked against the official [release](https://github.com/biomejs/biome/releases/tag/%40biomejs%2Fbiome%402.5.14),
+[migration guide](https://biomejs.dev/guides/migrate-eslint-prettier/), and
+[rule-source index](https://biomejs.dev/linter/rules-sources/).
+
+Biome's official migrator found 88 rules in the combined ESLint presets and
+mapped 81. After the TypeScript preset's core-rule overrides, 66 rules were
+effective for `src/**/*.ts`. The table below maps that effective surface.
+`biome.json` keeps the migrated rules explicit with `preset: "none"` so an
+upstream recommended-preset change cannot silently alter Factory's gate.
+
+## Effective lint mapping
+
+| Previous ESLint rule                                                                                                                  | Current check                                    |
+| ------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------ |
+| `for-direction`                                                                                                                       | `lint/correctness/useValidForDirection`          |
+| `no-async-promise-executor`                                                                                                           | `lint/suspicious/noAsyncPromiseExecutor`         |
+| `no-case-declarations`                                                                                                                | `lint/correctness/noSwitchDeclarations`          |
+| `no-compare-neg-zero`                                                                                                                 | `lint/suspicious/noCompareNegZero`               |
+| `no-cond-assign`                                                                                                                      | `lint/suspicious/noAssignInExpressions`          |
+| `no-constant-binary-expression`                                                                                                       | `lint/suspicious/noConstantBinaryExpressions`    |
+| `no-constant-condition`                                                                                                               | `lint/correctness/noConstantCondition`           |
+| `no-control-regex`                                                                                                                    | `lint/suspicious/noControlCharactersInRegex`     |
+| `no-debugger`                                                                                                                         | `lint/suspicious/noDebugger`                     |
+| `no-dupe-else-if`                                                                                                                     | `lint/suspicious/noDuplicateElseIf`              |
+| `no-duplicate-case`                                                                                                                   | `lint/suspicious/noDuplicateCase`                |
+| `no-empty`, `no-empty-static-block`                                                                                                   | `lint/suspicious/noEmptyBlockStatements`         |
+| `no-empty-character-class`                                                                                                            | `lint/correctness/noEmptyCharacterClassInRegex`  |
+| `no-empty-pattern`                                                                                                                    | `lint/correctness/noEmptyPattern`                |
+| `no-ex-assign`                                                                                                                        | `lint/suspicious/noCatchAssign`                  |
+| `no-extra-boolean-cast`                                                                                                               | `lint/complexity/noExtraBooleanCast`             |
+| `no-fallthrough`                                                                                                                      | `lint/suspicious/noFallthroughSwitchClause`      |
+| `no-global-assign`                                                                                                                    | `lint/suspicious/noGlobalAssign`                 |
+| `no-irregular-whitespace`                                                                                                             | `lint/suspicious/noIrregularWhitespace`          |
+| `no-loss-of-precision`                                                                                                                | `lint/correctness/noPrecisionLoss`               |
+| `no-misleading-character-class`                                                                                                       | `lint/suspicious/noMisleadingCharacterClass`     |
+| `no-nonoctal-decimal-escape`                                                                                                          | `lint/correctness/noNonoctalDecimalEscape`       |
+| `no-prototype-builtins`                                                                                                               | `lint/suspicious/noPrototypeBuiltins`            |
+| `no-regex-spaces`                                                                                                                     | `lint/complexity/noAdjacentSpacesInRegex`        |
+| `no-self-assign`                                                                                                                      | `lint/correctness/noSelfAssign`                  |
+| `no-shadow-restricted-names`                                                                                                          | `lint/suspicious/noShadowRestrictedNames`        |
+| `no-sparse-arrays`                                                                                                                    | `lint/suspicious/noSparseArray`                  |
+| `no-unsafe-finally`                                                                                                                   | `lint/correctness/noUnsafeFinally`               |
+| `no-unsafe-optional-chaining`                                                                                                         | `lint/correctness/noUnsafeOptionalChaining`      |
+| `no-unused-labels`                                                                                                                    | `lint/correctness/noUnusedLabels`                |
+| `no-unused-private-class-members`                                                                                                     | `lint/correctness/noUnusedPrivateClassMembers`   |
+| `no-useless-backreference`                                                                                                            | `lint/suspicious/noUselessRegexBackrefs`         |
+| `no-useless-catch`                                                                                                                    | `lint/complexity/noUselessCatch`                 |
+| `no-useless-escape`                                                                                                                   | `lint/complexity/noUselessEscapeInRegex`         |
+| `require-yield`                                                                                                                       | `lint/correctness/useYield`                      |
+| `use-isnan`                                                                                                                           | `lint/correctness/useIsNan`                      |
+| `valid-typeof`                                                                                                                        | `lint/correctness/useValidTypeof`                |
+| `no-var`                                                                                                                              | `lint/suspicious/noVar`                          |
+| `prefer-const`                                                                                                                        | `lint/style/useConst`                            |
+| `prefer-rest-params`                                                                                                                  | `lint/complexity/noArguments`                    |
+| `prefer-spread`                                                                                                                       | `lint/style/useSpreadOverApply`                  |
+| `@typescript-eslint/no-array-constructor`                                                                                             | `lint/style/useArrayLiterals`                    |
+| `@typescript-eslint/no-duplicate-enum-values`                                                                                         | `lint/suspicious/noDuplicateEnumValues`          |
+| `@typescript-eslint/no-empty-object-type`, `@typescript-eslint/no-unsafe-function-type`, `@typescript-eslint/no-wrapper-object-types` | `lint/complexity/noBannedTypes`                  |
+| `@typescript-eslint/no-explicit-any`                                                                                                  | `lint/suspicious/noExplicitAny`                  |
+| `@typescript-eslint/no-extra-non-null-assertion`                                                                                      | `lint/suspicious/noExtraNonNullAssertion`        |
+| `@typescript-eslint/no-misused-new`                                                                                                   | `lint/suspicious/noMisleadingInstantiator`       |
+| `@typescript-eslint/no-namespace`                                                                                                     | `lint/style/noNamespace`                         |
+| `@typescript-eslint/no-non-null-asserted-optional-chain`                                                                              | `lint/suspicious/noNonNullAssertedOptionalChain` |
+| `@typescript-eslint/no-require-imports`                                                                                               | `lint/style/noCommonJs`                          |
+| `@typescript-eslint/no-this-alias`                                                                                                    | `lint/complexity/noUselessThisAlias`             |
+| `@typescript-eslint/no-unnecessary-type-constraint`                                                                                   | `lint/complexity/noUselessTypeConstraint`        |
+| `@typescript-eslint/no-unsafe-declaration-merging`                                                                                    | `lint/suspicious/noUnsafeDeclarationMerging`     |
+| `@typescript-eslint/no-unused-vars`                                                                                                   | `lint/correctness/noUnusedVariables`             |
+| `@typescript-eslint/prefer-as-const`                                                                                                  | `lint/style/useAsConstAssertion`                 |
+| `@typescript-eslint/prefer-namespace-keyword`                                                                                         | `lint/suspicious/useNamespaceKeyword`            |
+
+The focused `eslint.config.js` retains these effective checks because Biome
+2.5.14 does not implement them or does not match the TypeScript rule's full
+directive/expression behavior:
+
+- `no-delete-var`
+- `no-invalid-regexp`
+- `no-octal`
+- `no-unexpected-multiline`
+- `@typescript-eslint/ban-ts-comment`
+- `@typescript-eslint/no-unused-expressions`
+- `@typescript-eslint/triple-slash-reference`
+
+Biome's `lint/suspicious/noUnusedExpressions` and
+`lint/suspicious/noTsIgnore` also remain enabled as overlapping diagnostics.
+The migrator also reported `no-new-symbol` as unavailable, but that core rule
+was disabled by the previous TypeScript preset; `npm run typecheck` continues
+to reject constructing `Symbol`.
+
+Secret scanning is unchanged. Packaged Secretlint remains a production
+dependency and still checks changed staged and working bytes before publication;
+it is not replaced by either development linter.
+
+## Formatting mapping
+
+Biome formats the repository's JavaScript, TypeScript, JSON configuration, and
+test sources using explicit Prettier-compatible baseline options: two spaces,
+80 columns, LF endings, double quotes, semicolons, trailing commas, bracket
+spacing, and parenthesized arrow parameters. The checked-in migration is then
+mechanically formatted once by Biome, so Biome is the source of truth for those
+files after the migration.
+
+Prettier remains only for file kinds Biome 2.5.14 does not format here:
+
+- Markdown documentation and installed skill files
+- GitHub Actions YAML and other YAML
+- `package-lock.json`, which Biome deliberately protects as tool-owned
+
+`npm run format:check` runs both formatters over their non-overlapping sets.
+Biome's Git integration honors `.gitignore`; neither command checks `dist/` or
+`node_modules/`.
