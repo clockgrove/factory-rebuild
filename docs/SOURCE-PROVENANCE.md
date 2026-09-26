@@ -132,6 +132,13 @@ the production optional workers, checking terminal/idle/cleanup failures and
 honest unavailable normalized usage. No archived or private source, real
 provider login, live target, or release claim was added by this refresh.
 
+Independent review of the refreshed candidate exposed two Copilot boundary
+gaps: ambient/default `gh` discovery could expose the controller publication
+store, and startup identity was checked after prompt dispatch. The correction
+keeps the existing empty `GH_CONFIG_DIR` and checks the pinned SDK's observed
+startup before dispatch, with sentinel environment and scripted event tests.
+The same callback path reproduced [#130](https://github.com/clockgrove/factory-rebuild/issues/130): progress replaced the shared watchdog promise while an active wait still observed the old one. A tiny correction in the existing guard retains one timeout promise and resets only its timer; direct and production-worker regressions prove delayed progress still ends in a durable timeout. No new timeout policy, configuration, retry, journal, provider call or archived source was introduced.
+
 ## Role-specific Factory defaults (#59)
 
 Issue #59 and the current explicit-selection implementation supplied this change. No additional archived source or provider policy was inspected or copied. Factory now resolves planner, reviewer, and worker defaults separately at installation, persists the resulting explicit values, and keeps provider-neutral harness work in issue #55. A post-merge boundary audit rejected a shared-default compatibility alias that was not required by #59; the package root exposes only the role-specific defaults.

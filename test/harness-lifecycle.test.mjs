@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import {
+  existsSync,
   mkdtempSync,
   mkdirSync,
   readFileSync,
@@ -24,6 +25,40 @@ import {
   stopCopilotClient,
 } from "../dist/execution/github-copilot-lifecycle.js";
 import { CodexHarness } from "../dist/execution/local.js";
+import {
+  ProviderTurnGuard,
+  ProviderTurnTimeoutError,
+} from "../dist/provider-turn.js";
+
+test("a guard already awaiting callbacks keeps its timeout after asynchronous progress", async () => {
+  const turn = new ProviderTurnGuard(100);
+  const started = Date.now();
+  let progressed = false;
+  const progress = setTimeout(() => {
+    progressed = true;
+    turn.progress();
+  }, 60);
+  try {
+    await assert.rejects(
+      turn.race(new Promise(() => undefined)),
+      ProviderTurnTimeoutError,
+    );
+    assert.equal(progressed, true);
+    assert.equal(turn.signal.aborted, true);
+    assert.ok(turn.signal.reason instanceof ProviderTurnTimeoutError);
+    assert.ok(
+      Date.now() - started >= 140,
+      "real progress must extend the original idle deadline",
+    );
+    assert.ok(
+      Date.now() - started < 2_000,
+      "the existing active race must still terminate",
+    );
+  } finally {
+    clearTimeout(progress);
+    turn.finish();
+  }
+});
 
 test("only the selected Copilot adapter requires its genuine SDK Node minimum", () => {
   for (const version of ["22.0.0", "22.11.9"])
@@ -49,10 +84,24 @@ test("optional production workers bound turns, require terminals and report unav
         "cleanup",
         "auth",
         "failure",
+        ...(provider === "github-copilot"
+          ? [
+              "startup-missing",
+              "startup-cwd",
+              "startup-model",
+              "startup-effort",
+              "startup-error",
+              "startup-async",
+              "startup-idle",
+              "progress-timeout",
+            ]
+          : []),
       ]) {
         const attemptId = `${provider}-${scenario}`;
         const input = join(root, `${attemptId}.request.json`);
         const result = join(root, `${attemptId}.result.json`);
+        const sent = join(root, `${attemptId}.sent`);
+        const complete = ["complete", "startup-async"].includes(scenario);
         writeFileSync(
           input,
           JSON.stringify({
@@ -105,6 +154,7 @@ test("optional production workers bound turns, require terminals and report unav
             env: {
               PATH: process.env.PATH,
               FACTORY_SCRIPTED_PROVIDER_SCENARIO: scenario,
+              FACTORY_SCRIPTED_PROVIDER_SENT: sent,
             },
             encoding: "utf8",
             timeout: 5_000,
@@ -114,18 +164,36 @@ test("optional production workers bound turns, require terminals and report unav
         const outcome = JSON.parse(readFileSync(result, "utf8"));
         assert.equal(
           outcome.state,
-          scenario === "complete" ? "complete" : "failed",
+          complete ? "complete" : "failed",
           `${attemptId}: ${child.stderr}`,
         );
-        assert.equal(child.status, scenario === "complete" ? 0 : 1, attemptId);
+        assert.equal(child.status, complete ? 0 : 1, attemptId);
+        if (provider === "github-copilot")
+          assert.equal(
+            existsSync(sent),
+            ![
+              "creation",
+              "auth",
+              "startup-missing",
+              "startup-cwd",
+              "startup-model",
+              "startup-effort",
+              "startup-error",
+            ].includes(scenario),
+            attemptId,
+          );
         assert.ok(Date.now() - started < 4_000, attemptId);
         if (
-          ["creation", "timeout"].includes(scenario) ||
+          ["creation", "timeout", "progress-timeout"].includes(scenario) ||
           (provider === "claude" && scenario === "cleanup")
         )
           assert.match(outcome.error, /no progress/);
         if (scenario === "failure")
           assert.match(outcome.error, /authoritative provider failure/);
+        assert.doesNotMatch(
+          child.stderr,
+          /UnhandledPromiseRejection|uncaughtException|triggerUncaughtException/,
+        );
         if (scenario === "auth")
           assert.equal(outcome.authentication.provider, provider);
         const observations = readFileSync(
@@ -138,10 +206,7 @@ test("optional production workers bound turns, require terminals and report unav
           .filter((event) => event.operation === "worker-usage");
         assert.equal(observations[0].workerUsage.type, "started");
         const terminal = observations.at(-1).workerUsage;
-        assert.equal(
-          terminal.type,
-          scenario === "complete" ? "completed" : "failed",
-        );
+        assert.equal(terminal.type, complete ? "completed" : "failed");
         assert.equal(terminal.provider, provider);
         assert.equal(terminal.invocationId, attemptId);
         assert.equal(terminal.providerAttempt, 1);

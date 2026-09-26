@@ -607,6 +607,63 @@ test("Claude adapter configuration is exact, isolated, and bound to the pinned S
   }
 });
 
+test("Copilot local login never inherits the controller gh authentication store", () => {
+  const names = [
+    "GH_CONFIG_DIR",
+    "GH_TOKEN",
+    "GITHUB_TOKEN",
+    "HOME",
+    "XDG_CONFIG_HOME",
+    "XDG_DATA_HOME",
+    "COPILOT_HOME",
+  ];
+  const previous = Object.fromEntries(
+    names.map((name) => [name, process.env[name]]),
+  );
+  try {
+    process.env.HOME = "/sentinel/controller-home";
+    process.env.XDG_CONFIG_HOME = "/sentinel/controller-xdg-config";
+    process.env.XDG_DATA_HOME = "/sentinel/controller-xdg-data";
+    process.env.GH_TOKEN = "sentinel-publication-gh-token";
+    process.env.GITHUB_TOKEN = "sentinel-publication-github-token";
+    process.env.COPILOT_HOME = "/sentinel/copilot-local-profile";
+    const owned = "/sentinel/factory-owned-empty-gh-config";
+    for (const ambient of ["/sentinel/controller-gh-config", undefined]) {
+      if (ambient === undefined) delete process.env.GH_CONFIG_DIR;
+      else process.env.GH_CONFIG_DIR = ambient;
+      const environment = githubCopilotWorkerEnvironment(owned);
+      assert.equal(environment.GH_CONFIG_DIR, owned);
+      assert.equal(environment.GH_TOKEN, undefined);
+      assert.equal(environment.GITHUB_TOKEN, undefined);
+      assert.equal(environment.COPILOT_HOME, "/sentinel/copilot-local-profile");
+      assert.notEqual(environment.GH_CONFIG_DIR, process.env.HOME);
+      assert.notEqual(environment.GH_CONFIG_DIR, process.env.XDG_CONFIG_HOME);
+      assert.notEqual(environment.GH_CONFIG_DIR, process.env.XDG_DATA_HOME);
+      const input = {
+        request: { worktree: "/sentinel/worktree" },
+        config: { timeoutSeconds: 300 },
+      };
+      const options = githubCopilotClientOptions(
+        input,
+        environment,
+        environment.COPILOT_HOME,
+      );
+      assert.equal(options.env.GH_CONFIG_DIR, owned);
+      assert.equal(options.env.GH_TOKEN, undefined);
+      assert.equal(options.env.GITHUB_TOKEN, undefined);
+      assert.equal(options.baseDirectory, "/sentinel/copilot-local-profile");
+      assert.equal(options.useLoggedInUser, true);
+      assert.equal(options.mode, "empty");
+      assert.deepEqual(options.builtinPluginDirectories, []);
+    }
+  } finally {
+    for (const name of names) {
+      if (previous[name] === undefined) delete process.env[name];
+      else process.env[name] = previous[name];
+    }
+  }
+});
+
 test("GitHub Copilot adapter uses local auth with a bounded empty-mode capability set", async () => {
   const root = mkdtempSync(join(tmpdir(), "factory-copilot-config-"));
   const previousState = process.env.XDG_STATE_HOME;

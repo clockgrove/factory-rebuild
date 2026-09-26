@@ -103,6 +103,14 @@ async function main(): Promise<void> {
   let sessionStart:
     | Extract<SessionEvent, { type: "session.start" }>["data"]
     | undefined;
+  type StartupEvent = Extract<
+    SessionEvent,
+    { type: "session.start" | "session.error" }
+  >;
+  let observeStartup: (event: StartupEvent) => void = () => undefined;
+  const startup = new Promise<StartupEvent>((resolveStartup) => {
+    observeStartup = resolveStartup;
+  });
   try {
     observeUsage("started");
     const { CopilotClient } = await turn.race(import("@github/copilot-sdk"));
@@ -126,6 +134,8 @@ async function main(): Promise<void> {
           if (event.type === "session.error")
             providerFailure = event.data.message;
           if (event.type === "session.start") sessionStart = event.data;
+          if (event.type === "session.start" || event.type === "session.error")
+            observeStartup(event);
           if (!progressLost)
             try {
               privateProgress(
@@ -151,19 +161,12 @@ async function main(): Promise<void> {
       { once: true },
     );
     process.once("SIGTERM", () => void session?.abort().catch(() => undefined));
+    // createSession may return before its asynchronous startup event. Never
+    // dispatch the accepted Work Item until observed identity is checked.
+    const initialized = await turn.race(startup);
+    if (initialized.type === "session.error")
+      throw new Error(initialized.data.message);
     if (providerFailure) throw new Error(providerFailure);
-    // Startup idleness cannot qualify the implementation turn.
-    terminal = false;
-    const response = await turn.race(
-      session.sendAndWait(
-        { prompt: workItemPrompt(input.request) },
-        input.config.timeoutSeconds * 1_000,
-      ),
-    );
-    if (providerFailure) throw new Error(providerFailure);
-    if (!terminal)
-      throw new Error("GitHub Copilot SDK ended without session.idle");
-    turn.finish();
     if (!sessionStart)
       throw new Error("GitHub Copilot SDK did not report session startup");
     if (sessionStart.context?.cwd !== input.request.worktree)
@@ -181,6 +184,18 @@ async function main(): Promise<void> {
       throw new Error(
         `GitHub Copilot SDK selected reasoning effort ${sessionStart.reasoningEffort}, expected ${input.config.reasoningEffort}`,
       );
+    // Startup idleness cannot qualify the implementation turn.
+    terminal = false;
+    const response = await turn.race(
+      session.sendAndWait(
+        { prompt: workItemPrompt(input.request) },
+        input.config.timeoutSeconds * 1_000,
+      ),
+    );
+    if (providerFailure) throw new Error(providerFailure);
+    if (!terminal)
+      throw new Error("GitHub Copilot SDK ended without session.idle");
+    turn.finish();
     const assets = readProducedAssets(input.request);
     outcome = {
       state: "complete",

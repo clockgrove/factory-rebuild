@@ -145,15 +145,41 @@ The scanner and argument surface are unchanged from accepted main; this is
 additional evidence for the separate default-floor blocker, not a #55 fix or
 a reason to weaken scanning.
 
-The refreshed local credential-free gate passes 133 tests on Node 24.20.0,
+The initial refreshed head `37624f7f8596101ee4c414e60b95ff26729b1396`
+passed 133 credential-free tests on Node 24.20.0 and [hosted Quality](https://github.com/clockgrove/factory-rebuild/actions/runs/36226596693),
 including fresh empty-cache offline optional-omitted installation, package-root
 scripted harness execution through production validation/delivery/final review,
 and production optional workers behind scripted SDK modules. Sequential build,
 typecheck, Biome/fallback lint and format, notices and package checks pass. A
 real Node 22.0.0 optional-omitted root import and CLI help probe also pass; these
 narrow runtime observations do not resolve the dependency engine-policy gap or
-prove live provider acceptance. Hosted Quality and independent final-head audit
-are still required for this source candidate.
+prove live provider acceptance. Those receipts identify that initial head,
+not the later reviewed corrections.
+
+Independent review then found that Copilot's worker reopened the controller's
+ambient/default `gh` authentication store and checked startup identity only
+after prompt dispatch. The correction retains the owned empty `GH_CONFIG_DIR`
+and waits for observed startup worktree/model/reasoning identity before sending
+the accepted Work Item, with sentinel and never-send scripted SDK regressions.
+[Issue #130](https://github.com/clockgrove/factory-rebuild/issues/130) also tracks
+the reproduced callback-watchdog gap: replacing the timeout promise on progress
+left an active provider wait detached from the new deadline. The existing guard
+now keeps one promise and resets only its timer; direct delayed-progress and
+production worker event-then-stall tests require durable timeout/terminal usage
+without an unhandled rejection. Fresh full, package, hosted and independent
+exact-head gates for these corrections remain required; no source or live
+acceptance follows from the earlier 133-test receipt.
+
+The batched corrections pass 135 credential-free tests on Node 24.20.0,
+including all Codex stream/capacity regressions, sentinel environment isolation,
+pre-prompt startup refusal and delayed callback progress followed by a durable
+worker timeout. Sequential typecheck, lint, format and notices checks also
+pass. The corrected 151,358,021-byte tarball has SHA-256
+`3f570a15c1c13c5d236173461cfe17b7b3ecd8b8ce407b847e8a074742dc04d0`;
+the initial `983d433a` artifact is retained separately and does not qualify these
+fixes. Hosted Quality, independent corrected-head audit, accepted #129 main
+reconciliation and live provider gates remain open. #130 closure belongs to the
+reviewed merge and integrated-main check, not this local receipt.
 
 **Next action:** complete and independently audit the refreshed #55 source/package gate. #55/PR #62 remains open/draft for required exact-artifact Codex and Claude live acceptance; the included Copilot adapter also needs live proof unless explicitly split or deferred. Developer login remains deferred and no live attempt is authorized by this source refresh. The historical failed Objective remains immutable and nonqualifying; do not retry or override it. [#26's reconciled dependency and pilot checklist](https://github.com/clockgrove/factory-rebuild/issues/26) distinguishes closed prerequisites, public fixture acceptance and the not-yet-accepted actual Clockgrove W0-001/LFS pilot. Prepare and approve the exact graph/live scope before target projection or execution; do not infer private activation from public source-work approval. #70, #121 and #127 are queued nonblocking leaves, while #7/#8/#9 remain future branches. The [compilation and telemetry postmortem](V0.1.21-POSTMORTEM.md) is supporting evidence, not new acceptance blockers. `AGENTS.md` governs building Factory; packaged skills govern using the installed CLI.
 

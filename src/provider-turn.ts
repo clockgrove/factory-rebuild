@@ -18,12 +18,17 @@ export class ProviderTurnGuard {
   private readonly controller = new AbortController();
   private timer: NodeJS.Timeout | undefined;
   private timeoutError: ProviderTurnTimeoutError | undefined;
-  private timeout: Promise<never>;
+  private readonly timeout: Promise<never>;
+  private rejectTimeout: (error: ProviderTurnTimeoutError) => void = () =>
+    undefined;
 
   constructor(private readonly idleTimeoutMs: number) {
     if (!Number.isSafeInteger(idleTimeoutMs) || idleTimeoutMs <= 0)
       throw new Error("Provider turn idle timeout must be a positive integer");
-    this.timeout = this.reset();
+    this.timeout = new Promise<never>((_resolve, reject) => {
+      this.rejectTimeout = reject;
+    });
+    this.reset();
   }
 
   get signal(): AbortSignal {
@@ -33,7 +38,7 @@ export class ProviderTurnGuard {
   progress(): void {
     if (this.controller.signal.aborted) return;
     if (this.timer) clearTimeout(this.timer);
-    this.timeout = this.reset();
+    this.reset();
   }
 
   async race<T>(operation: Promise<T>): Promise<T> {
@@ -49,14 +54,14 @@ export class ProviderTurnGuard {
     this.timer = undefined;
   }
 
-  private reset(): Promise<never> {
-    return new Promise<never>((_resolve, reject) => {
-      this.timer = setTimeout(() => {
-        this.timeoutError = new ProviderTurnTimeoutError(this.idleTimeoutMs);
-        this.controller.abort(this.timeoutError);
-        reject(this.timeoutError);
-      }, this.idleTimeoutMs);
-    });
+  private reset(): void {
+    // Progress reschedules the deadline, not the promise observed by a race
+    // already waiting on a callback-driven provider operation.
+    this.timer = setTimeout(() => {
+      this.timeoutError = new ProviderTurnTimeoutError(this.idleTimeoutMs);
+      this.controller.abort(this.timeoutError);
+      this.rejectTimeout(this.timeoutError);
+    }, this.idleTimeoutMs);
   }
 }
 

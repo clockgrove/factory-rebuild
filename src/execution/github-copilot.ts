@@ -90,9 +90,9 @@ export function githubCopilotWorkerEnvironment(
   // credentials (GH_TOKEN/GITHUB_TOKEN).
   if (process.env.GITHUB_COPILOT_API_TOKEN)
     environment.GITHUB_COPILOT_API_TOKEN = process.env.GITHUB_COPILOT_API_TOKEN;
-  if (process.env.GH_CONFIG_DIR)
-    environment.GH_CONFIG_DIR = process.env.GH_CONFIG_DIR;
-  else delete environment.GH_CONFIG_DIR;
+  // Keep the sanitizer's owned empty GH_CONFIG_DIR. Ambient or default gh
+  // login can contain the controller's publication credentials, not a
+  // separately authorized Copilot-local login.
   if (process.env.COPILOT_HOME)
     environment.COPILOT_HOME = process.env.COPILOT_HOME;
   environment.COPILOT_SDK_DEFAULT_CONNECTION = "stdio";

@@ -1,3 +1,5 @@
+import { writeFileSync } from "node:fs";
+
 const scenario = process.env.FACTORY_SCRIPTED_PROVIDER_SCENARIO;
 const stall = () => new Promise(() => undefined);
 
@@ -70,20 +72,47 @@ export class CopilotClient {
   async createSession(options) {
     const event = (type, data = {}) =>
       options.onEvent({ type, timestamp: new Date().toISOString(), data });
-    event("session.start", {
-      context: { cwd: options.workingDirectory },
-      selectedModel: options.model,
-      reasoningEffort: options.reasoningEffort,
-    });
+    const initialized = () =>
+      event("session.start", {
+        context: {
+          cwd:
+            scenario === "startup-cwd"
+              ? "/sentinel/wrong-worktree"
+              : options.workingDirectory,
+        },
+        selectedModel:
+          scenario === "startup-model" ? "wrong-model" : options.model,
+        reasoningEffort:
+          scenario === "startup-effort"
+            ? "wrong-effort"
+            : options.reasoningEffort,
+      });
+    if (scenario === "startup-async") setTimeout(initialized, 10);
+    else if (scenario === "startup-error")
+      event("session.error", { message: "authoritative startup failure" });
+    else if (scenario !== "startup-missing") initialized();
+    if (scenario === "startup-idle") event("session.idle");
     return {
       sessionId: "scripted-copilot",
       async sendAndWait() {
+        writeFileSync(process.env.FACTORY_SCRIPTED_PROVIDER_SENT, "sent");
+        if (scenario === "progress-timeout") {
+          setTimeout(
+            () =>
+              event("assistant.message_delta", {
+                deltaContent: "scripted progress",
+              }),
+            20,
+          );
+          return stall();
+        }
         if (scenario === "timeout") return stall();
         if (scenario === "failure") {
           event("session.error", { message: "authoritative provider failure" });
           return;
         }
-        if (scenario !== "nonterminal") event("session.idle");
+        if (!["nonterminal", "startup-idle"].includes(scenario))
+          event("session.idle");
         event("session.shutdown", {
           conversationTokens: 123,
           currentModel: options.model,

@@ -4,6 +4,9 @@ This file records public releases of Factory. See [BUILD-STATUS.md](docs/BUILD-S
 
 ## Unreleased
 
+- Keep Copilot workers on Factory's owned empty GitHub CLI authentication directory instead of exposing ambient or default controller publication stores; retain separately selected Copilot-local authentication and explicit session settings.
+- Validate observed Copilot startup identity before dispatching the Work Item prompt, with the existing bounded event wait and no fallback. Keep one stable provider-turn timeout promise across progress resets so callback-driven stalls fail durably (#130).
+
 - Expose a capability-checked package-root local `AgentHarness` registration seam with stable adapter identity, adapter-owned configuration, durable lifecycle handles, and a packed full-path conformance test.
 - Add pinned optional Claude Agent SDK 0.3.281 and GitHub Copilot SDK 1.0.13 Work Item adapters while preserving Codex as the default and planning/review provider.
 - Reuse developer-local provider authentication, fail with actionable login-and-retry guidance when it is absent, and keep controller GitHub publication credentials out of worker environments.
