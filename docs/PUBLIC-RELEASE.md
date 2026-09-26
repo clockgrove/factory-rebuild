@@ -108,6 +108,13 @@ Issue #26 is a separate private adopter smoke using the new exact published arti
 
 ## Open release decisions
 
+An interrupted regular Work Item still `running` at `deliver` is not a supported
+automatic continuation. Follow the [interrupted-delivery guidance](../README.md#interrupted-regular-delivery):
+preserve its original snapshot and exact remote evidence, do not replay or edit
+state, and do not treat a repeated `run` or result decision as reconciliation.
+The interrupted run remains nonqualifying; use a separately approved fresh
+disposable target/run for a new release gate.
+
 The published [`@azu/format-text@1.0.2` metadata](https://www.npmjs.com/package/@azu/format-text/v/1.0.2) declares BSD-3-Clause and names `azu` as author. Its npm tarball and [exact `gitHead` source tree](https://github.com/azu/format-text/tree/2f72a7bf808c0818a395c2323d77128352539297) provide no license file or copyright holder/year. [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md) includes the [canonical SPDX BSD-3-Clause terms](https://spdx.org/licenses/BSD-3-Clause.html), preserves the unfilled copyright variables, and records the publisher metadata without inventing attribution. **A maintainer must review this documented upstream omission before release**; the generic text cannot replace a package-specific copyright notice the publisher never supplied. All other non-optional production packages provide a license file or an explicit publisher licensing statement. The optional Codex platform packages declare Apache-2.0; the notices include the Codex SDK's Apache-2.0 text for the same version.
 
 An operator must authorize each public tag and GitHub Release after the code/CI/package gates pass; the installed disposable Objective is the subsequent acceptance gate. npm publication is not part of this route and requires no npm publishing credentials.
