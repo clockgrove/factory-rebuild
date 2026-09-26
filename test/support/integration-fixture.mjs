@@ -248,6 +248,39 @@ class ScriptedPlanningModel {
               "The controller receipt binds successful hydration to the reviewed result",
             question: "",
           };
+        if (/\.factory-assets\.json/.test(criterion)) {
+          const observations = request.observations
+            ? JSON.parse(request.observations)
+            : null;
+          const selectedSetId = observations?.assetSelectionReceipt?.setId;
+          const receipt = observations?.assetCaptureReceipts?.find(
+            (candidate) => candidate?.setId === selectedSetId,
+          );
+          if (
+            receipt?.declarationPath === ".factory-assets.json" &&
+            receipt.declarationDigest &&
+            receipt.declarationProvenance
+          )
+            return {
+              criterion,
+              verdict: "pass",
+              source: "Delivery observations",
+              quote: JSON.stringify(receipt.declarationProvenance),
+              detail:
+                "The controller receipt binds the selected set's manifest provenance to its parsed declaration",
+              question: "",
+            };
+          return {
+            criterion,
+            verdict: "needs-human",
+            source: "Delivery observations",
+            quote: '"assetCaptureReceipts"',
+            detail:
+              "The delivery observations do not contain controller-verified manifest provenance for the selected set",
+            question:
+              "Was the selected set's provenance declared in the parsed manifest?",
+          };
+        }
         return {
           criterion,
           verdict: "pass",
