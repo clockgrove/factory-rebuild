@@ -281,6 +281,49 @@ class ScriptedPlanningModel {
               "Was the selected set's provenance declared in the parsed manifest?",
           };
         }
+        if (/byte-for-byte from the repository source/i.test(criterion)) {
+          const observations = request.observations
+            ? JSON.parse(request.observations)
+            : null;
+          const selectedSetId = observations?.assetSelectionReceipt?.setId;
+          const receipt = observations?.assetCaptureReceipts?.find(
+            (candidate) => candidate?.setId === selectedSetId,
+          );
+          const input = receipt?.inputs?.find(
+            (candidate) =>
+              candidate.binding.path === "approved/model.bin" &&
+              candidate.binding.kind === "repository",
+          );
+          const member = receipt?.members?.find(
+            (candidate) => candidate.destination === input?.binding.path,
+          );
+          if (
+            input &&
+            member &&
+            input.ref.digest === member.digest &&
+            input.ref.bytes === member.bytes &&
+            input.ref.mediaType === member.mediaType
+          )
+            return {
+              criterion,
+              verdict: "pass",
+              source: "Delivery observations",
+              quote: JSON.stringify(receipt),
+              detail:
+                "The controller receipt binds equal source-input and captured-member identities to the selected destination",
+              question: "",
+            };
+          return {
+            criterion,
+            verdict: "needs-human",
+            source: "Delivery observations",
+            quote: '"assetCaptureReceipts"',
+            detail:
+              "The controller receipt does not prove matching imported-source and captured-member identities",
+            question:
+              "Were the selected member bytes copied exactly from the imported repository source?",
+          };
+        }
         return {
           criterion,
           verdict: "pass",

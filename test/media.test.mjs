@@ -188,17 +188,35 @@ test("a non-manifest harness keeps verified capture evidence without claiming ma
       /not a regular staging file/,
     );
     rmSync(join(staging, ".factory-assets.json"));
+    const input = {
+      binding: {
+        kind: "repository",
+        path: "assets/source.png",
+        role: "image",
+        mediaType: "image/png",
+        visibility: "repository",
+      },
+      ref: {
+        digest: createHash("sha256")
+          .update(Buffer.from([1, 2, 3]))
+          .digest("hex"),
+        bytes: 3,
+        mediaType: "image/png",
+      },
+    };
     const [captured] = await captureAssetSets(
       new LocalContentStore(join(root, "content")),
       staging,
       { ownedPaths: ["approved/image.png"], expectedOutputRoles: ["image"] },
       sets,
       { harness: "provider-neutral" },
+      [input],
     );
     assert.equal(captured.capture.authority, "factory-controller");
     assert.equal(captured.capture.declarationPath, undefined);
     assert.equal(captured.capture.declarationDigest, undefined);
     assert.equal(captured.capture.declarationProvenance, undefined);
+    assert.deepEqual(captured.capture.inputs, [input]);
     assert.equal(
       captured.capture.members[0].stagingPath,
       ".factory-media/candidate-a/image.png",
@@ -592,6 +610,15 @@ test("opaque 3D source and multi-file output retain bindings, relationships, met
       visibility: sets[0].provenance.visibility,
       lineage: sets[0].provenance.lineage,
     });
+    assert.deepEqual(captured[0].capture.inputs, [
+      {
+        binding: {
+          ...imported[0].binding,
+          kind: imported[0].binding.kind ?? "repository",
+        },
+        ref: imported[0].ref,
+      },
+    ]);
     assert.doesNotThrow(() => assertAssetCaptureReceipt(captured[0]));
     const result = await materializeAssetSet({
       checkout,

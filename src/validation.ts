@@ -112,6 +112,22 @@ export function workItemReviewObservations(
           mediaRoot: ".factory-media" as const,
           complete: true as const,
           setId: asset.id,
+          ...(asset.capture.inputs && {
+            inputs: asset.capture.inputs.map((input) => ({
+              binding: {
+                kind: input.binding.kind,
+                path: input.binding.path,
+                role: input.binding.role,
+                mediaType: input.binding.mediaType,
+                visibility: input.binding.visibility,
+              },
+              ref: {
+                digest: input.ref.digest,
+                bytes: input.ref.bytes,
+                mediaType: input.ref.mediaType,
+              },
+            })),
+          }),
           members: asset.capture.members.map((member) => ({
             role: member.role,
             stagingPath: member.stagingPath,

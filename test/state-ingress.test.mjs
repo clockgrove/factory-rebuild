@@ -444,6 +444,32 @@ test("regular and native review observations expose validated capture and CLI se
   const digest = "d".repeat(64);
   const set = {
     id: "candidate-a",
+    inputs: [
+      {
+        binding: {
+          kind: "repository",
+          path: "assets/source.png",
+          role: "image",
+          mediaType: "image/png",
+          visibility: "repository",
+        },
+        ref: { digest, bytes: 77, mediaType: "image/png" },
+      },
+      {
+        binding: {
+          kind: "repository",
+          path: "assets/source.json",
+          role: "metadata",
+          mediaType: "application/json",
+          visibility: "repository",
+        },
+        ref: {
+          digest: "a".repeat(64),
+          bytes: 12,
+          mediaType: "application/json",
+        },
+      },
+    ],
     members: [
       {
         role: "image",
@@ -474,6 +500,32 @@ test("regular and native review observations expose validated capture and CLI se
       mediaRoot: ".factory-media",
       complete: true,
       setId: "candidate-a",
+      inputs: [
+        {
+          binding: {
+            kind: "repository",
+            path: "assets/source.png",
+            role: "image",
+            mediaType: "image/png",
+            visibility: "repository",
+          },
+          ref: { digest, bytes: 77, mediaType: "image/png" },
+        },
+        {
+          binding: {
+            kind: "repository",
+            path: "assets/source.json",
+            role: "metadata",
+            mediaType: "application/json",
+            visibility: "repository",
+          },
+          ref: {
+            digest: "a".repeat(64),
+            bytes: 12,
+            mediaType: "application/json",
+          },
+        },
+      ],
       members: [
         {
           role: "image",
@@ -486,6 +538,9 @@ test("regular and native review observations expose validated capture and CLI se
       ],
     },
   };
+  selected.graph.items[0].sourceAssets = set.inputs.map((input) =>
+    structuredClone(input.binding),
+  );
   selected.work.asset = {
     status: "running",
     step: "validate",
@@ -545,6 +600,7 @@ test("regular and native review observations expose validated capture and CLI se
   injected.work.asset.selection.selectionDigest = "0".repeat(64);
   injected.work.asset.assets[0].claimedControllerReview = true;
   injected.work.asset.assets[0].members[0].claimedControllerReview = true;
+  injected.work.asset.assets[0].inputs[0].binding.claimedControllerReview = true;
   injected.work.asset.assets[0].provenance.claimedControllerReview = true;
   injected.work.asset.assets[0].provenance.claimedAuthority = true;
   injected.work.asset.assets[0].evidence.claimedControllerReview = true;
@@ -598,6 +654,11 @@ test("regular and native review observations expose validated capture and CLI se
     false,
   );
   assert.equal(
+    "claimedControllerReview" in
+      injectedObservations.selectedAsset.inputs[0].binding,
+    false,
+  );
+  assert.equal(
     "claimedControllerReview" in injectedObservations.selectedAsset.provenance,
     false,
   );
@@ -646,6 +707,46 @@ test("regular and native review observations expose validated capture and CLI se
   assert.throws(
     () => parseFactoryState(forged, repository, objective),
     /capture receipt differs/,
+  );
+  const inputReceiptMutations = [
+    (candidate) => delete candidate.capture.inputs,
+    (candidate) => (candidate.capture.inputs[0].ref.digest = "0".repeat(64)),
+    (candidate) => (candidate.capture.inputs[0].ref.bytes = 76),
+    (candidate) =>
+      (candidate.capture.inputs[0].ref.mediaType = "application/octet-stream"),
+    (candidate) =>
+      (candidate.capture.inputs[0].binding.path = "assets/other.png"),
+    (candidate) => candidate.capture.inputs.reverse(),
+    (candidate) => (candidate.capture.inputs[0].claimedAuthority = true),
+  ];
+  for (const mutate of inputReceiptMutations) {
+    const candidate = structuredClone(selected.work.asset.assets[0]);
+    mutate(candidate);
+    const tampered = structuredClone(selected);
+    tampered.work.asset.assets[0] = candidate;
+    assert.throws(
+      () => parseFactoryState(tampered, repository, objective),
+      /input receipt differs/,
+    );
+  }
+  const crossSet = structuredClone(selected);
+  const secondSet = structuredClone(set);
+  secondSet.id = "candidate-b";
+  secondSet.capture.setId = "candidate-b";
+  secondSet.inputs[0].ref.digest = "0".repeat(64);
+  secondSet.capture.inputs[0].ref.digest = "0".repeat(64);
+  crossSet.work.asset.assets.push(secondSet);
+  assert.throws(
+    () => parseFactoryState(crossSet, repository, objective),
+    /inputs differ across candidate sets/,
+  );
+  const reboundInput = structuredClone(selected);
+  reboundInput.work.asset.assets[0].inputs[0].binding.path = "assets/other.png";
+  reboundInput.work.asset.assets[0].capture.inputs[0].binding.path =
+    "assets/other.png";
+  assert.throws(
+    () => parseFactoryState(reboundInput, repository, objective),
+    /inputs differ from accepted source bindings/,
   );
   const partialDeclaration = structuredClone(selected);
   delete partialDeclaration.work.asset.assets[0].capture.declarationDigest;
