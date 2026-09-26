@@ -139,6 +139,114 @@ test("read-only plan uses pinned selected heading despite dirty checkout", async
   });
 });
 
+test("compiler schema binds citations to exact supplied path and bare heading pairs", async () => {
+  await fixture("citation-schema", async (root) => {
+    const target = createTarget(root, {
+      "docs/plan.md": "# Plan\n\n## Wave 0\nCanonical obligation\n",
+      "docs/plain.txt": "Canonical source without a Markdown heading\n",
+    });
+    const objective = body.replace(
+      "- `docs/plan.md#Wave 0`",
+      "- `docs/plan.md#Wave 0`\n- `docs/plain.txt`",
+    );
+    const requests = [];
+    const model = {
+      async generateStructured(request) {
+        requests.push(structuredClone(request));
+        return graph(target.baseSha);
+      },
+      async reviewGraph() {
+        return { findings: [] };
+      },
+    };
+
+    const candidate = await compilePlan(
+      1,
+      objective,
+      target.baseSha,
+      target.checkout,
+      model,
+    );
+    assert.equal(candidate.review.status, "clean");
+    assert.equal(requests.length, 1);
+
+    const choices =
+      requests[0].schema.properties.items.items.properties.citations.items
+        .anyOf;
+    const pairs = choices.map((choice) => ({
+      path: choice.properties.path.enum[0],
+      heading: choice.properties.heading.enum[0],
+    }));
+    assert.ok(
+      pairs.some(
+        (choice) =>
+          choice.path === "OBJECTIVE" && choice.heading === "Acceptance",
+      ),
+    );
+    assert.ok(
+      pairs.some(
+        (choice) =>
+          choice.path === "docs/plan.md" && choice.heading === "Wave 0",
+      ),
+    );
+    assert.ok(
+      pairs.some(
+        (choice) => choice.path === "docs/plain.txt" && choice.heading === "",
+      ),
+    );
+    assert.equal(
+      pairs.some(
+        (choice) =>
+          choice.path === "docs/plan.md" && choice.heading === "Acceptance",
+      ),
+      false,
+    );
+    assert.equal(
+      pairs.some((choice) => choice.heading.startsWith("#")),
+      false,
+    );
+  });
+});
+
+test("compiler rejects a Markdown-prefixed citation heading without normalization", async () => {
+  await fixture("citation-marker", async (root) => {
+    const target = createTarget(root, {
+      "docs/plan.md": "# Plan\n\n## Wave 0\nCanonical obligation\n",
+    });
+    const observations = [];
+    await assert.rejects(
+      compilePlan(
+        1,
+        body,
+        target.baseSha,
+        target.checkout,
+        {
+          async generateStructured() {
+            return graph(target.baseSha, {
+              path: "OBJECTIVE",
+              heading: "## Acceptance",
+            });
+          },
+          async reviewGraph() {
+            throw new Error("review should not run");
+          },
+        },
+        undefined,
+        (event) => observations.push(event),
+      ),
+      /cites missing heading ## Acceptance in OBJECTIVE; expected exact bare heading .*"Acceptance"/,
+    );
+    assert.ok(
+      observations.some(
+        (event) =>
+          event.type === "response-invalid" &&
+          event.failureClass === "semantic-validation" &&
+          event.failureField === "one",
+      ),
+    );
+  });
+});
+
 test("preview shows an undeclared command as blocked before host execution", async () => {
   await fixture("command", async (root) => {
     const target = createTarget(root, {
