@@ -13,12 +13,76 @@ import test from "node:test";
 import { LocalContentStore } from "../dist/content/local.js";
 import { LocalExecutionDriver } from "../dist/execution/local.js";
 import { sanitizedWorkerEnvironment } from "../dist/process.js";
+import { checkStagedCandidate } from "../dist/execution/staged-candidate.js";
 
 function git(checkout, ...args) {
   return execFileSync("git", ["-C", checkout, ...args], {
     encoding: "utf8",
   }).trim();
 }
+
+test("staged secrets cannot be hidden by replacing working bytes", () => {
+  const root = mkdtempSync(join(tmpdir(), "factory-staged-secret-"));
+  try {
+    const { checkout } = target(root);
+    const value = "ghp_abcdefghijklmnopqrstuvwxyz0123456789";
+    writeFileSync(join(checkout, "safe.txt"), `GITHUB_TOKEN=${value}\n`);
+    git(checkout, "add", "safe.txt");
+    writeFileSync(join(checkout, "safe.txt"), "Clean working bytes.\n");
+    assert.throws(
+      () => checkStagedCandidate(checkout, checkout, ["safe.txt"]),
+      (error) => {
+        assert.match(
+          error.message,
+          /Secretlint found suspected secret in "safe.txt"/,
+        );
+        assert.match(error.message, /@secretlint\/secretlint-rule-github/);
+        assert.ok(!error.message.includes(value));
+        return true;
+      },
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("invalid external scanner configuration fails closed", () => {
+  const root = mkdtempSync(join(tmpdir(), "factory-invalid-scan-config-"));
+  const previous = process.env.FACTORY_SECRETLINT_CONFIG;
+  try {
+    const { checkout } = target(root);
+    writeFileSync(join(checkout, "safe.txt"), "Clean changed bytes.\n");
+    git(checkout, "add", "safe.txt");
+    const external = join(root, "config.json");
+    const internal = join(checkout, "config.json");
+    writeFileSync(external, "not-json");
+    writeFileSync(internal, JSON.stringify({ rules: [] }));
+    const linked = join(root, "linked.json");
+    symlinkSync(external, linked);
+    for (const config of [
+      "relative.json",
+      internal,
+      linked,
+      root,
+      external,
+      join(root, "missing.json"),
+    ]) {
+      process.env.FACTORY_SECRETLINT_CONFIG = config;
+      assert.throws(() =>
+        checkStagedCandidate(checkout, checkout, ["safe.txt"]),
+      );
+    }
+    process.env.FACTORY_SECRETLINT_CONFIG = external;
+    assert.throws(
+      () => checkStagedCandidate(checkout, checkout, ["safe.txt"]),
+      /Secretlint could not check "safe.txt"; publication stopped/,
+    );
+  } finally {
+    if (previous === undefined) delete process.env.FACTORY_SECRETLINT_CONFIG;
+    else process.env.FACTORY_SECRETLINT_CONFIG = previous;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 function target(root, legacy = false, lfs = false) {
   const checkout = join(root, "target");

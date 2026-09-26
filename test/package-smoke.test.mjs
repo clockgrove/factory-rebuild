@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import {
   copyFileSync,
   existsSync,
@@ -37,6 +37,7 @@ test("fresh packed artifact composes a registered harness through the package ro
         "install",
         "--offline",
         "--omit=optional",
+        "--engine-strict",
         "--prefix",
         prefix,
         "--ignore-scripts",
@@ -60,6 +61,40 @@ test("fresh packed artifact composes a registered harness through the package ro
       "@anthropic-ai/claude-agent-sdk": "0.3.281",
       "@github/copilot-sdk": "1.0.13",
     });
+    const scanner = join(installedRoot, "dist", "execution", "secret-scan.js");
+    const descriptor = JSON.stringify({
+      rules: [{ id: "@secretlint/secretlint-rule-preset-recommend" }],
+    });
+    const fixture = join(root, "scanner-fixture.txt");
+    writeFileSync(fixture, "Public credential-free packed scanner fixture.\n");
+    assert.equal(
+      spawnSync(process.execPath, [scanner, fixture, descriptor]).status,
+      0,
+    );
+    const syntheticSecret = "ghp_abcdefghijklmnopqrstuvwxyz0123456789";
+    writeFileSync(fixture, `GITHUB_TOKEN=${syntheticSecret}\n`);
+    const refused = spawnSync(
+      process.execPath,
+      [scanner, fixture, descriptor],
+      { encoding: "utf8" },
+    );
+    assert.equal(refused.status, 1);
+    assert.match(refused.stdout, /@secretlint\/secretlint-rule-github/);
+    assert.ok(!`${refused.stdout}${refused.stderr}`.includes(syntheticSecret));
+    assert.equal(
+      spawnSync(process.execPath, [scanner, fixture, "invalid-config"]).status,
+      2,
+    );
+    for (const name of [
+      "secretlint",
+      "read-pkg",
+      "normalize-package-data",
+      "hosted-git-info",
+    ])
+      assert.equal(
+        existsSync(join(installedRoot, "node_modules", name)),
+        false,
+      );
     const lock = JSON.parse(
       readFileSync(join(project, "package-lock.json"), "utf8"),
     );
@@ -80,9 +115,13 @@ test("fresh packed artifact composes a registered harness through the package ro
       );
       checked++;
     }
+    const requiredCount = Object.entries(lock.packages).filter(
+      ([path, entry]) => path && !entry.dev && !entry.optional,
+    ).length;
+    assert.ok(requiredCount > 0);
     assert.ok(
-      checked > 90,
-      `expected the complete production tree, got ${checked}`,
+      checked >= requiredCount,
+      `expected all ${requiredCount} required production entries, got ${checked}`,
     );
     for (const path of [
       ".codex-plugin/plugin.json",

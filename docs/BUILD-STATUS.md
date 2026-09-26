@@ -183,4 +183,22 @@ reviewed merge and integrated-main check, not this local receipt.
 
 **Next action:** complete and independently audit the refreshed #55 source/package gate. #55/PR #62 remains open/draft for required exact-artifact Codex and Claude live acceptance; the included Copilot adapter also needs live proof unless explicitly split or deferred. Developer login remains deferred and no live attempt is authorized by this source refresh. The historical failed Objective remains immutable and nonqualifying; do not retry or override it. [#26's reconciled dependency and pilot checklist](https://github.com/clockgrove/factory-rebuild/issues/26) distinguishes closed prerequisites, public fixture acceptance and the not-yet-accepted actual Clockgrove W0-001/LFS pilot. Prepare and approve the exact graph/live scope before target projection or execution; do not infer private activation from public source-work approval. #70, #121 and #127 are queued nonblocking leaves, while #7/#8/#9 remain future branches. The [compilation and telemetry postmortem](V0.1.21-POSTMORTEM.md) is supporting evidence, not new acceptance blockers. `AGENTS.md` governs building Factory; packaged skills govern using the installed CLI.
 
+**Provider idle subscription correction (#130):** Callback-driven asynchronous
+progress exposed an accepted-main guard bug: replacing its timeout promise left
+an already active wait subscribed to a cancelled deadline. The focused correction
+retains that promise and resets only the existing idle timer. Six standalone,
+credential-free regressions cover progress then stall, shared timeout/AbortSignal
+identity, original provider failure, and successful completion/finish, including
+late cleanup callbacks that must not rearm a finished timer, abort a completed
+turn, or hold a completed process alive. Finish is terminal and idempotent. Default
+Codex stream, capacity and cleanup behavior remains under the full existing
+suite. Scripted optional-worker durable failure and typed terminal usage are
+separate evidence in draft PR #62, not optional dependencies of this fix.
+The corrected local Node24 full suite passes all 127 tests; eight focused guard,
+scanner and production-engine checks also pass on actual Node22.0.0. The earlier
+125-test gate preceded the terminal-finish correction and is superseded. Hosted
+exact-head review and integrated-main acceptance remain required; #130 must not
+wait for #55's deferred live-provider gate. No provider policy, dependency,
+release, target or #129 scanner change is included.
+
 **Explicit non-goals now:** managed-agent execution, sandbox providers, Daytona, automatic local/cloud bursting, distributed controllers, media generation providers, and private adopter-specific product work. Factory source must never be its own target. The public fixture files and Objective templates are sufficient to reproduce generic Factory acceptance in a repository the contributor controls.

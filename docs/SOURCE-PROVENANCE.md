@@ -4,6 +4,21 @@ The clean implementation starts from the Factory plan reviewed September 22, 202
 
 The MIT license text is retained from the archived repository. Runtime code does not read this ledger.
 
+## Provider idle timeout subscription (#130)
+
+Issue #130 and the accepted public `src/provider-turn.ts` supplied the
+delayed-callback progress reproduction. The focused fix keeps the guard's
+existing timeout promise subscribed while resetting only its idle timer.
+Independent read-only review also reproduced cleanup-window callbacks restarting
+that timer after finish. The existing guard now ends idempotently and ignores
+later progress; synthetic delayed-cleanup and isolated process-exit tests verify
+no late abort or referenced idle timer. No optional SDK implementation is added.
+Standalone tests use synthetic pending operations, delayed progress, original
+provider failure and successful completion; no archived source, private material,
+provider authentication or live target was inspected or used. The optional-worker
+callback regression remains separately evidenced in draft PR #62; no harness or
+dependency change is included here.
+
 ## Repository quality tooling (#105)
 
 Issue #105, the repository's effective ESLint/TypeScript-ESLint and Prettier
@@ -162,3 +177,7 @@ Issue #111, the preserved fresh installed v0.1.20 result-review packet, and the 
 The current public issues, source contracts and fresh public v0.1.21 gate/postmortem supplied these changes; no additional archived source, tests, operational journal or private adopter requirements were inspected or copied. Exact resource-name guidance preserves whitespace-sensitive scheduler identities. Resume messages follow the existing state branch rather than adding a second lifecycle read. Final review shares its existing text budget across ordinary and materialization packets without weakening truncated-evidence rejection. The Codex citation adapter uses bounded integer choices mapped back to exact canonical source/heading pairs; strict semantic validation remains authoritative.
 
 Media brief guidance and actual worker packet regressions preserve accepted requirements, immutable-byte obligations, ordinary owned code and staging declarations while excluding controller operations. Optional provider-neutral worker usage observations normalize supplied counters at the adapter seam and feed the existing private observational progress stream. Usage summaries label scope, cumulative deduplication, supplied-category coverage and matched cache denominators; they do not parse arbitrary evidence, infer charges or reconstruct execution state. The startup correction records the observation before guarded provider stream creation, without changing timeout or result authority. Memory scaling from retaining unrelated progress transcripts remains the queued leaf #127. These source acceptances are not new installed-artifact or private-adopter qualification.
+
+## Default Node 22.0 scanner compatibility (#129)
+
+Issue #129, the accepted changed-file guard, installed Secretlint 13.0.5 public Node client declarations and implementation, and the complete production dependency metadata supplied this correction. No archived implementation, private adopter content or provider execution was inspected or copied. The Secretlint CLI's unused configuration-creation dependencies excluded early Node 22 releases, and its negative-option parsing rejected Factory's scanner arguments on actual Node 22.0. The clean child entry instead invokes the same-version supported `@secretlint/node` file API with the unchanged recommended preset, explicit configuration, compact masked output and literal files. The parent retains isolated synchronous execution, sanitized environment, restricted report files, staged and working-byte checks, and fail-closed rule/path-only reporting. It adds no timeout policy, config discovery, ignored-file exception, scanner downgrade, lifecycle authority or global Node-floor increase. Source and packed security regressions are separate from live-provider, published-release and private-adopter acceptance.
