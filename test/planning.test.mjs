@@ -177,7 +177,7 @@ test("compiler schema binds citations to exact supplied path and bare heading pa
       choices.some(
         (choice) =>
           choice.properties.path.enum[0] === path &&
-          new RegExp(choice.properties.heading.pattern).test(heading),
+          choice.properties.heading.enum.includes(heading),
       );
     assert.ok(allows("OBJECTIVE", "Acceptance"));
     assert.ok(allows("docs/plan.md", "Wave 0"));
@@ -190,7 +190,9 @@ test("compiler schema binds citations to exact supplied path and bare heading pa
     assert.equal(allows("docs/plan.md", "Acceptance"), false);
     assert.equal(
       choices.some((choice) =>
-        new RegExp(choice.properties.heading.pattern).test("## Acceptance"),
+        choice.properties.heading.enum.some((heading) =>
+          heading.startsWith("#"),
+        ),
       ),
       false,
     );
@@ -261,6 +263,38 @@ test("compiler rejects a Markdown-prefixed citation heading without normalizatio
           event.failureField === "one",
       ),
     );
+  });
+});
+
+test("compiler rejects terminal line separators in section and whole-source citations", async () => {
+  await fixture("citation-terminal-lines", async (root) => {
+    const target = createTarget(root, {
+      "docs/plan.md": "# Plan\n\n## Wave 0\nCanonical obligation\n",
+      "docs/plain.txt": "Canonical source without a Markdown heading\n",
+    });
+    const objective = body.replace(
+      "- `docs/plan.md#Wave 0`",
+      "- `docs/plan.md#Wave 0`\n- `docs/plain.txt`",
+    );
+    const terminalLineSeparators = ["\n", "\r", "\r\n", "\u2028", "\u2029"];
+    for (const separator of terminalLineSeparators) {
+      for (const citation of [
+        { path: "OBJECTIVE", heading: `Acceptance${separator}` },
+        { path: "docs/plain.txt", heading: separator },
+      ]) {
+        await assert.rejects(
+          compilePlan(1, objective, target.baseSha, target.checkout, {
+            async generateStructured() {
+              return graph(target.baseSha, citation);
+            },
+            async reviewGraph() {
+              throw new Error("review should not run");
+            },
+          }),
+          /cites missing heading/,
+        );
+      }
+    }
   });
 });
 
