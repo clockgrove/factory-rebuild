@@ -202,7 +202,9 @@ empty-cache optional-omitted artifact installation remains part of the final
 default-floor packet; npm11 withholding Koffi's full-source install script does
 not prove optional SDK installation or live provider acceptance.
 
-**Next action:** complete and independently audit the refreshed #55 source/package gate. #55/PR #62 remains open/draft for required exact-artifact Codex and Claude live acceptance; the included Copilot adapter also needs live proof unless explicitly split or deferred. Developer login remains deferred and no live attempt is authorized by this source refresh. The historical failed Objective remains immutable and nonqualifying; do not retry or override it. [#26's reconciled dependency and pilot checklist](https://github.com/clockgrove/factory-rebuild/issues/26) distinguishes closed prerequisites, public fixture acceptance and the not-yet-accepted actual Clockgrove W0-001/LFS pilot. Prepare and approve the exact graph/live scope before target projection or execution; do not infer private activation from public source-work approval. #70, #121 and #127 are queued nonblocking leaves, while #7/#8/#9 remain future branches. The [compilation and telemetry postmortem](V0.1.21-POSTMORTEM.md) is supporting evidence, not new acceptance blockers. `AGENTS.md` governs building Factory; packaged skills govern using the installed CLI.
+**Default Node 22.0 scanner acceptance (#129):** [PR #131](https://github.com/clockgrove/factory-rebuild/pull/131) merged accepted head `eadd4dec31a8fb6fb3c902980e8ffa821d79cbc5` at `57abc0a43b605148a6b3ec191bcedb34c7cf9bc2`, with unchanged reviewed files and [integrated-main Quality](https://github.com/clockgrove/factory-rebuild/actions/runs/36227246935) passing. The same-version Secretlint file API replaces the unused CLI dependency path without lowering scanner coverage or raising the documented Node floor. Independent full 121-test/static gates and a fresh normal offline Node 22.0/npm 10.5.1 installation passed; installed scanner probes verified clean, masked refusal and fail-closed fatal outcomes. The locally reproduced source-candidate tarball is not the already published v0.1.21 artifact and does not qualify a new release or live provider.
+
+**Next action:** reconcile #55's installed harness candidate against accepted main, preserving accepted #129/#130 and the scripted worker cleanup-window regression. #55/PR #62 remains open/draft for required exact-artifact live second-provider evidence; developer login remains deferred. [#26's reconciled dependency and pilot checklist](https://github.com/clockgrove/factory-rebuild/issues/26) distinguishes closed prerequisites, public fixture acceptance and the not-yet-accepted actual Clockgrove W0-001/LFS pilot. Prepare and approve the exact graph/live scope before target projection or execution; do not infer private activation from public source-work approval. #70, #121, #127 and #133 are queued nonblocking leaves, while #7/#8/#9 remain future branches. The [compilation and telemetry postmortem](V0.1.21-POSTMORTEM.md) is supporting evidence, not new acceptance blockers. `AGENTS.md` governs building Factory; packaged skills govern using the installed CLI.
 
 **Provider idle subscription correction (#130):** Callback-driven asynchronous
 progress exposed an accepted-main guard bug: replacing its timeout promise left
@@ -218,9 +220,14 @@ separate evidence in draft PR #62, not optional dependencies of this fix.
 The corrected local Node24 full suite passes all 127 tests; eight focused guard,
 scanner and production-engine checks also pass on actual Node22.0.0. The earlier
 125-test gate preceded the terminal-finish correction and is superseded. Hosted
-exact-head and integrated-main checks subsequently passed at
-`8735797c84c65abd4537c807be4b5590559a5ea9`; #130 is closed independently of
-#55's deferred live-provider gate. No provider policy, dependency,
-release, target or #129 scanner change is included.
+exact-head review passed. [PR #132](https://github.com/clockgrove/factory-rebuild/pull/132)
+merged accepted head `5595f8ec1f4ba07a65153197f331e4b28244f59b` at
+`8735797c84c65abd4537c807be4b5590559a5ea9`, with an unchanged complete reviewed
+tree and passing [integrated-main Quality](https://github.com/clockgrove/factory-rebuild/actions/runs/36227682486).
+Issue #130 is closed independently of #55's deferred live-provider gate.
+No provider policy, dependency, release, target or #129 scanner change is included.
+The late review finding in #133 has independently reproduced turn-lifetime
+retention of settled wait results, but no OOM or failed current gate; it remains
+a separate queued leaf, not new pilot acceptance scope.
 
 **Explicit non-goals now:** managed-agent execution, sandbox providers, Daytona, automatic local/cloud bursting, distributed controllers, media generation providers, and private adopter-specific product work. Factory source must never be its own target. The public fixture files and Objective templates are sufficient to reproduce generic Factory acceptance in a repository the contributor controls.
