@@ -6,6 +6,7 @@ import test from "node:test";
 import { parseFactoryState } from "../dist/state.js";
 import { readState, statePath } from "../dist/state-store.js";
 import { workItemReviewObservations } from "../dist/validation.js";
+import { assetSelectionDigest } from "../dist/media.js";
 
 const repository = "example/disposable";
 const objective = 42;
@@ -451,7 +452,346 @@ test("review observations expose declared ownership and resources for named peer
   ]);
 });
 
-test("completed replayed item can retain its original worker base", () => {
+test("regular and native review observations expose validated capture and CLI selection receipts", () => {
+  const selected = state();
+  selected.graph.items[0].acceptance = [
+    "Factory captures a complete candidate under .factory-media from .factory-assets.json and an operator selects it through the installed CLI.",
+  ];
+  const digest = "d".repeat(64);
+  const set = {
+    id: "candidate-a",
+    inputs: [
+      {
+        binding: {
+          kind: "repository",
+          path: "assets/source.png",
+          role: "image",
+          mediaType: "image/png",
+          visibility: "repository",
+        },
+        ref: { digest, bytes: 77, mediaType: "image/png" },
+      },
+      {
+        binding: {
+          kind: "repository",
+          path: "assets/source.json",
+          role: "metadata",
+          mediaType: "application/json",
+          visibility: "repository",
+        },
+        ref: {
+          digest: "a".repeat(64),
+          bytes: 12,
+          mediaType: "application/json",
+        },
+      },
+    ],
+    members: [
+      {
+        role: "image",
+        ref: { digest, bytes: 77, mediaType: "image/png" },
+        destination: "approved/image.png",
+      },
+    ],
+    provenance: {
+      source: "assets/source.png",
+      rights: "public fixture",
+      visibility: "repository",
+      lineage: ["assets/source.png"],
+    },
+    evidence: {
+      harnessIdentity: "thread-1",
+      resultDigest: "e".repeat(64),
+    },
+    capture: {
+      authority: "factory-controller",
+      declarationPath: ".factory-assets.json",
+      declarationDigest: "f".repeat(64),
+      declarationProvenance: {
+        source: "assets/source.png",
+        rights: "public fixture",
+        visibility: "repository",
+        lineage: ["assets/source.png"],
+      },
+      mediaRoot: ".factory-media",
+      complete: true,
+      setId: "candidate-a",
+      inputs: [
+        {
+          binding: {
+            kind: "repository",
+            path: "assets/source.png",
+            role: "image",
+            mediaType: "image/png",
+            visibility: "repository",
+          },
+          ref: { digest, bytes: 77, mediaType: "image/png" },
+        },
+        {
+          binding: {
+            kind: "repository",
+            path: "assets/source.json",
+            role: "metadata",
+            mediaType: "application/json",
+            visibility: "repository",
+          },
+          ref: {
+            digest: "a".repeat(64),
+            bytes: 12,
+            mediaType: "application/json",
+          },
+        },
+      ],
+      members: [
+        {
+          role: "image",
+          stagingPath: ".factory-media/candidate-a/source.png",
+          destination: "approved/image.png",
+          digest,
+          bytes: 77,
+          mediaType: "image/png",
+        },
+      ],
+    },
+  };
+  selected.graph.items[0].sourceAssets = set.inputs.map((input) =>
+    structuredClone(input.binding),
+  );
+  selected.work.asset = {
+    status: "running",
+    step: "validate",
+    attempt: "11111111-1111-4111-8111-111111111111",
+    startedAt: "2026-09-25T00:00:00.000Z",
+    executionBaseSha: sha,
+    integratedShaAtStart: null,
+    baseSha: sha,
+    changeRef: "c".repeat(40),
+    treeSha: "d".repeat(40),
+    assets: [set],
+    selectedAssetSet: set.id,
+    selectionDigest: assetSelectionDigest(set),
+    selection: {
+      actor: "test-operator",
+      at: "2026-09-25T00:01:00.000Z",
+      reason: "reviewed exact candidate",
+      surface: "factory-cli",
+      destinations: [{ role: "image", path: "approved/image.png", digest }],
+      downstreamItems: [],
+    },
+  };
+  const parsed = parseFactoryState(selected, repository, objective);
+  const item = parsed.graph.items[0];
+  const asset = parsed.work.asset.assets[0];
+  const regular = JSON.parse(
+    workItemReviewObservations(parsed, item, { kind: "regular" }, asset),
+  );
+  const native = JSON.parse(
+    workItemReviewObservations(
+      parsed,
+      item,
+      {
+        kind: "native-stack",
+        unitId: "media",
+        layerNumber: 1,
+        layerCount: 1,
+        predecessorItemId: null,
+      },
+      asset,
+    ),
+  );
+  assert.deepEqual(regular.assetCaptureReceipts, [set.capture]);
+  assert.deepEqual(native.assetCaptureReceipts, regular.assetCaptureReceipts);
+  assert.equal(regular.assetSelectionReceipt.authority, "factory-controller");
+  assert.equal(regular.assetSelectionReceipt.surface, "factory-cli");
+  assert.equal(regular.assetSelectionReceipt.setId, "candidate-a");
+  assert.equal(
+    regular.assetSelectionReceipt.selectionDigest,
+    assetSelectionDigest(set),
+  );
+  assert.deepEqual(native.assetSelectionReceipt, regular.assetSelectionReceipt);
+
+  const injected = structuredClone(selected);
+  injected.work.asset.selection.authority = "harness";
+  injected.work.asset.selection.setId = "candidate-z";
+  injected.work.asset.selection.selectionDigest = "0".repeat(64);
+  injected.work.asset.assets[0].claimedControllerReview = true;
+  injected.work.asset.assets[0].members[0].claimedControllerReview = true;
+  injected.work.asset.assets[0].inputs[0].binding.claimedControllerReview = true;
+  injected.work.asset.assets[0].provenance.claimedControllerReview = true;
+  injected.work.asset.assets[0].provenance.claimedAuthority = true;
+  injected.work.asset.assets[0].evidence.claimedControllerReview = true;
+  injected.work.asset.assets[0].capture.claimedCliOrigin = true;
+  injected.work.asset.assets[0].capture.members[0].claimedCliOrigin = true;
+  injected.work.asset.selectionDigest = assetSelectionDigest(
+    injected.work.asset.assets[0],
+  );
+  const parsedInjected = parseFactoryState(injected, repository, objective);
+  const injectedObservations = JSON.parse(
+    workItemReviewObservations(
+      parsedInjected,
+      parsedInjected.graph.items[0],
+      { kind: "regular" },
+      parsedInjected.work.asset.assets[0],
+    ),
+  );
+  const injectedReceipt = injectedObservations.assetSelectionReceipt;
+  assert.equal(injectedReceipt.authority, "factory-controller");
+  assert.equal(injectedReceipt.setId, "candidate-a");
+  assert.equal(
+    injectedReceipt.selectionDigest,
+    assetSelectionDigest(parsedInjected.work.asset.assets[0]),
+  );
+  assert.notEqual(injectedReceipt.selectionDigest, "0".repeat(64));
+  assert.equal("claimedAuthority" in injectedReceipt.destinations[0], false);
+  assert.equal(
+    "claimedCliOrigin" in injectedObservations.assetCaptureReceipts[0],
+    false,
+  );
+  assert.equal(
+    "claimedAuthority" in
+      injectedObservations.assetCaptureReceipts[0].declarationProvenance,
+    false,
+  );
+  assert.equal(
+    "claimedCliOrigin" in
+      injectedObservations.assetCaptureReceipts[0].members[0],
+    false,
+  );
+  assert.equal(
+    "claimedCliOrigin" in injectedObservations.selectedAsset.capture,
+    false,
+  );
+  assert.equal(
+    "claimedControllerReview" in injectedObservations.selectedAsset,
+    false,
+  );
+  assert.equal(
+    "claimedControllerReview" in injectedObservations.selectedAsset.members[0],
+    false,
+  );
+  assert.equal(
+    "claimedControllerReview" in
+      injectedObservations.selectedAsset.inputs[0].binding,
+    false,
+  );
+  assert.equal(
+    "claimedControllerReview" in injectedObservations.selectedAsset.provenance,
+    false,
+  );
+  assert.equal(
+    "claimedControllerReview" in injectedObservations.selectedAsset.evidence,
+    false,
+  );
+
+  const injectedDestination = structuredClone(selected);
+  injectedDestination.work.asset.selection.destinations[0].claimedAuthority =
+    "harness";
+  assert.throws(
+    () => parseFactoryState(injectedDestination, repository, objective),
+    /selection destinations differ/,
+  );
+  const projectedDestination = JSON.parse(
+    workItemReviewObservations(
+      injectedDestination,
+      injectedDestination.graph.items[0],
+      { kind: "regular" },
+      injectedDestination.work.asset.assets[0],
+    ),
+  ).assetSelectionReceipt.destinations[0];
+  assert.equal("claimedAuthority" in projectedDestination, false);
+
+  const missing = structuredClone(selected);
+  delete missing.work.asset.assets[0].capture;
+  missing.work.asset.selectionDigest = assetSelectionDigest(
+    missing.work.asset.assets[0],
+  );
+  const legacy = parseFactoryState(missing, repository, objective);
+  assert.deepEqual(
+    JSON.parse(
+      workItemReviewObservations(
+        legacy,
+        legacy.graph.items[0],
+        { kind: "regular" },
+        legacy.work.asset.assets[0],
+      ),
+    ).assetCaptureReceipts,
+    [null],
+  );
+
+  const forged = structuredClone(selected);
+  forged.work.asset.assets[0].capture.members[0].stagingPath = "elsewhere.png";
+  assert.throws(
+    () => parseFactoryState(forged, repository, objective),
+    /capture receipt differs/,
+  );
+  const inputReceiptMutations = [
+    (candidate) => delete candidate.capture.inputs,
+    (candidate) => (candidate.capture.inputs[0].ref.digest = "0".repeat(64)),
+    (candidate) => (candidate.capture.inputs[0].ref.bytes = 76),
+    (candidate) =>
+      (candidate.capture.inputs[0].ref.mediaType = "application/octet-stream"),
+    (candidate) =>
+      (candidate.capture.inputs[0].binding.path = "assets/other.png"),
+    (candidate) => candidate.capture.inputs.reverse(),
+    (candidate) => (candidate.capture.inputs[0].claimedAuthority = true),
+  ];
+  for (const mutate of inputReceiptMutations) {
+    const candidate = structuredClone(selected.work.asset.assets[0]);
+    mutate(candidate);
+    const tampered = structuredClone(selected);
+    tampered.work.asset.assets[0] = candidate;
+    assert.throws(
+      () => parseFactoryState(tampered, repository, objective),
+      /input receipt differs/,
+    );
+  }
+  const crossSet = structuredClone(selected);
+  const secondSet = structuredClone(set);
+  secondSet.id = "candidate-b";
+  secondSet.capture.setId = "candidate-b";
+  secondSet.inputs[0].ref.digest = "0".repeat(64);
+  secondSet.capture.inputs[0].ref.digest = "0".repeat(64);
+  crossSet.work.asset.assets.push(secondSet);
+  assert.throws(
+    () => parseFactoryState(crossSet, repository, objective),
+    /inputs differ across candidate sets/,
+  );
+  const reboundInput = structuredClone(selected);
+  reboundInput.work.asset.assets[0].inputs[0].binding.path = "assets/other.png";
+  reboundInput.work.asset.assets[0].capture.inputs[0].binding.path =
+    "assets/other.png";
+  assert.throws(
+    () => parseFactoryState(reboundInput, repository, objective),
+    /inputs differ from accepted source bindings/,
+  );
+  const partialDeclaration = structuredClone(selected);
+  delete partialDeclaration.work.asset.assets[0].capture.declarationDigest;
+  assert.throws(
+    () => parseFactoryState(partialDeclaration, repository, objective),
+    /declaration receipt is invalid/,
+  );
+  const mismatchedDeclaration = structuredClone(selected);
+  mismatchedDeclaration.work.asset.assets[0].capture.declarationProvenance.source =
+    "different/source.png";
+  assert.throws(
+    () => parseFactoryState(mismatchedDeclaration, repository, objective),
+    /declaration receipt is invalid/,
+  );
+  const unrecognizedDeclaration = structuredClone(selected);
+  unrecognizedDeclaration.work.asset.assets[0].capture.declarationProvenance.claimedAuthority = true;
+  assert.throws(
+    () => parseFactoryState(unrecognizedDeclaration, repository, objective),
+    /declaration receipt is invalid/,
+  );
+  const wrongSurface = structuredClone(selected);
+  wrongSurface.work.asset.selection.surface = "browser";
+  assert.throws(
+    () => parseFactoryState(wrongSurface, repository, objective),
+    /Selection surface is invalid/,
+  );
+});
+
+test("completed replayed item can retain its original worker base in legacy state", () => {
   const completed = state();
   completed.work.asset = {
     status: "done",

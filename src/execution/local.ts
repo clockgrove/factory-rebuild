@@ -42,6 +42,7 @@ import {
 } from "../process.js";
 import type { CodexModelSelection } from "../config.js";
 import { parseAuthenticationRequest } from "./harness-support.js";
+import { DEFAULT_PROVIDER_TURN_IDLE_TIMEOUT_MS } from "../provider-turn.js";
 
 type Active = {
   request: ExecutionRequest;
@@ -75,6 +76,7 @@ export class CodexHarness implements AgentHarness {
     private network: "host" | "off",
     private model: CodexModelSelection,
     private allowedSecretNames: string[] = [],
+    private providerTurnIdleTimeoutMs = DEFAULT_PROVIDER_TURN_IDLE_TIMEOUT_MS,
   ) {}
 
   private require(handle: HarnessHandle): WorkerHandleData {
@@ -107,7 +109,15 @@ export class CodexHarness implements AgentHarness {
     const logPath = join(root, `${identity}.log`);
     writeFileSync(
       requestPath,
-      `${JSON.stringify(codexWorkerInput(request, this.network, this.allowedSecretNames, this.model))}\n`,
+      `${JSON.stringify(
+        codexWorkerInput(
+          request,
+          this.network,
+          this.allowedSecretNames,
+          this.model,
+          this.providerTurnIdleTimeoutMs,
+        ),
+      )}\n`,
       { flag: "wx", mode: 0o600 },
     );
     const log = openSync(logPath, "a", 0o600);
@@ -233,11 +243,13 @@ export function codexWorkerInput(
   network: "host" | "off",
   allowedSecretNames: string[],
   model: CodexModelSelection,
+  providerTurnIdleTimeoutMs = DEFAULT_PROVIDER_TURN_IDLE_TIMEOUT_MS,
 ): {
   request: HarnessRequest;
   network: "host" | "off";
   allowedSecretNames: string[];
   model: CodexModelSelection;
+  providerTurnIdleTimeoutMs: number;
 } {
   return {
     request,
@@ -247,6 +259,7 @@ export function codexWorkerInput(
       model: model.model,
       reasoningEffort: model.reasoningEffort,
     },
+    providerTurnIdleTimeoutMs,
   };
 }
 

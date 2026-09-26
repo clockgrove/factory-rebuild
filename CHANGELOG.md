@@ -10,6 +10,59 @@ This file records public releases of Factory. See [BUILD-STATUS.md](docs/BUILD-S
 - Preserve every exact Work Item validation command with its provenance and source in the common Codex, Claude, and GitHub Copilot worker prompt while retaining controller-only command execution and validation authority.
 - Derive Claude and GitHub Copilot client telemetry versions from the installed Factory package metadata instead of a stale release literal.
 
+## 0.1.21 — 2026-09-25
+
+- Bind automatic review to the immutable worker/controller Git boundary for selected media: the retained worker result changes no selected destination, and Factory's exact child commit changes every selected destination and no others.
+- Supply the same bounded materialization evidence to regular and native Work Item review and final Objective review without adding state fields, journals, or diagnostic authority.
+- Add a strict exact two-item same-path ordinary-blob-to-LFS release rehearsal covering automatic Work Item review, native delivery, LFS upload and hydration, final review, and Objective closure.
+
+## 0.1.20 — 2026-09-25
+
+- Constrain planner citations to exact supplied source paths and bare Markdown heading names in the structured-output schema and production prompt.
+- Preserve selected-section scope by allowing the empty whole-source heading only when the pinned planning packet includes an actual whole-source entry.
+- Retain strict non-normalizing semantic validation and expose bounded expected-heading diagnostics when a provider response violates the citation contract.
+
+## 0.1.19 — 2026-09-25
+
+- Bind every controller-imported source binding and exact content identity into the controller-owned capture receipt for each candidate set.
+- Reject missing, edited, reordered, cross-candidate, accepted-binding-mismatched, or unrecognized input receipt fields during state ingress.
+- Expose only bounded controller input/member identities to result review so matching digest, byte count, and media type can prove exact imported-byte identity without trusting harness prose.
+
+## 0.1.18 — 2026-09-25
+
+- Bind the exact source, rights basis, visibility, and lineage parsed from `.factory-assets.json` into the controller-owned capture receipt alongside its declaration digest.
+- Reject partial, forged, edited, cross-set, or unrecognized manifest-provenance receipt fields during state ingress while keeping provider-neutral non-manifest captures non-authoritative for manifest claims.
+- Expose only the bounded controller-verified declaration to Work Item review, preserving generic selected-asset provenance as separately harness-declared evidence.
+
+## 0.1.17 — 2026-09-25
+
+- Retry classified provider-capacity failures twice for graph, Work Item result, and final Objective review while preserving the selected reviewer model, reasoning, exact prompt, and schema.
+- Record each bounded provider attempt and delay independently in diagnostics without replaying workers, validation, planning, or delivery.
+- Keep non-capacity failures and exhausted capacity fail-closed through the existing exact human-decision path, with method-authoritative review phases controlling retry and diagnostic attribution.
+
+## 0.1.16 — 2026-09-25
+
+- Align the installed setup skill with the independent runtime defaults for planner, reviewer, and worker model selections.
+- Check the packaged setup guidance against the installed runtime default exports during the offline packed-artifact smoke.
+
+## 0.1.15 — 2026-09-25
+
+- Require every streamed provider turn to emit an explicit successful terminal event; classify premature stream exhaustion or interruption instead of treating it as completion.
+- Bound planning, review, and detached worker turns with one shared 15-minute reset-on-real-event idle watchdog that does not depend on provider SDK abort cooperation.
+- Close provider iterators on terminal paths with bounded cleanup while preserving the authoritative provider failure, and durably record timeout or interruption failures without result evidence.
+
+## 0.1.14 — 2026-09-25
+
+- Emit controller-owned capture receipts only after Factory verifies every complete candidate member beneath `.factory-media/`, and bind optional `.factory-assets.json` provenance only after a descriptor-based regular-file read matches the harness declaration exactly.
+- Emit controller-owned selection receipts with fixed CLI/application invocation provenance, selected-set identity, exact destinations, actor, time, optional reason, and downstream bindings.
+- Bound every authoritative receipt and selected-asset review observation to its validated schema, strip unknown persisted claims, preserve provider-neutral non-manifest harnesses and documented harness metadata, and treat absent legacy evidence as non-proof.
+
+## 0.1.13 — 2026-09-25
+
+- Hydrate only the selected required-LFS members from Factory's verified local content store into exact-tree validation worktrees, verify their committed pointer and restored SHA-256/size before target commands, and fail closed before command zero when local selected bytes are missing or corrupt.
+- Reverify selected bytes after validation and compare the final worktree state with its controller-hydrated baseline, preserving clean-tree enforcement without globally enabling Git LFS smudging or fetching from the network.
+- Strengthen the regular/native application gate so both Work Item and final Objective validation must hash the exact selected content rather than merely accept a non-empty LFS pointer.
+
 ## 0.1.12 — 2026-09-25
 
 - Bind planning and independent graph review to a canonical installed-artifact manifest of controller-enforced media and Git LFS guarantees, rejecting edited or stale capability identities before activation.

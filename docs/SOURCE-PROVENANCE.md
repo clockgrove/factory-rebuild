@@ -4,6 +4,18 @@ The clean implementation starts from the Factory plan reviewed September 22, 202
 
 The MIT license text is retained from the archived repository. Runtime code does not read this ledger.
 
+## Repository quality tooling (#105)
+
+Issue #105, the repository's effective ESLint/TypeScript-ESLint and Prettier
+configuration, and official Biome 2.5.14 release, package, migration, formatter,
+and rule-source documentation supplied the tooling migration. No archived
+Factory source, test, fixture, state, or qualification implementation was
+inspected or copied. Biome owns supported TypeScript lint and repository format
+checks; current supported ESLint and Prettier versions retain only the rules and
+file formats Biome cannot cover. Secretlint remains the unchanged packaged
+prepublication security check. [QUALITY-TOOLING.md](QUALITY-TOOLING.md) records
+the complete old/new mapping.
+
 ## Trunk issue #24 — changed-file safety
 
 Inspected the archived `docs/THREAT-MODEL.md`, `src/runtime/pinned-git-environment.ts`, and `src/execution/artifacts.ts` at commit `994bbfcadb317aed2dfa932ec9d128e7d0d8c7a8`. The clean local driver retains exact-base collection, pinned Git environment, changed-path ownership, and the trusted-local worker boundary. It checks staged candidate modes and traversal, rejects newly introduced special entries, scans only changed staged and working bytes with maintained Secretlint rules, and filters the worker's effective environment to a small ambient allowlist. The archived artifact protocol, blanket file-size/count limits, receipt machinery, and claim of hostile-code containment were not retained. A reviewed operator-owned Secretlint config outside the target checkout is the explicit false-positive path.
@@ -81,6 +93,18 @@ The public plan and issue #28 supplied this slice's behavior. No archived teleme
 
 Issue #73, the current clean model/configuration contracts, and the installed `@openai/codex-sdk` event and usage types supplied this correction. Official Codex SDK and App Server documentation was consulted to confirm the supported streamed event and usage concepts; no archived Factory telemetry, prompt journal, billing model, retry policy, or provider-specific lifecycle state was inspected or copied. The clean implementation adds one provider-neutral observation contract, translates current Codex events inside `CodexPlanningModel`, and emits only safe identities, counts, timestamps, and digests through the existing private diagnostics sink. Raw prompts, source packets, and responses remain outside exportable metadata, and diagnostics remain observational rather than continuation truth.
 
+## Bounded reviewer-capacity retry (#94)
+
+Issue #94, the preserved fresh installed v0.1.16 qualification diagnostics, and the current clean model-observation and acceptance contracts supplied this correction. No archived retry policy, provider fallback, state format, or test was inspected or copied. The clean adapter retries only the same selected reviewer after a classified provider-capacity failure, reusing the exact in-memory structured request with two bounded delays. Attempt metadata remains observational; the atomic snapshot is still the only continuation truth. Non-capacity failures and exhausted capacity retain the existing fail-closed decision path.
+
+## Manifest provenance capture receipt (#99)
+
+Issue #99, the preserved fresh installed v0.1.17 qualification state, and the current clean media, atomic-state, and review-observation contracts supplied this correction. No archived receipt format, provenance protocol, state schema, prompt, or test was inspected or copied. The clean change extends the existing controller capture receipt with an exact clone of the provenance declaration already parsed from `.factory-assets.json`, validates that clone against the captured AssetSet on state ingress, and projects only the validated fields into result-review observations. Harness-declared selected-asset metadata remains separately labeled and absence of the controller fields proves nothing.
+
+## Imported source identity capture receipt (#102)
+
+Issue #102, the preserved fresh installed v0.1.18 qualification state, and the current clean source-import, media-capture, atomic-state, and review-observation contracts supplied this correction. No archived receipt format, content-transfer protocol, state schema, prompt, or test was inspected or copied. The clean change clones each controller-imported source binding and content ref into the existing capture receipt, validates the ordered clone against the captured AssetSet on state ingress, and projects only those bounded identities to result review. Matching input and member digest, byte count, and media type can therefore prove identity of the exact imported bytes; harness-declared fields and absence of a controller input receipt prove nothing.
+
 ## Graph-review rejection diagnostics (#76)
 
 Issue #76, the live #55 qualification evidence, and the current graph-review and diagnostic contracts supplied this correction. No archived reviewer parser, error format, prompt journal, or test was inspected or copied. The clean validator rejects each malformed field independently, emits only its bounded path and fixed reason plus an exact recognized supplied-source label when available, and preserves the existing fail-closed human-decision path. Provider quotes, details, questions, and unknown source text remain outside diagnostic metadata. The prompt and focused current-repository tests also establish an empty findings array as the only clean no-defect result.
@@ -106,3 +130,13 @@ Issue #59 and the current explicit-selection implementation supplied this change
 ## Controller media guarantees and same-path LFS migration (#81)
 
 Issue #81 and the current public compiler, media, delivery, validation, and atomic-state contracts supplied this correction. No additional archived source, test, receipt format, or media protocol was inspected or copied. The clean implementation adds one code-owned versioned controller-capability manifest, a narrowly authorized byte-identical repository-source-to-LFS migration at the same path, and one bounded hydration receipt inside existing final validation evidence. It does not add a second receipt journal, target command authority, provider-specific media behavior, or worker control over final destinations.
+
+The fresh installed v0.1.12 public gate then supplied the validation-worktree correction: its exact content-hash command observed the committed LFS pointer because pinned Git intentionally disabled smudging. The correction extends the same validation and local content-store contracts to verify the committed pointer, restore only selected required-LFS members locally, verify exact bytes before and after commands, and fail before command zero on missing or corrupt content. No archived source, new network authority, global smudge configuration, or pointer-only weakening was used.
+
+The fresh installed v0.1.14 public gate supplied the provider-stream terminal correction. A real result-review provider turn was interrupted after `turn.started`; the SDK event iterator neither produced a terminal event nor ended, so Factory kept the invocation active indefinitely. The correction uses the current SDK `AbortSignal` contract, requires explicit `turn.completed` authority, and applies one reset-on-real-event idle watchdog to both planning/review and detached Work Item turns. It adds no provider-task polling, inferred response, retry policy, lifecycle journal, or archived deadline machinery.
+
+## Controller materialization review evidence (#111)
+
+The immutable public v0.1.21 artifact subsequently completed #81's fresh disposable installed-artifact gate. Independent audit verified exact worker/controller Git attribution, unchanged selected bytes, final commands and remote LFS hydration at the integrated commit. [Acceptance evidence](V0.1.21-ACCEPTANCE.md) records public identities and distinguishes controller-attested manifest provenance from independently rehashed content. This acceptance added no runtime code or archived-source dependency.
+
+Issue #111, the preserved fresh installed v0.1.20 result-review packet, and the current clean Git, media-selection, atomic-state, and review-evidence contracts supplied this correction. No archived source, receipt format, state schema, journal, diagnostic record, or qualification implementation was inspected or copied. The clean implementation derives one bounded supervisor evidence source from the validated selected-set state and immutable Git commit graph: the controller materialization commit retains the worker result as its sole parent; exact commit/tree resolution and changed-path checks distinguish the worker delta from the selected-destination-only controller delta. The same source reaches regular/native Work Item review and final Objective review. Existing local collection still rejects final-destination mutation; the new Git evidence describes the delivered worker result and does not claim to trace transient filesystem operations.

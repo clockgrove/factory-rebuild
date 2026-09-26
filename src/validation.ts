@@ -1,17 +1,28 @@
-import { mkdirSync, rmSync } from "node:fs";
-import { join } from "node:path";
-import { randomUUID } from "node:crypto";
+import {
+  closeSync,
+  fstatSync,
+  lstatSync,
+  mkdirSync,
+  openSync,
+  readSync,
+  realpathSync,
+  rmSync,
+} from "node:fs";
+import { isAbsolute, join, resolve } from "node:path";
+import { createHash, randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { spawn, spawnSync } from "node:child_process";
 import { StringDecoder } from "node:string_decoder";
 import type {
   CapturedAssetSet,
+  ContentStore,
   ModelInvocationContext,
   PlanningModel,
   ResultReviewCandidate,
   ResultReviewEvidenceSource,
   ResultReviewFinding,
   ValidationCommandReceipt,
+  ValidationLfsMember,
   WorkItem,
 } from "./contracts.js";
 import type {
@@ -26,7 +37,7 @@ import {
   pinnedGitEnvironment,
   sanitizedWorkerEnvironment,
 } from "./process.js";
-import type { HydrationReceipt } from "./media.js";
+import { assetSelectionDigest, type HydrationReceipt } from "./media.js";
 
 export interface CriterionEvidence {
   criterion: string;
@@ -81,6 +92,114 @@ export function workItemReviewObservations(
   delivery: ReviewDeliveryObservation,
   selectedAsset?: CapturedAssetSet,
 ): string {
+  const current = state.work[item.id]!;
+  const captureReceipt = (asset: CapturedAssetSet) =>
+    asset.capture
+      ? {
+          authority: "factory-controller" as const,
+          ...(asset.capture.declarationPath &&
+            asset.capture.declarationDigest &&
+            asset.capture.declarationProvenance && {
+              declarationPath: asset.capture.declarationPath,
+              declarationDigest: asset.capture.declarationDigest,
+              declarationProvenance: {
+                source: asset.capture.declarationProvenance.source,
+                rights: asset.capture.declarationProvenance.rights,
+                visibility: asset.capture.declarationProvenance.visibility,
+                lineage: [...asset.capture.declarationProvenance.lineage],
+              },
+            }),
+          mediaRoot: ".factory-media" as const,
+          complete: true as const,
+          setId: asset.id,
+          ...(asset.capture.inputs && {
+            inputs: asset.capture.inputs.map((input) => ({
+              binding: {
+                kind: input.binding.kind,
+                path: input.binding.path,
+                role: input.binding.role,
+                mediaType: input.binding.mediaType,
+                visibility: input.binding.visibility,
+              },
+              ref: {
+                digest: input.ref.digest,
+                bytes: input.ref.bytes,
+                mediaType: input.ref.mediaType,
+              },
+            })),
+          }),
+          members: asset.capture.members.map((member) => ({
+            role: member.role,
+            stagingPath: member.stagingPath,
+            destination: member.destination,
+            digest: member.digest,
+            bytes: member.bytes,
+            mediaType: member.mediaType,
+          })),
+        }
+      : null;
+  const contentRef = (ref: CapturedAssetSet["members"][number]["ref"]) => ({
+    digest: ref.digest,
+    bytes: ref.bytes,
+    mediaType: ref.mediaType,
+  });
+  const provenance = (asset: CapturedAssetSet) => ({
+    source: asset.provenance.source,
+    rights: asset.provenance.rights,
+    visibility: asset.provenance.visibility,
+    lineage: asset.provenance.lineage,
+  });
+  const selectedAssetObservation = (asset: CapturedAssetSet) => ({
+    id: asset.id,
+    ...(asset.inputs && {
+      inputs: asset.inputs.map((input) => ({
+        binding: {
+          ...(input.binding.kind && { kind: input.binding.kind }),
+          path: input.binding.path,
+          role: input.binding.role,
+          mediaType: input.binding.mediaType,
+          visibility: input.binding.visibility,
+        },
+        ref: contentRef(input.ref),
+      })),
+    }),
+    members: asset.members.map((member) => ({
+      role: member.role,
+      ref: contentRef(member.ref),
+      destination: member.destination,
+      ...(member.formatMetadata && {
+        formatMetadata: {
+          source: member.formatMetadata.source,
+          values: member.formatMetadata.values,
+        },
+      }),
+    })),
+    ...(asset.relationships && {
+      relationships: asset.relationships.map((relationship) => ({
+        from: relationship.from,
+        toRole: relationship.toRole,
+        kind: relationship.kind,
+      })),
+    }),
+    provenance: provenance(asset),
+    ...(asset.production && {
+      production: {
+        ...(asset.production.model && { model: asset.production.model }),
+        ...(asset.production.tool && { tool: asset.production.tool }),
+        ...(asset.production.request !== undefined && {
+          request: asset.production.request,
+        }),
+        ...(asset.production.parameters !== undefined && {
+          parameters: asset.production.parameters,
+        }),
+      },
+    }),
+    evidence: {
+      harnessIdentity: asset.evidence.harnessIdentity,
+      resultDigest: asset.evidence.resultDigest,
+    },
+    ...(asset.capture && { capture: captureReceipt(asset) }),
+  });
   const criterionText = item.acceptance.join("\n");
   const namedByCriterion = (id: string): boolean => {
     const escaped = id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -122,8 +241,147 @@ export function workItemReviewObservations(
         integratedCommitSha: work.integratedSha ?? null,
       };
     }),
-    selectedAsset: selectedAsset ?? null,
+    assetCaptureReceipts: (current.assets ?? []).map(captureReceipt),
+    selectedAsset: selectedAsset
+      ? selectedAssetObservation(selectedAsset)
+      : null,
+    assetSelectionReceipt:
+      selectedAsset && current.selection
+        ? {
+            authority: "factory-controller",
+            setId: selectedAsset.id,
+            selectionDigest: current.selectionDigest ?? null,
+            actor: current.selection.actor,
+            at: current.selection.at,
+            ...(current.selection.reason && {
+              reason: current.selection.reason,
+            }),
+            ...(current.selection.surface && {
+              surface: current.selection.surface,
+            }),
+            destinations: current.selection.destinations.map((destination) => ({
+              role: destination.role,
+              path: destination.path,
+              digest: destination.digest,
+            })),
+            downstreamItems: current.selection.downstreamItems,
+          }
+        : null,
   });
+}
+
+/**
+ * Describe the exact worker/controller boundary for a selected AssetSet from
+ * immutable Git objects and the validated atomic snapshot. The controller's
+ * materialization commit retains the worker result as its sole parent, so a
+ * restart does not require a second receipt or diagnostic history.
+ */
+export function workItemMaterializationEvidence(args: {
+  state: FactoryState;
+  item: WorkItem;
+  checkout: string;
+  textBudgetPerBoundary?: number;
+}): ResultReviewEvidenceSource[] {
+  const { state, item, checkout } = args;
+  const current = state.work[item.id];
+  if (!current?.selectedAssetSet) return [];
+  if (
+    !current.executionBaseSha ||
+    !current.baseSha ||
+    !current.changeRef ||
+    !current.treeSha ||
+    !current.selection ||
+    !current.selectionDigest
+  )
+    throw new Error(
+      `Work Item ${item.id} lacks complete materialization identity`,
+    );
+  const selected = current.assets?.find(
+    (candidate) => candidate.id === current.selectedAssetSet,
+  );
+  if (!selected || assetSelectionDigest(selected) !== current.selectionDigest)
+    throw new Error(`Work Item ${item.id} selected AssetSet is not bound`);
+
+  assertCommitTree(
+    checkout,
+    current.changeRef,
+    current.treeSha,
+    `Work Item ${item.id} materialized result`,
+  );
+  assertResultCommitShape(checkout, item, {
+    ...current,
+    executionBaseSha: current.executionBaseSha,
+    baseSha: current.baseSha,
+    changeRef: current.changeRef,
+  });
+  const workerResultCommitSha = commitParents(checkout, current.changeRef)[0]!;
+  const workerResultTreeSha = pinnedGit(
+    checkout,
+    "rev-parse",
+    `${workerResultCommitSha}^{tree}`,
+  );
+  const perBoundaryBudget =
+    args.textBudgetPerBoundary ??
+    Math.floor(configuredResultReviewTextBudget() / 2);
+  const worker = resultChangePacket(
+    checkout,
+    current.baseSha,
+    workerResultCommitSha,
+    perBoundaryBudget,
+  );
+  const materialization = resultChangePacket(
+    checkout,
+    workerResultCommitSha,
+    current.changeRef,
+    perBoundaryBudget,
+  );
+  const workerPacket = parseResultChangePacket(worker.change);
+  const materializationPacket = parseResultChangePacket(materialization.change);
+  const destinations = current.selection.destinations.map(
+    ({ role, path, digest }) => ({ role, path, digest }),
+  );
+  const destinationPaths = new Set(destinations.map(({ path }) => path));
+  const workerDestinationChanges = workerPacket.changes
+    .map(({ path }) => path)
+    .filter((path) => destinationPaths.has(path));
+  if (workerDestinationChanges.length)
+    throw new Error(
+      `Work Item ${item.id} worker result changed controller-owned destinations: ${workerDestinationChanges.join(", ")}`,
+    );
+  const materializedPaths = materializationPacket.changes.map(
+    ({ path }) => path,
+  );
+  if (
+    materializedPaths.length !== destinationPaths.size ||
+    materializedPaths.some((path) => !destinationPaths.has(path))
+  )
+    throw new Error(
+      `Work Item ${item.id} controller materialization differs from selected destinations`,
+    );
+
+  return [
+    {
+      path: `Work Item Git delta: ${item.id} controller materialization`,
+      complete:
+        worker.truncatedPaths.length === 0 &&
+        materialization.truncatedPaths.length === 0,
+      content: JSON.stringify({
+        authority: "Factory supervisor controller materialization evidence",
+        workItemId: item.id,
+        selectedSetId: selected.id,
+        selectionDigest: current.selectionDigest,
+        destinations,
+        resultBaseCommitSha: current.baseSha,
+        workerResultCommitSha,
+        workerResultTreeSha,
+        materializationCommitSha: current.changeRef,
+        materializationTreeSha: current.treeSha,
+        workerDestinationChanges,
+        workerChange: workerPacket,
+        materializationChange: materializationPacket,
+      }),
+    },
+  ];
 }
 
 function resultChangePacket(
@@ -508,8 +766,16 @@ export function objectiveReviewEvidence(args: {
     resultCommitSha: string;
     integratedCommitSha: string;
   }[] = [];
-  const perItemTextBudget = Math.floor(
-    configuredResultReviewTextBudget() / Math.max(1, state.graph.items.length),
+  const materializationPacketCount = state.graph.items.filter(
+    (item) => state.work[item.id]?.selectedAssetSet,
+  ).length;
+  // Every item contributes one ordinary delta packet. A selected-asset item
+  // adds separate worker and controller-boundary packets to the same budget.
+  const finalReviewPatchPacketCount =
+    state.graph.items.length + materializationPacketCount * 2;
+  const perPatchTextBudget = Math.floor(
+    configuredResultReviewTextBudget() /
+      Math.max(1, finalReviewPatchPacketCount),
   );
   const work = state.graph.items.map((item) => {
     const current = state.work[item.id];
@@ -594,7 +860,7 @@ export function objectiveReviewEvidence(args: {
       checkout,
       current.baseSha,
       current.changeRef,
-      perItemTextBudget,
+      perPatchTextBudget,
     );
     const changePacket = parseResultChangePacket(change);
     const unownedChanges = changePacket.changes
@@ -626,6 +892,14 @@ export function objectiveReviewEvidence(args: {
         change,
       }),
     });
+    evidence.push(
+      ...workItemMaterializationEvidence({
+        state,
+        item,
+        checkout,
+        textBudgetPerBoundary: perPatchTextBudget,
+      }),
+    );
     return {
       id: item.id,
       status: current.status,
@@ -693,7 +967,12 @@ function reviewFindingRejection(
 ):
   | {
       field:
-        "finding" | "criterion" | "verdict" | "detail" | "source" | "quote";
+        | "finding"
+        | "criterion"
+        | "verdict"
+        | "detail"
+        | "source"
+        | "quote";
       reason: ReviewRejectionReason;
     }
   | undefined {
@@ -726,6 +1005,7 @@ function reviewFindingRejection(
 /** A separate read-only review evaluates each criterion on an exact-tree packet. */
 export async function reviewAcceptance(args: {
   model: PlanningModel;
+  reviewPhase?: "result-review" | "objective-review";
   checkout: string;
   baseSha: string;
   commit: string;
@@ -778,6 +1058,7 @@ export async function reviewAcceptance(args: {
   if (model.reviewResult) {
     try {
       const reviewed = await model.reviewResult({
+        reviewPhase: args.reviewPhase ?? "result-review",
         criteria,
         baseSha,
         treeSha: evidence.treeSha,
@@ -885,6 +1166,12 @@ function observeInvalidReview(
       invocationId: invocation.invocationId,
       phase: invocation.phase,
       ordinal: invocation.ordinal,
+      ...(invocation.providerAttempt === undefined
+        ? {}
+        : { providerAttempt: invocation.providerAttempt }),
+      ...(invocation.providerMaxAttempts === undefined
+        ? {}
+        : { providerMaxAttempts: invocation.providerMaxAttempts }),
       type: "response-invalid",
       failureClass: "semantic-validation",
       failureField: field,
@@ -912,6 +1199,140 @@ export interface ValidationOutputObservation {
   final: boolean;
 }
 
+function safeValidationPath(path: string): boolean {
+  return (
+    !!path &&
+    !isAbsolute(path) &&
+    !path.includes("\\") &&
+    !path.split("/").some((part) => !part || part === "." || part === "..") &&
+    path !== ".git" &&
+    !path.startsWith(".git/")
+  );
+}
+
+function assertSelectedLfsPointer(
+  worktree: string,
+  member: ValidationLfsMember,
+): void {
+  if (!safeValidationPath(member.destination))
+    throw new Error("Validation LFS destination is invalid");
+  if (
+    !/^[a-f0-9]{64}$/.test(member.digest) ||
+    !Number.isSafeInteger(member.bytes) ||
+    member.bytes < 0
+  )
+    throw new Error(
+      `Validation LFS identity is invalid: ${member.destination}`,
+    );
+  const filter = pinnedGit(
+    worktree,
+    "check-attr",
+    "filter",
+    "--",
+    member.destination,
+  );
+  if (!filter.endsWith(": lfs"))
+    throw new Error(
+      `Validation LFS policy does not cover ${member.destination}`,
+    );
+  let pointer: string;
+  try {
+    pointer = pinnedGitRaw(
+      worktree,
+      "show",
+      `HEAD:${member.destination}`,
+    ).toString("utf8");
+  } catch {
+    throw new Error(
+      `Validation tree is missing selected LFS path: ${member.destination}`,
+    );
+  }
+  const expected = `version https://git-lfs.github.com/spec/v1\noid sha256:${member.digest}\nsize ${member.bytes}\n`;
+  if (pointer !== expected)
+    throw new Error(
+      `Validation LFS pointer differs from selected bytes: ${member.destination}`,
+    );
+}
+
+function assertSelectedLfsBytes(
+  worktree: string,
+  member: ValidationLfsMember,
+): void {
+  const path = join(worktree, member.destination);
+  let fd: number | undefined;
+  try {
+    if (!lstatSync(path).isFile() || realpathSync(path) !== resolve(path))
+      throw new Error("unsafe file type");
+    fd = openSync(path, "r");
+    const expectedBytes = fstatSync(fd).size;
+    const hash = createHash("sha256");
+    let bytes = 0;
+    const chunk = Buffer.allocUnsafe(64 * 1024);
+    for (;;) {
+      const count = readSync(fd, chunk, 0, chunk.length, null);
+      if (!count) break;
+      hash.update(chunk.subarray(0, count));
+      bytes += count;
+    }
+    if (
+      bytes !== expectedBytes ||
+      bytes !== member.bytes ||
+      hash.digest("hex") !== member.digest
+    )
+      throw new Error("identity mismatch");
+  } catch {
+    throw new Error(
+      `Validation could not restore selected LFS bytes: ${member.destination}`,
+    );
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
+}
+
+async function hydrateSelectedLfsBytes(
+  worktree: string,
+  members: ValidationLfsMember[],
+  contentStore?: ContentStore,
+): Promise<void> {
+  if (!members.length) return;
+  if (!contentStore)
+    throw new Error("Validation LFS content store is unavailable");
+  const byDestination = new Map<string, ValidationLfsMember>();
+  for (const member of members) {
+    const existing = byDestination.get(member.destination);
+    if (
+      existing &&
+      (existing.digest !== member.digest || existing.bytes !== member.bytes)
+    )
+      throw new Error(
+        `Validation has conflicting LFS selections: ${member.destination}`,
+      );
+    byDestination.set(member.destination, member);
+  }
+  const selected = [...byDestination.values()];
+  for (const member of selected) assertSelectedLfsPointer(worktree, member);
+  for (const member of selected) {
+    const path = join(worktree, member.destination);
+    try {
+      if (!lstatSync(path).isFile() || realpathSync(path) !== resolve(path))
+        throw new Error("unsafe file type");
+      const ref = {
+        digest: member.digest,
+        bytes: member.bytes,
+        mediaType: member.mediaType,
+      };
+      await contentStore.verify(ref);
+      rmSync(path);
+      await contentStore.materialize(ref, path);
+    } catch {
+      throw new Error(
+        `Validation could not restore selected LFS bytes: ${member.destination}`,
+      );
+    }
+    assertSelectedLfsBytes(worktree, member);
+  }
+}
+
 export async function validateTree(
   checkout: string,
   root: string,
@@ -920,6 +1341,8 @@ export async function validateTree(
   commands: string[],
   observe?: (entry: ValidationObservation) => void,
   observeOutput?: (entry: ValidationOutputObservation) => void,
+  lfsMembers: ValidationLfsMember[] = [],
+  contentStore?: ContentStore,
 ): Promise<ValidationEvidence> {
   mkdirSync(root, { recursive: true });
   const emptyCredentials = join(root, "empty-gh-config");
@@ -932,6 +1355,10 @@ export async function validateTree(
       throw new Error(
         `Validation tree mismatch: expected ${expectedTree}, got ${treeSha}`,
       );
+    if (pinnedGit(worktree, "status", "--porcelain"))
+      throw new Error("Validation worktree is not initially clean");
+    await hydrateSelectedLfsBytes(worktree, lfsMembers, contentStore);
+    const hydratedStatus = pinnedGit(worktree, "status", "--porcelain");
     const evidence: ValidationEvidence = { treeSha, commands: [] };
     for (const [index, check] of commands.entries()) {
       const started = Date.now();
@@ -994,7 +1421,8 @@ export async function validateTree(
         treeSha,
       });
     }
-    if (pinnedGit(worktree, "status", "--porcelain"))
+    for (const member of lfsMembers) assertSelectedLfsBytes(worktree, member);
+    if (pinnedGit(worktree, "status", "--porcelain") !== hydratedStatus)
       throw new Error("Validation command modified the result tree");
     return evidence;
   } finally {
@@ -1244,6 +1672,8 @@ export async function validateWorkItem(
   observe?: (entry: ValidationObservation) => void,
   observeOutput?: (entry: ValidationOutputObservation) => void,
   predecessorSha?: string,
+  lfsMembers: ValidationLfsMember[] = [],
+  contentStore?: ContentStore,
 ): Promise<ValidationEvidence> {
   assertPinnedNpmScripts(
     checkout,
@@ -1265,5 +1695,7 @@ export async function validateWorkItem(
     item.validation.map((v) => v.command),
     observe,
     observeOutput,
+    lfsMembers,
+    contentStore,
   );
 }

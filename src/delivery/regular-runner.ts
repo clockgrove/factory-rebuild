@@ -11,7 +11,11 @@ import type {
   WorkItem,
 } from "../contracts.js";
 import { AuthenticationRequiredError } from "../contracts.js";
-import { materializeAssetSet, selectedInputsForItem } from "../media.js";
+import {
+  materializeAssetSet,
+  selectedInputsForItem,
+  validationLfsMembersForItem,
+} from "../media.js";
 import { closeWorkItem } from "../completion.js";
 import { git } from "../process.js";
 import { readyItems } from "../scheduler.js";
@@ -20,6 +24,7 @@ import {
   AcceptanceDecisionRequired,
   reviewAcceptance,
   validateWorkItem,
+  workItemMaterializationEvidence,
   workItemReviewObservations,
 } from "../validation.js";
 import { planningSources } from "../compiler.js";
@@ -163,6 +168,13 @@ export async function runRegularGraph(args: {
             entry.final,
           ),
         itemBase,
+        validationLfsMembersForItem(
+          state,
+          item,
+          config.checkout,
+          work.changeRef!,
+        ),
+        args.contentStore,
       );
       const reviewResult = () =>
         reviewAcceptance({
@@ -178,6 +190,11 @@ export async function runRegularGraph(args: {
             config.checkout,
           ),
           decisions: work.acceptanceDecisions,
+          evidenceSources: workItemMaterializationEvidence({
+            state,
+            item,
+            checkout: config.checkout,
+          }),
           observations: workItemReviewObservations(
             state,
             item,

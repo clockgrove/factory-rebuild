@@ -21,6 +21,10 @@ npm run notices:check
 
 The [Quality workflow](.github/workflows/quality.yml) runs this local gate on pull requests and main. Live GitHub and Codex acceptance remains an explicit disposable-target run.
 
+[Quality tooling](docs/QUALITY-TOOLING.md) documents the pinned Biome version,
+the old/new lint rule mapping, and the narrow ESLint and Prettier fallbacks that
+preserve checks Biome does not cover.
+
 For behavior that touches GitHub delivery, process lifecycle, or binary content, also test an installed package against a disposable target repository and record the Objective, PR, exact integrated head, and validation result in the pull request.
 
 ## Boundaries

@@ -4,7 +4,7 @@
 
 Factory turns a repository development Objective into source-grounded Work Items, runs bounded coding attempts, validates their exact result trees, and delivers the changes through GitHub. It is an open-source Clockgrove plugin installed for one target repository at a time.
 
-**Version:** `v0.1.12`. Factory runs the local Codex SDK path with a source-grounded dependency DAG, regular pull requests or native linear stacks, human-selected AssetSets, Git LFS, and private diagnostics. See [current build status](https://github.com/clockgrove/factory-rebuild/blob/main/docs/BUILD-STATUS.md) for the published artifact identity and exact Objective acceptance evidence.
+**Version:** `v0.1.21`. Factory runs the local Codex SDK path with a source-grounded dependency DAG, regular pull requests or native linear stacks, human-selected AssetSets, Git LFS, and private diagnostics. See [current build status](https://github.com/clockgrove/factory-rebuild/blob/main/docs/BUILD-STATUS.md) for the published artifact identity and exact Objective acceptance evidence.
 
 ## How it works
 
@@ -15,19 +15,19 @@ Factory turns a repository development Objective into source-grounded Work Items
 
 The target repository owns its product and runtime truth. Factory state and credentials stay outside the target checkout. Factory refuses to run against any Factory source repository.
 
-## Install v0.1.12
+## Install v0.1.21
 
-Install the plugin from the pinned Clockgrove marketplace and its bundled CLI from the matching [release page](https://github.com/clockgrove/factory-rebuild/releases/tag/v0.1.12) on Linux x64 with Node.js 22 or later. Compare the tarball digest with the independent value in [build status](https://github.com/clockgrove/factory-rebuild/blob/main/docs/BUILD-STATUS.md):
+Install the plugin from the pinned Clockgrove marketplace and its bundled CLI from the matching [release page](https://github.com/clockgrove/factory-rebuild/releases/tag/v0.1.21) on Linux x64 with Node.js 22 or later. Compare the tarball digest with the independent value in [build status](https://github.com/clockgrove/factory-rebuild/blob/main/docs/BUILD-STATUS.md):
 
 ```sh
-codex plugin marketplace add clockgrove/factory-rebuild --ref v0.1.12
+codex plugin marketplace add clockgrove/factory-rebuild --ref v0.1.21
 codex plugin add factory@clockgrove
-gh release download v0.1.12 --repo clockgrove/factory-rebuild \
-  --pattern clockgrove-factory-0.1.12.tgz --pattern SHA256SUMS
+gh release download v0.1.21 --repo clockgrove/factory-rebuild \
+  --pattern clockgrove-factory-0.1.21.tgz --pattern SHA256SUMS
 sha256sum --check SHA256SUMS
 # Compare the tarball digest with the independently recorded build status value.
 npm install --offline --ignore-scripts --prefix /absolute/private/factory-prefix \
-  ./clockgrove-factory-0.1.12.tgz
+  ./clockgrove-factory-0.1.21.tgz
 export PATH="/absolute/private/factory-prefix/node_modules/.bin:$PATH"
 factory help
 ```
@@ -36,7 +36,7 @@ The plugin supplies the packaged `director` and `setup` skills; the verified CLI
 
 ## Build from source
 
-For development, the following commands build and install the current checkout as a local candidate. A local build has its own package identity and does not count as installation of the published `v0.1.12` artifact. The [release checklist](https://github.com/clockgrove/factory-rebuild/blob/main/docs/RELEASE-CHECKLIST.md) and [public release procedure](https://github.com/clockgrove/factory-rebuild/blob/main/docs/PUBLIC-RELEASE.md) describe the exact-artifact gate.
+For development, the following commands build and install the current checkout as a local candidate. A local build has its own package identity and does not count as installation of the published `v0.1.21` artifact. The [release checklist](https://github.com/clockgrove/factory-rebuild/blob/main/docs/RELEASE-CHECKLIST.md) and [public release procedure](https://github.com/clockgrove/factory-rebuild/blob/main/docs/PUBLIC-RELEASE.md) describe the exact-artifact gate.
 
 Requires Node.js 22 or later, Git, GitHub CLI authentication for the target repository, and an authenticated Codex SDK environment for planning and review. A selected non-Codex Work Item harness also needs its own local developer login. Media Objectives require Git LFS. Clone this repository, then build and install its package in an isolated prefix:
 
@@ -48,7 +48,7 @@ npm run lint
 npm run format:check
 npm test
 npm pack
-npm install --prefix /tmp/factory-candidate ./clockgrove-factory-0.1.12.tgz
+npm install --prefix /tmp/factory-candidate ./clockgrove-factory-0.1.21.tgz
 ```
 
 The current source candidate declares the Claude Agent SDK and GitHub Copilot
@@ -59,6 +59,9 @@ for their exact versions/licenses, configuration shapes, capability/lifecycle
 contract, local-login behavior, security boundary, CLI examples, and
 `composeWithLocalHarness` package-root API. This candidate behavior is not a
 claim about the already published `v0.1.7` artifact.
+
+The repository's [quality-tooling map](docs/QUALITY-TOOLING.md) records the
+pinned Biome release and the exact remaining compatibility checks.
 
 Bind one target checkout, inspect a read-only plan, and run that exact candidate with the installed CLI:
 
@@ -99,6 +102,10 @@ Factory writes explicit Codex selections for the planner, independent graph/resu
 
 Every Factory-owned compile, graph-review, Work Item result-review, and final Objective-review call emits a correlated model-invocation start, provider progress when actually supplied, and completion, failure, or invalid-response observation. Safe metadata includes configured adapter/model/reasoning, provider thread identity, phase and revision/attempt ordinal, durations, byte counts and stable prompt/schema/source-packet/response digests, and structured-output or semantic-validation failure class. A rejected graph-review response records each exact failing field path, a bounded reason such as `unknown-source`, `quote-not-found`, or `empty`, and only an exact supplied source label when one was recognized; it never copies the provider's quote, detail, question, or unknown source text. Raw prompts, target source, responses, and command output are excluded from exportable model metadata. Provider-reported input, cached-input, cache-write-input, output, reasoning-output, and total tokens are preserved only when supplied; an absent category remains absent and terminal invocations without usage increment `usageUnavailableCount`. The summary reports the cache-read numerator and exact input-token denominator as well as their ratio. A silent provider produces no fabricated heartbeat: `--follow` shows the last real progress event and its timestamp. Treat diagnostic output as sensitive: it may include separate worker command output and validation stdout/stderr. Factory redacts known credential patterns and configured allowed secret values, but arbitrary target commands may print other private data. Keep terminal capture and any export outside the target checkout.
 
+The summary's existing `objective`, `byPhase`, and `byScope` fields retain planning-and-review model scope, explicitly labeled by `scope`. `modelUsage`, `workerUsage`, and `combinedUsage` distinguish model-only, worker-only, and combined observed counters. Workers may supply a typed `WorkerUsageObservation` in the existing private progress stream (`operation: "worker-usage"`, payload `workerUsage`); the Codex worker normalizes its SDK counters there. No arbitrary result evidence is parsed. Worker invocation/provider-attempt identities deduplicate cumulative progress and terminal snapshots; explicit implementation retries remain separate attempts. Terminal failures retain any supplied usage, including failures after provider completion. Active invocations are counted but their counters are not included until terminal. Per-category coverage is `available`, `partial`, or `unavailable`; `unobservedAttemptCount` identifies known harness attempts without typed telemetry. Missing counters never become zero. Cache ratios use only invocations supplying both cached-input and input counters; cached input is a subset, not extra input. These are cumulative provider counters, not prompt size, context occupancy, billing, or cost. Coverage describes observed invocations, not proof that all historical calls were recorded.
+
+Every Codex SDK turn must emit an explicit `turn.completed` event before Factory accepts its structured response or Work Item result. Factory aborts a turn after 15 minutes without a real provider event; planning and review diagnostics classify that terminal failure as `provider-timeout`, while a stream that ends without completion is `provider-interrupted`. The detached Work Item worker applies the same idle bound and terminal requirement to its durable result. These failures never infer a response or retry an implementation attempt.
+
 Diagnostic and worker progress files live under the private Factory state root with mode `0600`; containing directories are private. The local log is observational and is never used to reconstruct or retry work. A write failure appears on controller stderr and does not alter execution. Operators may delete old `diagnostics.ndjson` and `harness/*.progress.ndjson` files after runs have stopped, subject to their own retention policy. The event `metadata` field holds identities suitable for a future exporter; `detail` is local-only and must not be exported without explicit redaction policy. No hosted telemetry backend is required.
 
 The preview lists each Work Item command and every final Objective command with its exact source and host execution status. A source-declared command must appear as a complete line in its cited pinned source. A base-observed command must name a tracked file at the accepted base containing that exact line, or a matching `package.json` script invocation. A blocked command stops activation; editing a plan file cannot grant authority. A source-declared package command whose script or lockfile is not yet in the accepted base appears as authorized but explicitly deferred: Factory checks that entrypoint in the exact result tree before execution.
@@ -123,7 +130,7 @@ factory run --objective ISSUE_NUMBER
 
 `select` records the current OS user (or `--actor NAME`), decision time, optional reason, selected destinations and digests, and each explicitly bound direct dependent (`--bind` may be repeated). A bound dependent receives only the selected set's immutable member files and descriptors in a temporary input area. Factory verifies they were not changed and removes them before delivery. The harness may report its representation of those inputs; Factory does not assert that every model call receives raw bytes. Unselected candidates are never passed to the dependent attempt.
 
-The target owns its `.gitattributes` policy. Factory checks selected bytes against the committed LFS pointer, uploads required LFS objects before branch publication, and verifies exact selected bytes in a fresh clone after integration. A canonical installed-artifact capability manifest tells planning and independent review which of those controller guarantees must not be reimplemented as target Work Items or invented target commands; its exact value and digest are part of the immutable plan. Successful hydration produces bounded exact-commit/tree evidence before final Objective review and closure. Source bindings are structured records with `path`, `role`, `mediaType`, `visibility`, and optional `kind`. `kind: repository` (the default) names a file in the pinned target checkout. When that exact source path is also a selected required-LFS destination, Factory may migrate it in place only if the selected, captured, and current bytes are identical; the worker leaves final destinations untouched. `kind: local` names an absolute private file explicitly cited in the Objective; Factory imports its bytes into the private content store. `kind: github-attachment` names a GitHub Objective attachment URL explicitly present in the issue body, in either `github.com/user-attachments/assets/UUID` or `github.com/OWNER/REPO/assets/ID/NAME` form. Factory downloads it with the GitHub CLI identity, allows redirects only to GitHub content hosts, and retains the URL, declared authorization/visibility, and immutable digest. A private source is supplied to the harness as a temporary file plus descriptor and is removed before delivery. GitHub attachment availability still depends on that identity's access to the Objective. Media contracts preserve output roles, lineage, and optional tool-supplied format metadata without interpreting the format. The [public PNG fixture](https://github.com/clockgrove/factory-rebuild/blob/main/test/fixtures/objectives/media-lfs.md) shows one source, role, and validation example; an integration test covers an opaque multi-file set consumed downstream under target-owned LFS. If you use a temporary `XDG_CONFIG_HOME` for Factory, keep the controller's GitHub CLI authentication visible through `GH_CONFIG_DIR` or its normal configuration path.
+The target owns its `.gitattributes` policy. Factory checks selected bytes against the committed LFS pointer, uploads required LFS objects before branch publication, and verifies exact selected bytes in a fresh clone after integration. Before any Work Item or final Objective validation command, Factory verifies each applicable committed pointer, restores only its selected required-LFS bytes from the verified local content store, and checks the exact SHA-256 and size; unavailable or corrupt local content stops before command zero, without a network fetch or global smudge. Selected bytes are checked again after commands and clean-tree enforcement compares against that controller-hydrated baseline. A canonical installed-artifact capability manifest tells planning and independent review which of those controller guarantees must not be reimplemented as target Work Items or invented target commands; its exact value and digest are part of the immutable plan. Successful fresh-clone hydration produces bounded exact-commit/tree evidence before final Objective review and closure. Source bindings are structured records with `path`, `role`, `mediaType`, `visibility`, and optional `kind`. `kind: repository` (the default) names a file in the pinned target checkout. When that exact source path is also a selected required-LFS destination, Factory may migrate it in place only if the selected, captured, and current bytes are identical; the worker leaves final destinations untouched. `kind: local` names an absolute private file explicitly cited in the Objective; Factory imports its bytes into the private content store. `kind: github-attachment` names a GitHub Objective attachment URL explicitly present in the issue body, in either `github.com/user-attachments/assets/UUID` or `github.com/OWNER/REPO/assets/ID/NAME` form. Factory downloads it with the GitHub CLI identity, allows redirects only to GitHub content hosts, and retains the URL, declared authorization/visibility, and immutable digest. A private source is supplied to the harness as a temporary file plus descriptor and is removed before delivery. GitHub attachment availability still depends on that identity's access to the Objective. Media contracts preserve output roles, lineage, and optional tool-supplied format metadata without interpreting the format. The [public PNG fixture](https://github.com/clockgrove/factory-rebuild/blob/main/test/fixtures/objectives/media-lfs.md) shows one source, role, and validation example; an integration test covers an opaque multi-file set consumed downstream under target-owned LFS. If you use a temporary `XDG_CONFIG_HOME` for Factory, keep the controller's GitHub CLI authentication visible through `GH_CONFIG_DIR` or its normal configuration path.
 
 `factory cancel --objective ISSUE_NUMBER` stops owned local processes. `factory retry --objective ISSUE_NUMBER --item WORK_ITEM_ID` starts a new explicit attempt for a failed or cancelled unpublished item. Built-in harnesses reuse the developer's existing local CLI/profile authentication; Factory does not store provider credentials in configuration. If a login is absent or expired, the attempt fails with `codex login`, `claude auth login`, or the interactive `copilot` sign-in as appropriate, and the operator logs in outside Factory before explicitly retrying. Managed-agent and sandbox modes are reserved contract shapes and fail preflight until their branches ship.
 

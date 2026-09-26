@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import {
   chmodSync,
   existsSync,
@@ -31,6 +32,16 @@ import {
   factoryConfig,
   git,
 } from "./support/integration-fixture.mjs";
+import { LocalContentStore } from "../dist/content/local.js";
+import {
+  assetSelectionDigest,
+  validationLfsMembersForItem,
+} from "../dist/media.js";
+import {
+  DiagnosticEmitter,
+  readDiagnostics,
+  summarizeModelInvocations,
+} from "../dist/diagnostics.js";
 
 function item(baseSha, validation) {
   return {
@@ -731,6 +742,217 @@ test("a newly declared script cannot smuggle a lifecycle hook", async () => {
   });
 });
 
+test("validation fails closed before commands when selected LFS bytes are unavailable or corrupt", async () => {
+  const selected = Buffer.from("selected validation bytes\u0000\u0001", "utf8");
+  await withTarget(
+    "missing-validation-lfs",
+    { "assets/selected.bin": selected },
+    async (root, target) => {
+      git(target.checkout, "lfs", "install", "--local");
+      writeFileSync(
+        join(target.checkout, ".gitattributes"),
+        "assets/*.bin filter=lfs diff=lfs merge=lfs -text\n",
+      );
+      git(target.checkout, "add", ".gitattributes");
+      git(target.checkout, "add", "--renormalize", "assets/selected.bin");
+      git(
+        target.checkout,
+        "-c",
+        "user.name=Factory Test",
+        "-c",
+        "user.email=factory-test@example.com",
+        "commit",
+        "-m",
+        "Store selected asset in LFS",
+      );
+      const commit = git(target.checkout, "rev-parse", "HEAD");
+      const treeSha = git(target.checkout, "rev-parse", "HEAD^{tree}");
+      const digest = createHash("sha256").update(selected).digest("hex");
+      const object = join(
+        target.checkout,
+        ".git",
+        "lfs",
+        "objects",
+        digest.slice(0, 2),
+        digest.slice(2, 4),
+        digest,
+      );
+      assert.equal(existsSync(object), true);
+      rmSync(object);
+      const commandMarker = join(root, "validation-command-ran");
+      const contentStore = new LocalContentStore(join(root, "content"));
+      await assert.rejects(
+        validateTree(
+          target.checkout,
+          join(root, "validation"),
+          commit,
+          treeSha,
+          [`touch '${commandMarker}'`],
+          undefined,
+          undefined,
+          [
+            {
+              itemId: "media",
+              setId: "candidate-a",
+              role: "model",
+              destination: "assets/selected.bin",
+              digest,
+              bytes: selected.length,
+              mediaType: "application/octet-stream",
+            },
+          ],
+          contentStore,
+        ),
+        /Validation could not restore selected LFS bytes: assets\/selected\.bin/,
+      );
+      assert.equal(existsSync(commandMarker), false);
+
+      const corruptRoot = join(root, "corrupt-content");
+      const corruptStore = new LocalContentStore(corruptRoot);
+      const stored = await corruptStore.put(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(selected);
+            controller.close();
+          },
+        }),
+        { mediaType: "application/octet-stream" },
+      );
+      assert.equal(stored.digest, digest);
+      writeFileSync(
+        join(corruptRoot, digest.slice(0, 2), digest),
+        Buffer.alloc(selected.length, 0x78),
+      );
+      await assert.rejects(
+        validateTree(
+          target.checkout,
+          join(root, "corrupt-validation"),
+          commit,
+          treeSha,
+          [`touch '${commandMarker}'`],
+          undefined,
+          undefined,
+          [
+            {
+              itemId: "media",
+              setId: "candidate-a",
+              role: "model",
+              destination: "assets/selected.bin",
+              digest,
+              bytes: selected.length,
+              mediaType: "application/octet-stream",
+            },
+          ],
+          corruptStore,
+        ),
+        /Validation could not restore selected LFS bytes: assets\/selected\.bin/,
+      );
+      assert.equal(existsSync(commandMarker), false);
+    },
+  );
+});
+
+test("independent exact-tree validation hydrates a matching selected pointer already in its base", async () => {
+  const selected = Buffer.from("selected integrated bytes\u0000\u0001", "utf8");
+  await withTarget(
+    "independent-validation-lfs",
+    { "assets/selected.bin": selected },
+    async (root, target) => {
+      git(target.checkout, "lfs", "install", "--local");
+      writeFileSync(
+        join(target.checkout, ".gitattributes"),
+        "assets/*.bin filter=lfs diff=lfs merge=lfs -text\n",
+      );
+      writeFileSync(join(target.checkout, "independent.txt"), "result\n");
+      git(target.checkout, "add", ".gitattributes", "independent.txt");
+      git(target.checkout, "add", "--renormalize", "assets/selected.bin");
+      git(
+        target.checkout,
+        "-c",
+        "user.name=Factory Test",
+        "-c",
+        "user.email=factory-test@example.com",
+        "commit",
+        "-m",
+        "Add integrated selected asset and independent result",
+      );
+      const commit = git(target.checkout, "rev-parse", "HEAD");
+      const treeSha = git(target.checkout, "rev-parse", "HEAD^{tree}");
+      const contentStore = new LocalContentStore(join(root, "content"));
+      const ref = await contentStore.put(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(selected);
+            controller.close();
+          },
+        }),
+        { mediaType: "application/octet-stream" },
+      );
+      const media = {
+        id: "media",
+        dependencies: [],
+        requiredLfsRoles: ["model"],
+      };
+      const independent = {
+        id: "independent",
+        dependencies: [],
+        requiredLfsRoles: [],
+      };
+      const set = {
+        id: "candidate-a",
+        members: [
+          {
+            role: "model",
+            ref,
+            destination: "assets/selected.bin",
+          },
+        ],
+        provenance: {
+          source: "assets/selected.bin",
+          rights: "public test fixture",
+          visibility: "repository",
+          lineage: ["assets/selected.bin"],
+        },
+        evidence: { harnessIdentity: "test", resultDigest: "test" },
+      };
+      const state = {
+        graph: { items: [media, independent] },
+        work: {
+          media: {
+            assets: [set],
+            selectedAssetSet: set.id,
+            selectionDigest: assetSelectionDigest(set),
+          },
+          independent: {},
+        },
+      };
+      const members = validationLfsMembersForItem(
+        state,
+        independent,
+        target.checkout,
+        commit,
+      );
+      assert.deepEqual(
+        members.map((member) => [member.itemId, member.destination]),
+        [["media", "assets/selected.bin"]],
+      );
+      const command = `test -s independent.txt && sha256sum assets/selected.bin | grep -qx '${ref.digest}  assets/selected.bin'`;
+      const evidence = await validateTree(
+        target.checkout,
+        join(root, "validation"),
+        commit,
+        treeSha,
+        [command],
+        undefined,
+        undefined,
+        members,
+        contentStore,
+      );
+      assert.equal(evidence.commands[0].passed, true);
+    },
+  );
+});
+
 test("result review auto-accepts sourced evidence, otherwise asks one exact-tree decision", async () => {
   await withTarget("review", {}, async (root, target) => {
     writeFileSync(join(target.checkout, "result.txt"), "created\n");
@@ -812,6 +1034,81 @@ test("result review auto-accepts sourced evidence, otherwise asks one exact-tree
       malformedEvents.map((event) => [event.type, event.failureField]),
       [["response-invalid", "findings"]],
     );
+    const previousStateRoot = process.env.XDG_STATE_HOME;
+    process.env.XDG_STATE_HOME = join(root, "diagnostic-state");
+    try {
+      const emitter = new DiagnosticEmitter("example/retry-semantic", 1);
+      const observe = emitter.modelObserver({ scopeId: "result-attempt" });
+      const common = {
+        invocationId: "capacity-then-semantic-invalid",
+        phase: "result-review",
+        ordinal: 0,
+        providerMaxAttempts: 3,
+      };
+      observe({
+        ...common,
+        providerAttempt: 1,
+        type: "started",
+      });
+      observe({
+        ...common,
+        providerAttempt: 1,
+        type: "failed",
+        failureClass: "provider-capacity",
+        usageAvailable: false,
+      });
+      observe({
+        ...common,
+        providerAttempt: 2,
+        type: "started",
+      });
+      observe({
+        ...common,
+        providerAttempt: 2,
+        type: "completed",
+        usageAvailable: false,
+      });
+      await assert.rejects(
+        reviewAcceptance({
+          ...request,
+          model: {
+            async reviewResult() {
+              return {
+                findings: [
+                  {
+                    criterion: "result.txt exists",
+                    verdict: "pass",
+                    source: "OBJECTIVE",
+                    quote: "not present in the source",
+                    detail: "Invalid semantic evidence",
+                    question: "",
+                  },
+                ],
+              };
+            },
+          },
+          invocation: {
+            ...common,
+            providerAttempt: 2,
+            observe,
+          },
+        }),
+        AcceptanceDecisionRequired,
+      );
+      const events = readDiagnostics("example/retry-semantic", 1);
+      const invalid = events.find(
+        (event) => event.metadata.observationType === "response-invalid",
+      );
+      assert.equal(invalid.metadata.providerAttempt, 2);
+      assert.equal(invalid.metadata.providerMaxAttempts, 3);
+      const summary = summarizeModelInvocations(events);
+      assert.equal(summary.objective.invocationCount, 2);
+      assert.equal(summary.objective.failedCount, 2);
+      assert.equal(summary.objective.completedCount, 0);
+    } finally {
+      if (previousStateRoot === undefined) delete process.env.XDG_STATE_HOME;
+      else process.env.XDG_STATE_HOME = previousStateRoot;
+    }
     const clean = await reviewAcceptance({
       ...request,
       model: {
@@ -1674,6 +1971,353 @@ test("truncated per-Work-Item evidence cannot ground an automatic pass", async (
       else process.env.FACTORY_RESULT_REVIEW_TEXT_BUDGET_BYTES = previous;
     }
   });
+});
+
+test("final review shares one text budget across ordinary and materialization packets", async () => {
+  await withTarget(
+    "objective-materialization-budget",
+    {},
+    async (root, target) => {
+      const makeItem = (id, title, dependencies, ownedPaths) => ({
+        id,
+        title,
+        goal: `Create ${title}`,
+        acceptance: [`${title} is complete`],
+        nonGoals: ["No deployment"],
+        citations: [{ path: "OBJECTIVE" }],
+        dependencies,
+        ownedPaths,
+        resources: [],
+        validation: [],
+        brief: `Create ${title}`,
+        sourceAssets: [],
+        expectedOutputRoles: ["text"],
+        minimumAssetSets: 1,
+        requiredLfsRoles: [],
+      });
+      const commit = (message) => {
+        git(target.checkout, "add", ".");
+        git(
+          target.checkout,
+          "-c",
+          "user.name=Factory Test",
+          "-c",
+          "user.email=factory-test@example.com",
+          "commit",
+          "-m",
+          message,
+        );
+        return {
+          sha: git(target.checkout, "rev-parse", "HEAD"),
+          tree: git(target.checkout, "rev-parse", "HEAD^{tree}"),
+        };
+      };
+      const merge = (base, result, tree, message) =>
+        git(
+          target.checkout,
+          "-c",
+          "user.name=Factory Test",
+          "-c",
+          "user.email=factory-test@example.com",
+          "commit-tree",
+          tree,
+          "-p",
+          base,
+          "-p",
+          result,
+          "-m",
+          message,
+        );
+      const selected = (id, path, content) => {
+        const bytes = Buffer.from(content);
+        const set = {
+          id,
+          members: [
+            {
+              role: "text",
+              ref: {
+                digest: createHash("sha256").update(bytes).digest("hex"),
+                bytes: bytes.length,
+                mediaType: "text/plain",
+              },
+              destination: path,
+            },
+          ],
+          provenance: {
+            source: "test fixture",
+            rights: "test fixture",
+            visibility: "repository",
+            lineage: ["test fixture"],
+          },
+          evidence: { harnessIdentity: "test", resultDigest: id },
+        };
+        return { bytes, set };
+      };
+
+      const one = makeItem(
+        "media-one",
+        "Media One",
+        [],
+        ["media-one.txt", "selected-one.txt"],
+      );
+      const selectedOne = selected(
+        "candidate-one",
+        "selected-one.txt",
+        "selected one content that exceeds the packet budget\n",
+      );
+      writeFileSync(
+        join(target.checkout, "media-one.txt"),
+        "worker one content that exceeds the packet budget\n",
+      );
+      const workerOne = commit("Factory: Media One");
+      writeFileSync(
+        join(target.checkout, "selected-one.txt"),
+        selectedOne.bytes,
+      );
+      const materializedOne = commit("Factory: selected candidate-one assets");
+      const integratedOne = merge(
+        target.baseSha,
+        materializedOne.sha,
+        materializedOne.tree,
+        "Merge media one",
+      );
+
+      git(target.checkout, "checkout", "--detach", integratedOne);
+      const two = makeItem(
+        "media-two",
+        "Media Two",
+        ["media-one"],
+        ["media-two.txt", "selected-two.txt"],
+      );
+      const selectedTwo = selected(
+        "candidate-two",
+        "selected-two.txt",
+        "selected two content that exceeds the packet budget\n",
+      );
+      writeFileSync(
+        join(target.checkout, "media-two.txt"),
+        "worker two content that exceeds the packet budget\n",
+      );
+      const workerTwo = commit("Factory: Media Two");
+      writeFileSync(
+        join(target.checkout, "selected-two.txt"),
+        selectedTwo.bytes,
+      );
+      const materializedTwo = commit("Factory: selected candidate-two assets");
+      const integratedTwo = merge(
+        integratedOne,
+        materializedTwo.sha,
+        materializedTwo.tree,
+        "Merge media two",
+      );
+
+      const workState = (
+        baseSha,
+        integratedShaAtStart,
+        materialized,
+        integratedSha,
+        asset,
+      ) => ({
+        status: "done",
+        executionBaseSha: baseSha,
+        integratedShaAtStart,
+        baseSha,
+        changeRef: materialized.sha,
+        treeSha: materialized.tree,
+        integratedSha,
+        validation: { treeSha: materialized.tree, commands: [] },
+        assets: [asset.set],
+        selectedAssetSet: asset.set.id,
+        selectionDigest: assetSelectionDigest(asset.set),
+        selection: {
+          actor: "test-operator",
+          at: new Date().toISOString(),
+          destinations: asset.set.members.map((member) => ({
+            role: member.role,
+            path: member.destination,
+            digest: member.ref.digest,
+          })),
+          downstreamItems: [],
+        },
+      });
+      const state = {
+        schemaVersion: 2,
+        repository: "example/objective-materialization-budget",
+        objective: 1,
+        runId: "materialization-budget",
+        configDigest: "a".repeat(64),
+        baseSha: target.baseSha,
+        graph: {
+          objective: 1,
+          baseSha: target.baseSha,
+          items: [one, two],
+        },
+        issueByItemId: { "media-one": 2, "media-two": 3 },
+        integratedSha: integratedTwo,
+        work: {
+          "media-one": workState(
+            target.baseSha,
+            null,
+            materializedOne,
+            integratedOne,
+            selectedOne,
+          ),
+          "media-two": workState(
+            integratedOne,
+            integratedOne,
+            materializedTwo,
+            integratedTwo,
+            selectedTwo,
+          ),
+        },
+      };
+      const previous = process.env.FACTORY_RESULT_REVIEW_TEXT_BUDGET_BYTES;
+      process.env.FACTORY_RESULT_REVIEW_TEXT_BUDGET_BYTES = "12";
+      try {
+        const objectiveEvidence = objectiveReviewEvidence({
+          state,
+          checkout: target.checkout,
+          integratedCommitSha: integratedTwo,
+          integratedTreeSha: materializedTwo.tree,
+        });
+        assert.deepEqual(
+          objectiveEvidence.evidence.map((source) => source.path),
+          [
+            "Work Item Git delta: media-one",
+            "Work Item Git delta: media-one controller materialization",
+            "Work Item Git delta: media-two",
+            "Work Item Git delta: media-two controller materialization",
+          ],
+        );
+        assert.ok(
+          objectiveEvidence.evidence.every(
+            (source) => source.complete === false,
+          ),
+        );
+
+        const expectedById = {
+          "media-one": {
+            base: target.baseSha,
+            worker: workerOne,
+            materialized: materializedOne,
+            workerPath: "media-one.txt",
+            destination: "selected-one.txt",
+          },
+          "media-two": {
+            base: integratedOne,
+            worker: workerTwo,
+            materialized: materializedTwo,
+            workerPath: "media-two.txt",
+            destination: "selected-two.txt",
+          },
+        };
+        let allocatedTextBudget = 0;
+        for (const id of ["media-one", "media-two"]) {
+          const expected = expectedById[id];
+          const ordinary = objectiveEvidence.evidence.find(
+            (source) => source.path === `Work Item Git delta: ${id}`,
+          );
+          const ordinaryIdentity = JSON.parse(ordinary.content.split("\n")[0]);
+          assert.equal(ordinaryIdentity.workItemId, id);
+          assert.equal(
+            ordinaryIdentity.resultCommitSha,
+            expected.materialized.sha,
+          );
+          assert.equal(
+            ordinaryIdentity.resultTreeSha,
+            expected.materialized.tree,
+          );
+          assert.equal(ordinaryIdentity.textBudget, 2);
+          assert.ok(
+            ordinaryIdentity.patches.every((patch) => patch.truncated === true),
+          );
+          allocatedTextBudget += ordinaryIdentity.textBudget;
+
+          const materialization = objectiveEvidence.evidence.find(
+            (source) =>
+              source.path ===
+              `Work Item Git delta: ${id} controller materialization`,
+          );
+          const packet = JSON.parse(materialization.content);
+          assert.equal(packet.workItemId, id);
+          assert.equal(packet.resultBaseCommitSha, expected.base);
+          assert.equal(packet.workerResultCommitSha, expected.worker.sha);
+          assert.equal(packet.workerResultTreeSha, expected.worker.tree);
+          assert.equal(
+            packet.materializationCommitSha,
+            expected.materialized.sha,
+          );
+          assert.equal(
+            packet.materializationTreeSha,
+            expected.materialized.tree,
+          );
+          assert.deepEqual(
+            packet.workerChange.changes.map((change) => change.path),
+            [expected.workerPath],
+          );
+          assert.deepEqual(
+            packet.materializationChange.changes.map((change) => change.path),
+            [expected.destination],
+          );
+          assert.equal(packet.workerChange.textBudget, 2);
+          assert.equal(packet.materializationChange.textBudget, 2);
+          assert.equal(packet.workerChange.patches[0].truncated, true);
+          assert.equal(packet.materializationChange.patches[0].truncated, true);
+          allocatedTextBudget +=
+            packet.workerChange.textBudget +
+            packet.materializationChange.textBudget;
+        }
+        assert.equal(allocatedTextBudget, 12);
+
+        const truncatedMaterialization = objectiveEvidence.evidence[1];
+        await assert.rejects(
+          reviewAcceptance({
+            checkout: target.checkout,
+            baseSha: target.baseSha,
+            commit: integratedTwo,
+            evidence: { treeSha: materializedTwo.tree, commands: [] },
+            criteria: ["both selected assets are grounded"],
+            sources: [
+              {
+                path: "OBJECTIVE",
+                content: "both selected assets are grounded",
+              },
+            ],
+            evidenceSources: objectiveEvidence.evidence,
+            model: {
+              async reviewResult() {
+                return {
+                  findings: [
+                    {
+                      criterion: "both selected assets are grounded",
+                      verdict: "pass",
+                      source: truncatedMaterialization.path,
+                      quote: "media-one",
+                      detail:
+                        "The bounded materialization source identifies it.",
+                      question: "",
+                    },
+                  ],
+                };
+              },
+            },
+          }),
+          (error) => {
+            assert.ok(error instanceof AcceptanceDecisionRequired);
+            assert.deepEqual(error.pending.reviewRejection, {
+              field: "source",
+              reason: "source-truncated",
+            });
+            return true;
+          },
+        );
+      } finally {
+        if (previous === undefined)
+          delete process.env.FACTORY_RESULT_REVIEW_TEXT_BUDGET_BYTES;
+        else process.env.FACTORY_RESULT_REVIEW_TEXT_BUDGET_BYTES = previous;
+      }
+    },
+  );
 });
 
 test("large binary results reach independent review as descriptors, and reviewer failure is explicit", async () => {

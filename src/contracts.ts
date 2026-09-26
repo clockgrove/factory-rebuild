@@ -40,7 +40,10 @@ export interface WorkGraph {
 }
 
 export type ModelInvocationPhase =
-  "compile" | "graph-review" | "result-review" | "objective-review";
+  | "compile"
+  | "graph-review"
+  | "result-review"
+  | "objective-review";
 
 export interface ModelInvocationUsage {
   inputTokens?: number;
@@ -51,11 +54,36 @@ export interface ModelInvocationUsage {
   totalTokens?: number;
 }
 
+/** Cumulative provider counters for one worker invocation/provider attempt.
+ * This is optional telemetry, never execution or recovery authority. */
+export interface WorkerUsageObservation {
+  type: "started" | "progress" | "completed" | "failed";
+  invocationId: string;
+  providerAttempt: number;
+  role: "worker";
+  phase: "implementation";
+  provider?: string;
+  model?: string;
+  reasoningEffort?: string;
+  usage?: ModelInvocationUsage;
+}
+
 export interface ModelInvocationObservation {
-  type: "started" | "progress" | "completed" | "failed" | "response-invalid";
+  type:
+    | "started"
+    | "progress"
+    | "retry-scheduled"
+    | "completed"
+    | "failed"
+    | "response-invalid";
   invocationId: string;
   phase: ModelInvocationPhase;
   ordinal: number;
+  /** One-based provider attempt within this logical model invocation. */
+  providerAttempt?: number;
+  /** Maximum provider attempts allowed for this logical model invocation. */
+  providerMaxAttempts?: number;
+  retryDelayMs?: number;
   provider?: string;
   model?: string;
   reasoningEffort?: string;
@@ -87,13 +115,17 @@ export interface ModelInvocationContext {
   invocationId: string;
   phase: ModelInvocationPhase;
   ordinal: number;
+  /** Adapter-owned current provider attempt, exposed for correlated diagnostics. */
+  providerAttempt?: number;
+  /** Adapter-owned bounded provider-attempt count. */
+  providerMaxAttempts?: number;
   observe?: (observation: ModelInvocationObservation) => void;
 }
 
 export interface PlanningRequest<T> {
   objective: string;
   baseSha: string;
-  sources: { path: string; content: string }[];
+  sources: { path: string; content: string; heading?: string }[];
   controllerCapabilities: ControllerCapabilitiesManifest;
   controllerCapabilitiesDigest: string;
   schema: unknown;
@@ -161,6 +193,7 @@ export interface PlanningModel {
     }[];
   }>;
   reviewResult?(request: {
+    reviewPhase?: "result-review" | "objective-review";
     criteria: string[];
     baseSha: string;
     treeSha: string;
@@ -399,6 +432,53 @@ export interface CapturedAssetSet {
   provenance: ProducedAssetSet["provenance"];
   production?: ProducedAssetSet["production"];
   evidence: { harnessIdentity: string; resultDigest: string };
+  /**
+   * Controller-generated from the imported source identities after every
+   * declared member has been verified as a regular file beneath the private
+   * media staging root and imported into the content store. Older snapshots
+   * may not contain this receipt and therefore cannot use it as automatic
+   * review evidence.
+   */
+  capture?: AssetCaptureReceipt;
+}
+
+export interface AssetCaptureReceipt {
+  authority: "factory-controller";
+  declarationPath?: ".factory-assets.json";
+  declarationDigest?: string;
+  declarationProvenance?: ProducedAssetSet["provenance"];
+  mediaRoot: ".factory-media";
+  complete: true;
+  setId: string;
+  inputs?: {
+    binding: {
+      kind: NonNullable<SourceAssetBinding["kind"]>;
+      path: string;
+      role: string;
+      mediaType: string;
+      visibility: SourceAssetBinding["visibility"];
+    };
+    ref: ContentRef;
+  }[];
+  members: {
+    role: string;
+    stagingPath: string;
+    destination: string;
+    digest: string;
+    bytes: number;
+    mediaType: string;
+  }[];
+}
+
+/** Exact selected LFS bytes that an exact-tree validation must restore locally. */
+export interface ValidationLfsMember {
+  itemId: string;
+  setId: string;
+  role: string;
+  destination: string;
+  digest: string;
+  bytes: number;
+  mediaType: string;
 }
 
 export interface SelectedAssetInput {
@@ -416,6 +496,7 @@ export interface AssetSelectionDecision {
   actor: string;
   at: string;
   reason?: string;
+  surface?: "factory-cli" | "application";
   destinations: { role: string; path: string; digest: string }[];
   downstreamItems: string[];
 }

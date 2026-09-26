@@ -27,7 +27,11 @@ import type {
   GitHubGateway,
   PlanningModel,
 } from "./contracts.js";
-import { assetSelectionDigest, verifyHydratedAssets } from "./media.js";
+import {
+  assetSelectionDigest,
+  finalValidationLfsMembers,
+  verifyHydratedAssets,
+} from "./media.js";
 import { runNativeGraph } from "./delivery/native-runner.js";
 import { linearDeliveryUnits } from "./delivery/plan.js";
 import { runRegularGraph } from "./delivery/regular-runner.js";
@@ -55,6 +59,7 @@ export interface ApplicationServices {
   github: GitHubGateway;
   delivery: DeliveryStrategy;
   contentStore: ContentStore;
+  reportRunStatus?: (message: string) => void;
 }
 
 function configuredDiagnosticSecrets(config: FactoryConfig): string[] {
@@ -199,7 +204,14 @@ export async function runObjective(
     }
   };
   const active = new Map<string, Promise<void>>();
-  const { driver, github, delivery, contentStore, planningModel } = services;
+  const {
+    driver,
+    github,
+    delivery,
+    contentStore,
+    planningModel,
+    reportRunStatus,
+  } = services;
   let stateForSignal: FactoryState | undefined;
   let cancellationRequested = false;
   const onCancel = () => {
@@ -274,6 +286,9 @@ export async function runObjective(
             config.delivery.kind === "native-stack",
           );
       if (state.finalValidation?.passed) {
+        reportRunStatus?.(
+          "Factory: resuming the existing run from atomic state",
+        );
         await closeObjectiveIssue(state, issue.body, github, saveCurrent);
         return state;
       }
@@ -281,6 +296,7 @@ export async function runObjective(
         throw new Error(
           "Objective was cancelled; use explicit retry or operator direction",
         );
+      reportRunStatus?.("Factory: resuming the existing run from atomic state");
     } else {
       const objectivesRoot = join(root, "objectives");
       if (existsSync(objectivesRoot)) {
@@ -301,9 +317,15 @@ export async function runObjective(
           metadata: { baseSha, scopeId: planningScopeId },
         },
         async () => {
-          const candidate =
-            acceptedPlan ??
-            (await compilePlan(
+          let candidate: PlanCandidate;
+          if (acceptedPlan) {
+            reportRunStatus?.("Factory: activating the accepted plan");
+            candidate = acceptedPlan;
+          } else {
+            reportRunStatus?.(
+              "Factory: compiling and independently reviewing a fresh plan",
+            );
+            candidate = await compilePlan(
               objective,
               issue.body,
               baseSha,
@@ -311,7 +333,8 @@ export async function runObjective(
               planningModel,
               installationConfigDigest,
               diagnostics.modelObserver({ scopeId: planningScopeId }),
-            ));
+            );
+          }
           verifyPlanCandidate(
             candidate,
             objective,
@@ -457,6 +480,8 @@ export async function runObjective(
           entry.output,
           entry.final,
         ),
+      finalValidationLfsMembers(state),
+      contentStore,
     );
     const selectedAssets = graph.items.flatMap((item) => {
       const work = state.work[item.id];
@@ -496,6 +521,7 @@ export async function runObjective(
       const reviewFinal = () =>
         reviewAcceptance({
           model: planningModel,
+          reviewPhase: "objective-review",
           checkout: config.checkout,
           baseSha: state.baseSha,
           commit: integratedSha,
@@ -797,13 +823,20 @@ export function decideResult(
   }
 }
 
-export async function selectAssetSet(
+type AssetSelectionInput = {
+  actor?: string;
+  reason?: string;
+  downstreamItems?: string[];
+};
+
+async function selectAssetSetWithSurface(
   config: FactoryConfig,
   objective: number,
   itemId: string,
   setId: string,
   store: ContentStore,
-  decision?: { actor?: string; reason?: string; downstreamItems?: string[] },
+  decision: AssetSelectionInput | undefined,
+  surface: "factory-cli" | "application",
 ): Promise<void> {
   const root = stateRoot(config.repository);
   const lock = join(root, "controller.lock");
@@ -836,6 +869,7 @@ export async function selectAssetSet(
       actor: decision?.actor ?? userInfo().username,
       at: new Date().toISOString(),
       ...(decision?.reason && { reason: decision.reason }),
+      surface,
       destinations: set.members.map((member) => ({
         role: member.role,
         path: member.destination,
@@ -856,6 +890,45 @@ export async function selectAssetSet(
   } finally {
     releaseControllerLock(lock, lockHandle);
   }
+}
+
+export async function selectAssetSet(
+  config: FactoryConfig,
+  objective: number,
+  itemId: string,
+  setId: string,
+  store: ContentStore,
+  decision?: AssetSelectionInput,
+): Promise<void> {
+  return selectAssetSetWithSurface(
+    config,
+    objective,
+    itemId,
+    setId,
+    store,
+    decision,
+    "application",
+  );
+}
+
+/** CLI-only boundary: the invocation surface is fixed here, not caller data. */
+export async function selectAssetSetFromCli(
+  config: FactoryConfig,
+  objective: number,
+  itemId: string,
+  setId: string,
+  store: ContentStore,
+  decision?: AssetSelectionInput,
+): Promise<void> {
+  return selectAssetSetWithSurface(
+    config,
+    objective,
+    itemId,
+    setId,
+    store,
+    decision,
+    "factory-cli",
+  );
 }
 
 export async function exportAssetSetForReview(

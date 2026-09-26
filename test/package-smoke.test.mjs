@@ -148,6 +148,15 @@ test("fresh packed artifact composes a registered harness through the package ro
         ),
       ).href
     );
+    const setupSkill = readFileSync(
+      join(installedRoot, "skills", "setup", "SKILL.md"),
+      "utf8",
+    );
+    const describedDefaults = `planner \`${installedPackage.DEFAULT_PLANNER_MODEL_SELECTION.model}\` with \`${installedPackage.DEFAULT_PLANNER_MODEL_SELECTION.reasoningEffort}\` reasoning, reviewer \`${installedPackage.DEFAULT_REVIEWER_MODEL_SELECTION.model}\` with \`${installedPackage.DEFAULT_REVIEWER_MODEL_SELECTION.reasoningEffort}\` reasoning, and worker \`${installedPackage.DEFAULT_WORKER_MODEL_SELECTION.model}\` with \`${installedPackage.DEFAULT_WORKER_MODEL_SELECTION.reasoningEffort}\` reasoning`;
+    assert.ok(
+      setupSkill.includes(describedDefaults),
+      "installed setup skill must describe the runtime role defaults exactly",
+    );
     const body = "# Packed Objective\n\n## Acceptance\n- `test -s one.txt`\n";
     const graph = {
       objective: 1,
@@ -312,6 +321,40 @@ test("fresh packed artifact composes a registered harness through the package ro
       "not-json\n",
       { mode: 0o600 },
     );
+    const workerAttempt = "22222222-2222-4222-8222-222222222222";
+    const diagnosticsFile = join(
+      installedPackage.stateRoot("example/package-smoke"),
+      "objectives",
+      "1",
+      "diagnostics.ndjson",
+    );
+    const { appendFileSync } = await import("node:fs");
+    appendFileSync(
+      diagnosticsFile,
+      `${JSON.stringify({
+        eventId: "worker-start",
+        at: new Date().toISOString(),
+        operation: "harness",
+        outcome: "started",
+        attemptId: workerAttempt,
+        itemId: "worker-item",
+        runId: "worker-run",
+      })}\n`,
+    );
+    const workerUsage = {
+      type: "completed",
+      invocationId: "worker-invocation",
+      providerAttempt: 1,
+      role: "worker",
+      phase: "implementation",
+      provider: "generic-harness",
+      usage: { inputTokens: 100, cachedInputTokens: 80, outputTokens: 9 },
+    };
+    writeFileSync(
+      join(unrelatedHarnessRoot, `${workerAttempt}.progress.ndjson`),
+      `${JSON.stringify({ eventId: "worker-complete", at: new Date().toISOString(), operation: "worker-usage", workerUsage })}\n`,
+      { mode: 0o600 },
+    );
     const summary = JSON.parse(
       execFileSync(
         cli,
@@ -332,6 +375,20 @@ test("fresh packed artifact composes a registered harness through the package ro
       denominatorInputTokens: 22,
       value: 10 / 22,
     });
+    assert.equal(summary.scope, "planning-and-review-model-invocations");
+    assert.equal(summary.workerUsage.tokenTotals.inputTokens, 100);
+    assert.equal(summary.combinedUsage.tokenTotals.inputTokens, 122);
+    assert.equal(summary.combinedUsage.tokenTotals.cachedInputTokens, 90);
+    assert.equal(summary.combinedUsage.tokenTotals.outputTokens, 15);
+    assert.equal(summary.workerUsage.coverage.unobservedAttemptCount, 0);
+    assert.equal(
+      Object.values(summary.workerUsage.byInvocation)[0].itemId,
+      "worker-item",
+    );
+    assert.equal(
+      Object.values(summary.workerUsage.byInvocation)[0].runId,
+      "worker-run",
+    );
   } finally {
     if (previousStateRoot === undefined) delete process.env.XDG_STATE_HOME;
     else process.env.XDG_STATE_HOME = previousStateRoot;

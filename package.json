@@ -1,6 +1,6 @@
 {
   "name": "@clockgrove/factory",
-  "version": "0.1.13",
+  "version": "0.1.22",
   "description": "Objective-driven development plugin for a target repository",
   "homepage": "https://github.com/clockgrove/factory-rebuild#readme",
   "repository": {
@@ -50,21 +50,21 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "lint": "eslint src",
-    "format:check": "prettier --check .",
-    "format": "prettier --write .",
+    "lint": "biome lint . && eslint src",
+    "format:check": "biome format . && prettier --check package-lock.json \"**/*.{md,yml,yaml}\"",
+    "format": "biome format --write . && prettier --write package-lock.json \"**/*.{md,yml,yaml}\"",
     "test": "npm run build && node --test test/*.test.mjs",
     "package": "npm pack --dry-run",
     "notices": "node scripts/generate-notices.mjs",
     "notices:check": "node scripts/generate-notices.mjs --check"
   },
   "devDependencies": {
-    "@eslint/js": "^9.36.0",
+    "@biomejs/biome": "2.5.14",
     "@types/node": "^24.5.2",
-    "eslint": "^9.36.0",
+    "eslint": "9.39.5",
     "prettier": "^3.6.2",
     "typescript": "^5.9.2",
-    "typescript-eslint": "^8.44.1"
+    "typescript-eslint": "8.44.1"
   },
   "dependencies": {
     "@openai/codex-sdk": "0.156.0",

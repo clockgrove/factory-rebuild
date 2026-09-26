@@ -67,7 +67,11 @@ export interface FactoryApplication {
     objective: number,
     itemId: string,
     setId: string,
-    decision?: { actor?: string; reason?: string; downstreamItems?: string[] },
+    decision?: {
+      actor?: string;
+      reason?: string;
+      downstreamItems?: string[];
+    },
   ): Promise<void>;
   exportAssetSetForReview(
     objective: number,
@@ -247,6 +251,7 @@ function composeLocal(
     github,
     delivery: new RegularDelivery(config.checkout, github),
     contentStore,
+    reportRunStatus: (message) => console.error(message),
   });
 }
 

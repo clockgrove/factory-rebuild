@@ -30,12 +30,24 @@ import {
   installedControllerCapabilities,
   type ControllerCapabilitiesManifest,
 } from "./controller-capabilities.js";
+import {
+  DEFAULT_PROVIDER_TURN_IDLE_TIMEOUT_MS,
+  ProviderTurnGuard,
+  ProviderTurnIncompleteError,
+  ProviderTurnTimeoutError,
+  closeProviderEventStream,
+  requireCompletedProviderTurn,
+} from "./provider-turn.js";
 
 function observeModelInvocation(
   invocation: ModelInvocationContext | undefined,
   observation: Omit<
     ModelInvocationObservation,
-    "invocationId" | "phase" | "ordinal"
+    | "invocationId"
+    | "phase"
+    | "ordinal"
+    | "providerAttempt"
+    | "providerMaxAttempts"
   >,
 ): void {
   if (!invocation) return;
@@ -44,6 +56,12 @@ function observeModelInvocation(
       invocationId: invocation.invocationId,
       phase: invocation.phase,
       ordinal: invocation.ordinal,
+      ...(invocation.providerAttempt === undefined
+        ? {}
+        : { providerAttempt: invocation.providerAttempt }),
+      ...(invocation.providerMaxAttempts === undefined
+        ? {}
+        : { providerMaxAttempts: invocation.providerMaxAttempts }),
       ...observation,
     });
   } catch (error) {
@@ -53,12 +71,38 @@ function observeModelInvocation(
   }
 }
 
+class ProviderCapacityFailure extends Error {
+  constructor(cause: unknown) {
+    super(cause instanceof Error ? cause.message : String(cause), { cause });
+    this.name = "ProviderCapacityFailure";
+  }
+}
+
 function providerFailureClass(error: unknown): string {
+  if (error instanceof ProviderCapacityFailure) return "provider-capacity";
+  if (error instanceof ProviderTurnTimeoutError) return "provider-timeout";
+  if (error instanceof ProviderTurnIncompleteError)
+    return "provider-interrupted";
   const detail = error instanceof Error ? error.message : String(error);
   if (/rate.?limit|\b429\b/i.test(detail)) return "provider-rate-limit";
   if (/capacity|overloaded|temporarily unavailable/i.test(detail))
     return "provider-capacity";
   return "provider";
+}
+
+const REVIEW_PHASES = new Set<ModelInvocationPhase>([
+  "graph-review",
+  "result-review",
+  "objective-review",
+]);
+
+export const DEFAULT_REVIEW_CAPACITY_RETRY_DELAYS_MS = [250, 1_000] as const;
+const MAX_REVIEW_CAPACITY_RETRIES = 2;
+const MAX_REVIEW_CAPACITY_RETRY_DELAY_MS = 10_000;
+
+export interface CodexPlanningModelOptions {
+  reviewCapacityRetryDelaysMs?: readonly number[];
+  wait?: (milliseconds: number) => Promise<void>;
 }
 
 export const graphSchema = {
@@ -90,7 +134,14 @@ export const graphSchema = {
           },
           dependencies: { type: "array", items: { type: "string" } },
           ownedPaths: { type: "array", items: { type: "string" } },
-          resources: { type: "array", items: { type: "string" } },
+          resources: {
+            type: "array",
+            items: {
+              type: "string",
+              description:
+                "Exact, whitespace-sensitive resource identity. Reproduce source-declared names exactly; avoid accidental leading or trailing whitespace in planner-authored names.",
+            },
+          },
           validation: {
             type: "array",
             items: {
@@ -155,12 +206,187 @@ export const graphSchema = {
   additionalProperties: false,
 };
 
+interface CitationChoice {
+  path: string;
+  heading: string;
+}
+
+const codexIndexedCitationSchemas = new WeakSet<object>();
+
+function markdownHeadings(content: string): string[] {
+  return content.split("\n").flatMap((line) => {
+    const heading = line.match(/^#{1,6}\s+(.+?)\s*#*\s*$/)?.[1];
+    return heading ? [heading] : [];
+  });
+}
+
+function citationChoices(
+  sources: { path: string; content: string; heading?: string }[],
+): CitationChoice[] {
+  const choices: CitationChoice[] = [];
+  const identities = new Set<string>();
+  for (const source of sources) {
+    const headings = [
+      ...(source.heading === undefined ? [""] : []),
+      ...markdownHeadings(source.content),
+    ];
+    for (const heading of headings) {
+      const identity = JSON.stringify([source.path, heading]);
+      if (identities.has(identity)) continue;
+      identities.add(identity);
+      choices.push({ path: source.path, heading });
+    }
+  }
+  return choices;
+}
+
+export function graphSchemaForSources(
+  sources: { path: string; content: string; heading?: string }[],
+): unknown {
+  const schema = structuredClone(graphSchema) as {
+    properties: {
+      items: {
+        items: {
+          properties: { citations: { items: unknown } };
+        };
+      };
+    };
+  };
+  const headingsByPath = new Map<string, string[]>();
+  for (const { path, heading } of citationChoices(sources)) {
+    const headings = headingsByPath.get(path) ?? [];
+    headings.push(heading);
+    headingsByPath.set(path, headings);
+  }
+  schema.properties.items.items.properties.citations.items = {
+    anyOf: [...headingsByPath].map(([path, headings]) => ({
+      type: "object",
+      properties: {
+        path: { type: "string", enum: [path] },
+        heading: {
+          type: "string",
+          enum: headings,
+          description:
+            "Exact bare Markdown heading text without # markers, or the empty string for the whole source.",
+        },
+      },
+      required: ["path", "heading"],
+      additionalProperties: false,
+    })),
+  };
+  codexIndexedCitationSchemas.add(schema);
+  return schema;
+}
+
+function codexGraphSchemaForSources(
+  sources: { path: string; content: string; heading?: string }[],
+): unknown {
+  const schema = structuredClone(graphSchema) as {
+    properties: {
+      items: {
+        items: {
+          properties: { citations: { items: unknown } };
+        };
+      };
+    };
+  };
+  const choices = citationChoices(sources);
+  schema.properties.items.items.properties.citations.items = {
+    type: "object",
+    properties: {
+      choiceIndex: {
+        type: "integer",
+        minimum: 0,
+        maximum: choices.length - 1,
+        description:
+          "Exact zero-based index from the supplied citation choice list.",
+      },
+    },
+    required: ["choiceIndex"],
+    additionalProperties: false,
+  };
+  return schema;
+}
+
+function usesCodexIndexedCitations(schema: unknown): boolean {
+  return (
+    typeof schema === "object" &&
+    schema !== null &&
+    codexIndexedCitationSchemas.has(schema)
+  );
+}
+
+function decodeCodexCitationChoices(
+  value: unknown,
+  sources: { path: string; content: string; heading?: string }[],
+): unknown {
+  if (typeof value !== "object" || value === null || Array.isArray(value))
+    throw new Error("Planner structured output must be an object");
+  const graph = structuredClone(value) as Record<string, unknown>;
+  if (!Array.isArray(graph.items))
+    throw new Error("Planner structured output items must be an array");
+  const choices = citationChoices(sources);
+  for (const item of graph.items) {
+    if (typeof item !== "object" || item === null || Array.isArray(item))
+      throw new Error("Planner structured output item must be an object");
+    const candidate = item as Record<string, unknown>;
+    if (!Array.isArray(candidate.citations))
+      throw new Error("Planner structured output citations must be an array");
+    candidate.citations = candidate.citations.map((citation) => {
+      if (
+        typeof citation !== "object" ||
+        citation === null ||
+        Array.isArray(citation) ||
+        Object.keys(citation).length !== 1
+      )
+        throw new Error(
+          "Planner citation choice must contain only choiceIndex",
+        );
+      const choiceIndex = (citation as Record<string, unknown>).choiceIndex;
+      if (
+        !Number.isSafeInteger(choiceIndex) ||
+        (choiceIndex as number) < 0 ||
+        (choiceIndex as number) >= choices.length
+      )
+        throw new Error("Planner citation choiceIndex is invalid");
+      return structuredClone(choices[choiceIndex as number]!);
+    });
+  }
+  return graph;
+}
+
 export class CodexPlanningModel implements PlanningModel {
+  private readonly reviewCapacityRetryDelaysMs: readonly number[];
+  private readonly wait: (milliseconds: number) => Promise<void>;
+
   constructor(
     private checkout: string,
     private planner: CodexModelSelection,
     private reviewer: CodexModelSelection,
-  ) {}
+    private providerTurnIdleTimeoutMs = DEFAULT_PROVIDER_TURN_IDLE_TIMEOUT_MS,
+    options: CodexPlanningModelOptions = {},
+  ) {
+    this.reviewCapacityRetryDelaysMs = [
+      ...(options.reviewCapacityRetryDelaysMs ??
+        DEFAULT_REVIEW_CAPACITY_RETRY_DELAYS_MS),
+    ];
+    if (
+      this.reviewCapacityRetryDelaysMs.length > MAX_REVIEW_CAPACITY_RETRIES ||
+      this.reviewCapacityRetryDelaysMs.some(
+        (delay) =>
+          !Number.isSafeInteger(delay) ||
+          delay < 0 ||
+          delay > MAX_REVIEW_CAPACITY_RETRY_DELAY_MS,
+      )
+    )
+      throw new Error(
+        "Review capacity retry policy exceeds its bounded attempts or delay",
+      );
+    this.wait =
+      options.wait ??
+      ((milliseconds) =>
+        new Promise((resolve) => setTimeout(resolve, milliseconds)));
+  }
 
   private startThread(selection: CodexModelSelection) {
     const codex = new Codex();
@@ -186,6 +412,46 @@ export class CodexPlanningModel implements PlanningModel {
       phase: args.defaultPhase,
       ordinal: 0,
     };
+    invocation.phase = args.defaultPhase;
+    const retryDelays = REVIEW_PHASES.has(args.defaultPhase)
+      ? this.reviewCapacityRetryDelaysMs
+      : [];
+    const maxAttempts = retryDelays.length + 1;
+    invocation.providerMaxAttempts = maxAttempts;
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      invocation.providerAttempt = attempt;
+      try {
+        return await this.runStructuredAttempt<T>({ ...args, invocation });
+      } catch (error) {
+        if (
+          !(error instanceof ProviderCapacityFailure) ||
+          attempt === maxAttempts
+        )
+          throw error;
+        const retryDelayMs = retryDelays[attempt - 1]!;
+        observeModelInvocation(invocation, {
+          type: "retry-scheduled",
+          provider: "openai-codex-sdk",
+          model: args.selection.model,
+          reasoningEffort: args.selection.reasoningEffort,
+          failureClass: "provider-capacity",
+          retryDelayMs,
+        });
+        await this.wait(retryDelayMs);
+      }
+    }
+    throw new Error("Review capacity retry loop exhausted unexpectedly");
+  }
+
+  private async runStructuredAttempt<T>(args: {
+    selection: CodexModelSelection;
+    prompt: string;
+    schema: unknown;
+    invocation: ModelInvocationContext;
+    defaultPhase: ModelInvocationPhase;
+    sourcePacket?: string;
+  }): Promise<T> {
+    const invocation = args.invocation;
     const provider = "openai-codex-sdk";
     const schema = JSON.stringify(args.schema);
     const started = Date.now();
@@ -193,6 +459,8 @@ export class CodexPlanningModel implements PlanningModel {
     let finalResponse = "";
     let usage: ModelInvocationUsage | undefined;
     let invalidStructuredOutput = false;
+    let turnCompleted = false;
+    const turn = new ProviderTurnGuard(this.providerTurnIdleTimeoutMs);
     observeModelInvocation(invocation, {
       type: "started",
       provider,
@@ -211,56 +479,87 @@ export class CodexPlanningModel implements PlanningModel {
     });
     try {
       thread = this.startThread(args.selection);
-      const streamed = await thread.runStreamed(args.prompt, {
-        outputSchema: args.schema,
-      });
-      for await (const event of streamed.events) {
-        if (
-          event.type === "item.completed" &&
-          event.item.type === "agent_message"
-        )
-          finalResponse = event.item.text;
-        if (event.type === "turn.completed") {
-          usage = {
-            inputTokens: event.usage.input_tokens,
-            cachedInputTokens: event.usage.cached_input_tokens,
-            cacheWriteInputTokens: event.usage.cache_write_input_tokens,
-            outputTokens: event.usage.output_tokens,
-            reasoningOutputTokens: event.usage.reasoning_output_tokens,
-          };
+      const streamed = await turn.race(
+        thread.runStreamed(args.prompt, {
+          outputSchema: args.schema,
+          signal: turn.signal,
+        }),
+      );
+      const events = streamed.events[Symbol.asyncIterator]();
+      let closeStarted = false;
+      try {
+        for (;;) {
+          const next = await turn.race(events.next());
+          if (next.done) break;
+          const event = next.value;
+          turn.progress();
+          if (
+            event.type === "item.completed" &&
+            event.item.type === "agent_message"
+          )
+            finalResponse = event.item.text;
+          if (event.type === "turn.completed") {
+            turnCompleted = true;
+            if (event.usage)
+              usage = {
+                inputTokens: event.usage.input_tokens,
+                cachedInputTokens: event.usage.cached_input_tokens,
+                cacheWriteInputTokens: event.usage.cache_write_input_tokens,
+                outputTokens: event.usage.output_tokens,
+                reasoningOutputTokens: event.usage.reasoning_output_tokens,
+              };
+          }
+          const item =
+            event.type === "item.started" ||
+            event.type === "item.updated" ||
+            event.type === "item.completed"
+              ? event.item
+              : undefined;
+          const tool =
+            item?.type === "mcp_tool_call"
+              ? `${item.server}/${item.tool}`
+              : item?.type === "command_execution"
+                ? "shell"
+                : item?.type === "file_change"
+                  ? "apply_patch"
+                  : undefined;
+          observeModelInvocation(invocation, {
+            type: "progress",
+            provider,
+            model: args.selection.model,
+            reasoningEffort: args.selection.reasoningEffort,
+            providerThreadId:
+              event.type === "thread.started"
+                ? event.thread_id
+                : (thread.id ?? undefined),
+            providerEvent: event.type,
+            providerItemId: item?.id,
+            providerItemType: item?.type,
+            tool,
+            ...(usage ? { usage, usageAvailable: true } : {}),
+          });
+          if (event.type === "turn.failed")
+            throw new Error(event.error.message);
+          if (event.type === "error") throw new Error(event.message);
+          if (turnCompleted) break;
         }
-        const item =
-          event.type === "item.started" ||
-          event.type === "item.updated" ||
-          event.type === "item.completed"
-            ? event.item
-            : undefined;
-        const tool =
-          item?.type === "mcp_tool_call"
-            ? `${item.server}/${item.tool}`
-            : item?.type === "command_execution"
-              ? "shell"
-              : item?.type === "file_change"
-                ? "apply_patch"
-                : undefined;
-        observeModelInvocation(invocation, {
-          type: "progress",
-          provider,
-          model: args.selection.model,
-          reasoningEffort: args.selection.reasoningEffort,
-          providerThreadId:
-            event.type === "thread.started"
-              ? event.thread_id
-              : (thread.id ?? undefined),
-          providerEvent: event.type,
-          providerItemId: item?.id,
-          providerItemType: item?.type,
-          tool,
-          ...(usage ? { usage, usageAvailable: true } : {}),
-        });
-        if (event.type === "turn.failed") throw new Error(event.error.message);
-        if (event.type === "error") throw new Error(event.message);
+        closeStarted = true;
+        await closeProviderEventStream(events, turn, true);
+      } catch (error) {
+        if (!closeStarted && !turn.signal.aborted) {
+          closeStarted = true;
+          try {
+            await closeProviderEventStream(events, turn, true);
+          } catch {
+            // Preserve the provider failure that required cleanup.
+          }
+        }
+        throw error;
+      } finally {
+        if (!closeStarted) void closeProviderEventStream(events, turn, false);
       }
+      requireCompletedProviderTurn(turnCompleted);
+      turn.finish();
       const responseBytes = Buffer.byteLength(finalResponse);
       const responseDigest = digest(finalResponse);
       let parsed: T;
@@ -298,7 +597,8 @@ export class CodexPlanningModel implements PlanningModel {
       });
       return parsed;
     } catch (error) {
-      if (!invalidStructuredOutput)
+      if (!invalidStructuredOutput) {
+        const failureClass = providerFailureClass(error);
         observeModelInvocation(invocation, {
           type: "failed",
           provider,
@@ -314,19 +614,35 @@ export class CodexPlanningModel implements PlanningModel {
             : {}),
           usage,
           usageAvailable: Boolean(usage),
-          failureClass: providerFailureClass(error),
+          failureClass,
           detail: error instanceof Error ? error.message : String(error),
         });
+        if (failureClass === "provider-capacity")
+          throw new ProviderCapacityFailure(error);
+      }
       throw error;
+    } finally {
+      turn.finish();
     }
   }
 
   async generateStructured<T>(request: PlanningRequest<T>): Promise<T> {
-    const prompt = `Compile this human Objective into the smallest complete dependency-aware Work Item graph. Use parallel lanes only when ownership and resources allow them. Return the requested JSON only. Use exact supplied base SHA and Objective number. Cite only supplied source paths. Give each item explicit non-goals. Choose observable acceptance and owned paths. For every validation command, set provenance to base-observed or source-declared and name its exact source path. A source-declared command must be an exact command line in a supplied source (OBJECTIVE or a pinned source). A base-observed command must identify a tracked file in the exact base containing that command as an exact line, or a package.json script invoked by npm test/npm run NAME/pnpm test/pnpm check/pnpm run NAME. The exact source-declared command pnpm install --frozen-lockfile --ignore-scripts may precede pnpm checks in a fresh validation worktree when supplied; plain install is unsupported. Do not invent commands or use a vague source. For each source asset, bind its path, role, media type, visibility, and kind: repository for a pinned checkout path, local for an explicitly approved absolute private file, or github-attachment for a recognized URL literally present in the Objective. Use an explicitly declared media type when available, otherwise application/octet-stream; never infer format from an extension. List expected output roles for media work; use empty arrays for ordinary work. Set minimumAssetSets from the Objective candidate count, or 1 for unspecified media and 0 for ordinary work. List requiredLfsRoles only when a supplied source requires them; the target repository .gitattributes is authoritative. The supplied Factory controller capabilities are immutable supervisor guarantees enforced outside target Work Items and target Final commands. Do not create a target Work Item or invent target command authority solely to reimplement an Objective obligation that an exact supplied guarantee covers. Do not use a guarantee for an obligation it does not cover. Do not add deployment, paid services, providers, recovery, or later scope.\n\nObjective:\n${request.objective}\n\nBase: ${request.baseSha}\n\nFactory controller capabilities digest: ${request.controllerCapabilitiesDigest}\nFactory controller capabilities:\n${JSON.stringify(request.controllerCapabilities)}\n\nSources:\n${request.sources.map((s) => `--- ${s.path} ---\n${s.content}`).join("\n")}`;
-    return this.runStructured<T>({
+    const exactCitationChoices = citationChoices(request.sources);
+    const useIndexedCitations = usesCodexIndexedCitations(request.schema);
+    const indexedCitationChoices = exactCitationChoices.map(
+      (choice, choiceIndex) => ({ choiceIndex, ...choice }),
+    );
+    const directCitationInstruction = `For every citation, set path and heading to exactly one pair from this supplied citation JSON list: ${JSON.stringify(exactCitationChoices)}. A non-empty heading is the exact bare Markdown heading text without # markers; use the empty string to cite the whole source. Do not add a Markdown marker, section suffix, separator, or explanation to either value.`;
+    const citationInstruction = useIndexedCitations
+      ? `For every citation, set choiceIndex to exactly one index from this supplied citation choice JSON list: ${JSON.stringify(indexedCitationChoices)}. Factory decodes that authoritative index to the exact path and heading pair. An entry with an empty heading cites the whole source; every other heading is the exact bare Markdown heading text without # markers. Do not return path or heading fields in a citation.`
+      : directCitationInstruction;
+    const prompt = `Compile this human Objective into the smallest complete dependency-aware Work Item graph. Use parallel lanes only when ownership and resources allow them. Return the requested JSON only. Use exact supplied base SHA and Objective number. ${citationInstruction} Give each item explicit non-goals. Choose observable acceptance and owned paths. For every validation command, set provenance to base-observed or source-declared and name its exact source path. A source-declared command must be an exact command line in a supplied source (OBJECTIVE or a pinned source). A base-observed command must identify a tracked file in the exact base containing that command as an exact line, or a package.json script invoked by npm test/npm run NAME/pnpm test/pnpm check/pnpm run NAME. The exact source-declared command pnpm install --frozen-lockfile --ignore-scripts may precede pnpm checks in a fresh validation worktree when supplied; plain install is unsupported. Do not invent commands or use a vague source. For each source asset, bind its path, role, media type, visibility, and kind: repository for a pinned checkout path, local for an explicitly approved absolute private file, or github-attachment for a recognized URL literally present in the Objective. Use an explicitly declared media type when available, otherwise application/octet-stream; never infer format from an extension. List expected output roles for media work; use empty arrays for ordinary work. Set minimumAssetSets from the Objective candidate count, or 1 for unspecified media and 0 for ordinary work. List requiredLfsRoles only when a supplied source requires them; the target repository .gitattributes is authoritative. The supplied Factory controller capabilities are immutable supervisor guarantees enforced outside target Work Items and target Final commands. Do not create a target Work Item or invent target command authority solely to reimplement an Objective obligation that an exact supplied guarantee covers. Do not use a guarantee for an obligation it does not cover. Do not add deployment, paid services, providers, recovery, or later scope.\n\nObjective:\n${request.objective}\n\nBase: ${request.baseSha}\n\nFactory controller capabilities digest: ${request.controllerCapabilitiesDigest}\nFactory controller capabilities:\n${JSON.stringify(request.controllerCapabilities)}\n\nSources:\n${request.sources.map((s) => `--- ${s.path} ---\n${s.content}`).join("\n")}`;
+    const result = await this.runStructured<unknown>({
       selection: this.planner,
-      prompt,
-      schema: request.schema,
+      prompt: `${prompt}\n\nMedia brief guidance: Describe the worker's authorized source inputs, candidate staging, manifest declaration, and completion boundary. Preserve exact source requirements, including immutable bytes or candidate variation only when required. Keep capture, whole-set selection, final destination materialization, publication, and Objective lifecycle with the controller. Do not instruct media workers to run installed Factory CLI operations or inspect controller configuration, status, or logs. Media work may also include explicitly owned ordinary code changes; do not infer a copy-only task.\n\nResource identity guidance: Treat every resource name as an exact, whitespace-sensitive scheduling identity. Reproduce any source-declared resource name exactly. For a planner-authored resource name, avoid accidental leading or trailing whitespace.`,
+      schema: useIndexedCitations
+        ? codexGraphSchemaForSources(request.sources)
+        : request.schema,
       invocation: request.invocation,
       defaultPhase: "compile",
       sourcePacket: JSON.stringify({
@@ -335,6 +651,11 @@ export class CodexPlanningModel implements PlanningModel {
         controllerCapabilitiesDigest: request.controllerCapabilitiesDigest,
       }),
     });
+    return (
+      useIndexedCitations
+        ? decodeCodexCitationChoices(result, request.sources)
+        : result
+    ) as T;
   }
 
   async reviewGraph(request: PlanReviewRequest): Promise<{
@@ -386,6 +707,7 @@ export class CodexPlanningModel implements PlanningModel {
   }
 
   async reviewResult(request: {
+    reviewPhase?: "result-review" | "objective-review";
     criteria: string[];
     baseSha: string;
     treeSha: string;
@@ -399,7 +721,7 @@ export class CodexPlanningModel implements PlanningModel {
     const promptSources = [...request.sources, ...(request.evidence ?? [])];
     request = { ...request, sources: promptSources };
     const identityInstructions =
-      'The result identity is a Git tree. Delivery observations separately name every Git commit and Git tree; never compare them as the same object type. Command pass evidence is an ordered array of canonical receipts. Each receipt names its stable zero-based index, command, successful exit code 0, and exact result tree, produced only after Factory verified the result commit resolves to that tree. Sources whose path begins with Work Item Git delta are supervisor-generated exact result evidence: they bind accepted path ownership and that item\'s execution base, actual result base, result commit/tree, integrated commit/tree, changed paths, and raw patch excerpts. "Controller hydration receipt" is supervisor-generated evidence that Factory completed fresh-clone hydration and exact selected-byte verification before this review. Treat each such path as an allowed supplied source path. Use those sources only for criteria their exact content proves. Copy quotes exactly as serialized; never decode an escaped string into a quote. ';
+      "The result identity is a Git tree. Delivery observations separately name every Git commit and Git tree; never compare them as the same object type. Command pass evidence is an ordered array of canonical receipts. Each receipt names its stable zero-based index, command, successful exit code 0, and exact result tree, produced only after Factory verified the result commit resolves to that tree. A selectedAsset's descriptive, provenance, production, and format metadata fields are harness-declared; they are not controller authority. Asset capture receipts inside Delivery observations are controller-generated only after Factory imports each named source input into its content store, verifies each complete declared AssetSet member beneath .factory-media/, and imports the member's exact bytes. Each capture-receipt input binds the controller-imported source kind, path, role, media type, visibility, digest, and byte count; comparing that input ref with a captured member's digest, byte count, and media type proves byte identity between those exact imported bytes. A capture receipt proves .factory-assets.json origin only when its declarationPath, declarationDigest, and declarationProvenance fields are present; those fields mean Factory independently parsed that regular manifest, matched it to the harness AssetSets, and bound the exact manifest-declared provenance to the receipt. Asset selection receipts are controller-generated from validated atomic state and bind the selected set digest, recorded actor (the OS username when the caller omitted one), controller-derived invocation surface, time, destinations, downstream bindings, and an optional reason only when present. An absent receipt, absent input receipt, absent declaration fields, unrecorded selection surface, or absent reason proves nothing about that missing fact. Sources whose path begins with Work Item Git delta are supervisor-generated exact result evidence. An ordinary Work Item delta binds accepted path ownership and that item's execution base, actual result base, result commit/tree, integrated commit/tree, changed paths, and raw patch excerpts. A controller-materialization delta binds the selected set and digest, exact destinations, the worker result retained as the materialization commit's sole parent, an empty list of delivered worker destination changes, and the exact controller-only change from that parent to the reviewed result. The empty delivered delta is not a trace of transient filesystem operations; use it with the controller capture and destination-guard contract, not as a claim that every transient write was observed. \"Controller hydration receipt\" is supervisor-generated evidence that Factory completed fresh-clone hydration and exact selected-byte verification before this review. Treat each such path as an allowed supplied source path. Use those sources only for criteria their exact content proves. Copy quotes exactly as serialized; never decode an escaped string into a quote. ";
     const prompt =
       identityInstructions +
       `Independently review the exact result of a Factory Objective. Decide each criterion only from the supplied pinned source, command pass evidence, delivery observations when supplied, supervisor-generated evidence sources when supplied, and exact Git change packet. The packet has bounded text patch excerpts, explicit truncation flags, line counts, and exact blob identities/sizes. Never pass a criterion when relevant text is truncated or omitted unless other supplied evidence independently proves it. Blob identity alone does not prove opaque content semantics; ask for a focused human decision when missing evidence matters. A shell exit code alone proves only that command's assertion. Return one finding per criterion in the given order. Pass only when the evidence proves that criterion; otherwise needs-human with one specific question. Use refuse for a directly disproved criterion. For source, use exactly a supplied source path, including the exact labels "Exact Git change packet", "Command pass evidence", "Delivery observations", or "Controller hydration receipt" when present. For quote, copy an exact contiguous fragment from that named input. Never invent a source label or paraphrase a quote. Never edit or run commands.\n\nBase: ${request.baseSha}\nResult tree: ${request.treeSha}\nCriteria: ${JSON.stringify(request.criteria)}\nCommands: ${JSON.stringify(request.commands)}\nDelivery observations: ${request.observations ?? "none"}\nSources: ${request.sources.map((s) => `--- ${s.path} ---\n${s.content}`).join("\n")}\nChange packet:\n${request.change}`;
@@ -407,7 +729,7 @@ export class CodexPlanningModel implements PlanningModel {
       selection: this.reviewer,
       prompt,
       invocation: request.invocation,
-      defaultPhase: "result-review",
+      defaultPhase: request.reviewPhase ?? "result-review",
       sourcePacket: JSON.stringify(promptSources),
       schema: {
         type: "object",
@@ -655,7 +977,7 @@ function objectiveSection(body: string, names: string[]): string {
     const heading = line.match(/^(#{2,3})\s+(.+?)\s*$/);
     return Boolean(
       heading &&
-      names.some((name) => heading[2]!.toLowerCase() === name.toLowerCase()),
+        names.some((name) => heading[2]!.toLowerCase() === name.toLowerCase()),
     );
   });
   if (start < 0) return "";
@@ -889,6 +1211,35 @@ export function planningSources(
   return sources;
 }
 
+const MAX_CITATION_DIAGNOSTIC_VALUE_LENGTH = 120;
+const MAX_CITATION_DIAGNOSTIC_HEADINGS = 8;
+
+function boundedDiagnosticValue(value: string): string {
+  const bounded =
+    value.length <= MAX_CITATION_DIAGNOSTIC_VALUE_LENGTH
+      ? value
+      : `${value.slice(0, MAX_CITATION_DIAGNOSTIC_VALUE_LENGTH - 3)}...`;
+  return JSON.stringify(bounded);
+}
+
+function boundedDiagnosticText(value: string): string {
+  const singleLine = value.replace(/\s+/g, " ").trim();
+  return singleLine.length <= MAX_CITATION_DIAGNOSTIC_VALUE_LENGTH
+    ? singleLine
+    : `${singleLine.slice(0, MAX_CITATION_DIAGNOSTIC_VALUE_LENGTH - 3)}...`;
+}
+
+function boundedAllowedHeadings(sources: PlanningSource[]): string {
+  const headings = [
+    ...new Set(citationChoices(sources).map((choice) => choice.heading)),
+  ];
+  const shown = headings
+    .slice(0, MAX_CITATION_DIAGNOSTIC_HEADINGS)
+    .map(boundedDiagnosticValue);
+  const omitted = headings.length - shown.length;
+  return `[${shown.join(", ")}${omitted > 0 ? `, ... ${omitted} more` : ""}]`;
+}
+
 function validateCitations(graph: WorkGraph, sources: PlanningSource[]): void {
   for (const item of graph.items) {
     for (const citation of item.citations) {
@@ -899,17 +1250,12 @@ function validateCitations(graph: WorkGraph, sources: PlanningSource[]): void {
         throw new Error(
           `Work Item ${item.id} cites unavailable source ${citation.path}`,
         );
+      const heading = citation.heading ?? "";
       if (
-        citation.heading &&
-        !matching.some((source) =>
-          source.content.split("\n").some((line) => {
-            const heading = line.match(/^#{1,6}\s+(.+?)\s*#*\s*$/)?.[1];
-            return heading === citation.heading;
-          }),
-        )
+        !citationChoices(matching).some((choice) => choice.heading === heading)
       )
         throw new Error(
-          `Work Item ${item.id} cites missing heading ${citation.heading} in ${citation.path}`,
+          `Work Item ${item.id} cites missing heading ${citation.heading === undefined ? "<missing>" : citation.heading === "" ? '""' : boundedDiagnosticText(citation.heading)} in ${boundedDiagnosticText(citation.path)}; expected exact bare heading ${boundedAllowedHeadings(matching)}`,
         );
     }
   }
@@ -935,7 +1281,7 @@ export async function compileObjective(
       sources,
       controllerCapabilities: installedControllerCapabilities(),
       controllerCapabilitiesDigest: CONTROLLER_CAPABILITIES_DIGEST,
-      schema: graphSchema,
+      schema: graphSchemaForSources(sources),
       invocation,
     })
     .catch(planningFailure);
@@ -1031,7 +1377,11 @@ function semanticFailureField(error: unknown): string {
 }
 
 type GraphReviewRejectionReason =
-  "not-array" | "not-object" | "unknown-source" | "empty" | "quote-not-found";
+  | "not-array"
+  | "not-object"
+  | "unknown-source"
+  | "empty"
+  | "quote-not-found";
 
 interface GraphReviewRejection {
   field: string;
@@ -1279,14 +1629,14 @@ function completeAcceptedDecision(
 ): decision is NonNullable<PlanCandidate["humanDecision"]> {
   return Boolean(
     decision?.outcome === "accept" &&
-    typeof decision.actor === "string" &&
-    decision.actor.trim() &&
-    typeof decision.answer === "string" &&
-    decision.answer.trim() &&
-    typeof decision.reason === "string" &&
-    decision.reason.trim() &&
-    typeof decision.at === "string" &&
-    decision.at.trim(),
+      typeof decision.actor === "string" &&
+      decision.actor.trim() &&
+      typeof decision.answer === "string" &&
+      decision.answer.trim() &&
+      typeof decision.reason === "string" &&
+      decision.reason.trim() &&
+      typeof decision.at === "string" &&
+      decision.at.trim(),
   );
 }
 

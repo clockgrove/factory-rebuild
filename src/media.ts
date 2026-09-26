@@ -9,19 +9,23 @@ import {
   lstatSync,
   mkdirSync,
   openSync,
+  readFileSync,
   readSync,
   realpathSync,
   rmSync,
 } from "node:fs";
 import { dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { Readable } from "node:stream";
+import { isDeepStrictEqual } from "node:util";
 import type {
   CapturedAssetSet,
+  AssetCaptureReceipt,
   ContentRef,
   ContentStore,
   ProducedAssetSet,
   SourceAssetBinding,
   SelectedAssetInput,
+  ValidationLfsMember,
   WorkItem,
 } from "./contracts.js";
 import type { FactoryState } from "./state.js";
@@ -184,6 +188,30 @@ async function putFile(
   } catch (error) {
     stream.destroy();
     throw error;
+  }
+}
+
+function readRegularStagingFile(path: string, label: string): Buffer {
+  if (!lstatSync(path).isFile() || realpathSync(path) !== resolve(path))
+    throw new Error(`${label} is not a regular staging file`);
+  let descriptor: number | undefined;
+  try {
+    descriptor = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+    const opened = fstatSync(descriptor);
+    if (!opened.isFile())
+      throw new Error(`${label} is not a regular staging file`);
+    const bytes = readFileSync(descriptor);
+    const linked = lstatSync(path);
+    if (
+      !linked.isFile() ||
+      linked.dev !== opened.dev ||
+      linked.ino !== opened.ino ||
+      realpathSync(path) !== resolve(path)
+    )
+      throw new Error(`${label} changed while Factory read it`);
+    return bytes;
+  } finally {
+    if (descriptor !== undefined) closeSync(descriptor);
   }
 }
 
@@ -353,6 +381,25 @@ export async function captureAssetSets(
       .update(JSON.stringify(evidence ?? {}))
       .digest("hex"),
   };
+  const declaration = join(worktree, ".factory-assets.json");
+  let declarationDigest = "";
+  if (sets.length && existsSync(declaration)) {
+    const declarationBytes = readRegularStagingFile(
+      declaration,
+      "AssetSet manifest",
+    );
+    const value: unknown = JSON.parse(declarationBytes.toString("utf8"));
+    if (!value || typeof value !== "object" || Array.isArray(value))
+      throw new Error("AssetSet manifest must be an object with sets");
+    const declared = parseProducedAssetSets(
+      (value as Record<string, unknown>).sets,
+    );
+    if (!isDeepStrictEqual(declared, sets))
+      throw new Error("Harness AssetSets differ from .factory-assets.json");
+    declarationDigest = createHash("sha256")
+      .update(declarationBytes)
+      .digest("hex");
+  }
   const mediaRoot = join(worktree, ".factory-media");
   if (
     sets.length &&
@@ -360,6 +407,22 @@ export async function captureAssetSets(
   )
     throw new Error("Produced media root is missing or redirected");
   const captured: CapturedAssetSet[] = [];
+  const receiptInputs: NonNullable<AssetCaptureReceipt["inputs"]> = inputs.map(
+    (input) => ({
+      binding: {
+        kind: input.binding.kind ?? "repository",
+        path: input.binding.path,
+        role: input.binding.role,
+        mediaType: input.binding.mediaType,
+        visibility: input.binding.visibility,
+      },
+      ref: {
+        digest: input.ref.digest,
+        bytes: input.ref.bytes,
+        mediaType: input.ref.mediaType,
+      },
+    }),
+  );
   for (const set of sets) {
     if (!/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(set.id) || !set.members.length)
       throw new Error(
@@ -368,10 +431,13 @@ export async function captureAssetSets(
     const provenance = set.provenance;
     if (
       !provenance ||
+      typeof provenance.source !== "string" ||
       !provenance.source ||
+      typeof provenance.rights !== "string" ||
       !provenance.rights ||
       !["private", "repository"].includes(provenance.visibility) ||
-      !Array.isArray(provenance.lineage)
+      !Array.isArray(provenance.lineage) ||
+      !provenance.lineage.every((entry) => typeof entry === "string")
     )
       throw new Error(
         "Produced AssetSet lacks provenance, rights, visibility, or lineage",
@@ -379,6 +445,7 @@ export async function captureAssetSets(
     const roles = new Set<string>();
     const destinations = new Set<string>();
     const members: CapturedAssetSet["members"] = [];
+    const receiptMembers: AssetCaptureReceipt["members"] = [];
     for (const member of set.members) {
       if (
         !/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(member.role) ||
@@ -414,6 +481,14 @@ export async function captureAssetSets(
         destination: member.destination,
         ...(member.formatMetadata && { formatMetadata: member.formatMetadata }),
       });
+      receiptMembers.push({
+        role: member.role,
+        stagingPath: member.path,
+        destination: member.destination,
+        digest: ref.digest,
+        bytes: ref.bytes,
+        mediaType: ref.mediaType,
+      });
     }
     for (const role of item.expectedOutputRoles ?? [])
       if (!roles.has(role))
@@ -426,6 +501,24 @@ export async function captureAssetSets(
       provenance,
       ...(set.production && { production: set.production }),
       evidence: evidenceRef,
+      capture: {
+        authority: "factory-controller",
+        ...(declarationDigest && {
+          declarationPath: ".factory-assets.json" as const,
+          declarationDigest,
+          declarationProvenance: {
+            source: provenance.source,
+            rights: provenance.rights,
+            visibility: provenance.visibility,
+            lineage: [...provenance.lineage],
+          },
+        }),
+        mediaRoot: ".factory-media",
+        complete: true,
+        setId: set.id,
+        ...(receiptInputs.length && { inputs: receiptInputs }),
+        members: receiptMembers,
+      },
     });
   }
   rmSync(mediaRoot, { recursive: true, force: true });
@@ -440,6 +533,86 @@ export async function captureAssetSets(
   )
     throw new Error("Candidate AssetSets must have distinct content");
   return captured;
+}
+
+/** Reject persisted capture evidence that no longer matches its captured set. */
+export function assertAssetCaptureReceipt(set: CapturedAssetSet): void {
+  const receipt = set.capture;
+  if (!receipt) throw new Error("AssetSet lacks a controller capture receipt");
+  if (
+    receipt.authority !== "factory-controller" ||
+    receipt.mediaRoot !== ".factory-media" ||
+    receipt.complete !== true ||
+    receipt.setId !== set.id ||
+    !Array.isArray(receipt.members) ||
+    receipt.members.length !== set.members.length
+  )
+    throw new Error("AssetSet controller capture receipt is invalid");
+  const expectedInputs: NonNullable<AssetCaptureReceipt["inputs"]> = (
+    set.inputs ?? []
+  ).map((input) => ({
+    binding: {
+      kind: input.binding.kind ?? "repository",
+      path: input.binding.path,
+      role: input.binding.role,
+      mediaType: input.binding.mediaType,
+      visibility: input.binding.visibility,
+    },
+    ref: {
+      digest: input.ref.digest,
+      bytes: input.ref.bytes,
+      mediaType: input.ref.mediaType,
+    },
+  }));
+  if (
+    (receipt.inputs === undefined) !== (expectedInputs.length === 0) ||
+    (receipt.inputs !== undefined &&
+      !isDeepStrictEqual(receipt.inputs, expectedInputs))
+  )
+    throw new Error("AssetSet controller input receipt differs from inputs");
+  const declarationFieldCount = [
+    receipt.declarationPath,
+    receipt.declarationDigest,
+    receipt.declarationProvenance,
+  ].filter((value) => value !== undefined).length;
+  const declarationProvenance = receipt.declarationProvenance;
+  const expectedProvenance = {
+    source: set.provenance.source,
+    rights: set.provenance.rights,
+    visibility: set.provenance.visibility,
+    lineage: [...set.provenance.lineage],
+  };
+  if (
+    (declarationFieldCount !== 0 && declarationFieldCount !== 3) ||
+    (receipt.declarationPath !== undefined &&
+      (receipt.declarationPath !== ".factory-assets.json" ||
+        !/^[0-9a-f]{64}$/.test(receipt.declarationDigest ?? "") ||
+        !declarationProvenance ||
+        !isDeepStrictEqual(Object.keys(declarationProvenance).sort(), [
+          "lineage",
+          "rights",
+          "source",
+          "visibility",
+        ]) ||
+        !isDeepStrictEqual(declarationProvenance, expectedProvenance)))
+  )
+    throw new Error("AssetSet controller declaration receipt is invalid");
+  for (const [index, member] of set.members.entries()) {
+    const captured = receipt.members[index];
+    if (
+      !captured ||
+      !safeRelative(captured.stagingPath, true) ||
+      !captured.stagingPath.startsWith(".factory-media/") ||
+      captured.role !== member.role ||
+      captured.destination !== member.destination ||
+      captured.digest !== member.ref.digest ||
+      captured.bytes !== member.ref.bytes ||
+      captured.mediaType !== member.ref.mediaType
+    )
+      throw new Error(
+        "AssetSet controller capture receipt differs from members",
+      );
+  }
 }
 
 export async function materializeAssetSet(args: {
@@ -642,6 +815,85 @@ export function selectedInputsForItem(
     }
   }
   return inputs;
+}
+
+function selectedRequiredLfsMembers(
+  state: FactoryState,
+  itemIds: ReadonlySet<string>,
+): ValidationLfsMember[] {
+  const members: ValidationLfsMember[] = [];
+  for (const item of state.graph.items) {
+    if (!itemIds.has(item.id)) continue;
+    const work = state.work[item.id];
+    if (!work?.selectedAssetSet) continue;
+    const set = work.assets?.find(
+      (candidate) => candidate.id === work.selectedAssetSet,
+    );
+    if (!set || work.selectionDigest !== assetSelectionDigest(set))
+      throw new Error(`Selected asset binding from ${item.id} is invalid`);
+    const requiredRoles = new Set(item.requiredLfsRoles ?? []);
+    for (const member of set.members) {
+      if (!requiredRoles.has(member.role)) continue;
+      members.push({
+        itemId: item.id,
+        setId: set.id,
+        role: member.role,
+        destination: member.destination,
+        digest: member.ref.digest,
+        bytes: member.ref.bytes,
+        mediaType: member.ref.mediaType,
+      });
+    }
+  }
+  return members;
+}
+
+/** Required dependency bytes plus matching selected pointers already in this exact tree. */
+export function validationLfsMembersForItem(
+  state: FactoryState,
+  item: WorkItem,
+  checkout: string,
+  commit: string,
+): ValidationLfsMember[] {
+  const items = new Map(state.graph.items.map((entry) => [entry.id, entry]));
+  const relevant = new Set<string>();
+  const visit = (id: string): void => {
+    if (relevant.has(id)) return;
+    relevant.add(id);
+    for (const dependency of items.get(id)?.dependencies ?? [])
+      visit(dependency);
+  };
+  visit(item.id);
+  const all = selectedRequiredLfsMembers(
+    state,
+    new Set(state.graph.items.map((entry) => entry.id)),
+  );
+  return all.filter((member) => {
+    if (relevant.has(member.itemId)) return true;
+    const expected = Buffer.from(
+      `version https://git-lfs.github.com/spec/v1\noid sha256:${member.digest}\nsize ${member.bytes}\n`,
+      "utf8",
+    );
+    try {
+      return pinnedGitRaw(
+        checkout,
+        "show",
+        `${commit}:${member.destination}`,
+      ).equals(expected);
+    } catch {
+      return false;
+    }
+  });
+}
+
+/** Every selected required-LFS member expected in the integrated Objective tree. */
+export function finalValidationLfsMembers(
+  state: FactoryState,
+): ValidationLfsMember[] {
+  return selectedRequiredLfsMembers(
+    state,
+    new Set(state.graph.items.map((item) => item.id)),
+  );
 }
 
 export interface HydrationReceipt {

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { execFileSync, spawn } from "node:child_process";
 import {
   chmodSync,
@@ -13,9 +14,16 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { once } from "node:events";
 import test from "node:test";
+import { Codex } from "@openai/codex-sdk";
+import { CodexPlanningModel } from "../dist/compiler.js";
 import { parseFactoryState } from "../dist/state.js";
 import { readState, statePath } from "../dist/state-store.js";
-import { readDiagnostics, statusDocument } from "../dist/diagnostics.js";
+import {
+  readDiagnostics,
+  statusDocument,
+  summarizeModelInvocations,
+} from "../dist/diagnostics.js";
+import { selectAssetSetFromCli } from "../dist/runner.js";
 import {
   createTarget,
   factoryConfig,
@@ -61,6 +69,16 @@ ${commands.map((command) => `- \`${command}\``).join("\n")}
 ## Final validation
 ${finalCommands.map((command) => `- \`${command}\``).join("\n")}
 `;
+}
+
+function encodeCodexCitationIndexes(graph, citationChoiceIndex = 2) {
+  return {
+    ...graph,
+    items: graph.items.map((workItem) => ({
+      ...workItem,
+      citations: [{ choiceIndex: citationChoiceIndex }],
+    })),
+  };
 }
 
 async function fixture(name, callback) {
@@ -128,6 +146,8 @@ test("regular application path runs a source-grounded concurrent DAG with stable
         },
       },
     };
+    const runStatus = [];
+    descriptor.reportRunStatus = (message) => runStatus.push(message);
     const { application, eventsPath, github } = makeApplication(descriptor);
     const acceptedPlan = await application.planObjective(objective);
     assert.equal(acceptedPlan.review.status, "clean");
@@ -193,6 +213,7 @@ test("regular application path runs a source-grounded concurrent DAG with stable
     mkdirSync(join(root, "barriers"), { recursive: true });
     writeFileSync(barrier, "go\n");
     const state = await running;
+    assert.deepEqual(runStatus, ["Factory: activating the accepted plan"]);
     assert.equal(state.finalValidation.passed, true);
     assert.ok(
       Object.values(state.work).every((work) => work.status === "done"),
@@ -258,6 +279,10 @@ test("regular application path runs a source-grounded concurrent DAG with stable
       starts: events.filter((event) => event.type === "start").length,
     };
     const rerun = await application.runObjective(objective);
+    assert.deepEqual(runStatus, [
+      "Factory: activating the accepted plan",
+      "Factory: resuming the existing run from atomic state",
+    ]);
     assert.equal(rerun.integratedSha, state.integratedSha);
     assert.deepEqual(github.state().issues, identities.issues);
     assert.deepEqual(
@@ -556,6 +581,277 @@ ${commands.map((command) => `- \`${command}\``).join("\n")}
   });
 });
 
+test("application retries capacity for exact Work Item and final review requests without replaying work", async () => {
+  await fixture("review-capacity-retry", async (root) => {
+    const original = Codex.prototype.startThread;
+    const target = createTarget(root);
+    const fakeRoot = join(root, "fake");
+    const command = 'test "$(cat review.txt)" = reviewed';
+    const graph = {
+      objective,
+      baseSha: target.baseSha,
+      items: [item("review-capacity", { path: "review.txt", command })],
+    };
+    const prompts = { work: [], final: [] };
+    const successes = { work: false, final: false };
+    let threadIndex = 0;
+    Codex.prototype.startThread = function () {
+      const id = `application-capacity-${threadIndex++}`;
+      return {
+        id,
+        async runStreamed(prompt) {
+          async function* events() {
+            yield { type: "thread.started", thread_id: id };
+            if (prompt.startsWith("Compile this human Objective")) {
+              yield {
+                type: "item.completed",
+                item: {
+                  id: `${id}-message`,
+                  type: "agent_message",
+                  text: JSON.stringify(encodeCodexCitationIndexes(graph)),
+                },
+              };
+              yield { type: "turn.completed", usage: null };
+              return;
+            }
+            if (
+              prompt.startsWith(
+                "Independently review this complete proposed Factory plan",
+              )
+            ) {
+              yield {
+                type: "item.completed",
+                item: {
+                  id: `${id}-message`,
+                  type: "agent_message",
+                  text: JSON.stringify({ findings: [] }),
+                },
+              };
+              yield { type: "turn.completed", usage: null };
+              return;
+            }
+            const scope = prompt.includes('"reviewedItemId":"review-capacity"')
+              ? "work"
+              : "final";
+            prompts[scope].push(prompt);
+            if (!successes[scope]) {
+              successes[scope] = true;
+              yield {
+                type: "turn.failed",
+                error: { message: "Selected model is at capacity" },
+              };
+              return;
+            }
+            const criteria = JSON.parse(
+              prompt.match(/Criteria: (\[[^\n]*\])/)?.[1] ?? "[]",
+            );
+            yield {
+              type: "item.completed",
+              item: {
+                id: `${id}-message`,
+                type: "agent_message",
+                text: JSON.stringify({
+                  findings: criteria.map((criterion) => ({
+                    criterion,
+                    verdict: "pass",
+                    source: "OBJECTIVE",
+                    quote: "## Acceptance",
+                    detail:
+                      "The exact validated result satisfies the criterion.",
+                    question: "",
+                  })),
+                }),
+              },
+            };
+            yield { type: "turn.completed", usage: null };
+          }
+          return { events: events() };
+        },
+      };
+    };
+    try {
+      const waits = [];
+      const planningModel = new CodexPlanningModel(
+        target.checkout,
+        { model: "planner-choice", reasoningEffort: "medium" },
+        { model: "reviewer-choice", reasoningEffort: "high" },
+        undefined,
+        {
+          reviewCapacityRetryDelaysMs: [0, 0],
+          wait: async (milliseconds) => {
+            waits.push(milliseconds);
+          },
+        },
+      );
+      const descriptor = {
+        config: factoryConfig(
+          target.checkout,
+          "example/review-capacity-retry",
+          "regular",
+          1,
+        ),
+        graph,
+        objectiveBody: body([command]),
+        fakeRoot,
+        planningModel,
+        actions: {
+          "review-capacity": {
+            files: [{ path: "review.txt", text: "reviewed\n" }],
+          },
+        },
+      };
+      const { application, eventsPath } = makeApplication(descriptor);
+      const plan = await application.planObjective(objective);
+      assert.equal(plan.review.status, "clean");
+      const completed = await application.runObjective(objective, plan);
+      assert.equal(completed.finalValidation.passed, true);
+      assert.equal(completed.finalAcceptancePending, undefined);
+      assert.equal(
+        completed.work["review-capacity"].acceptancePending,
+        undefined,
+      );
+      assert.equal(
+        readEvents(eventsPath).filter(
+          (event) => event.type === "start" && event.item === "review-capacity",
+        ).length,
+        1,
+      );
+      assert.deepEqual(waits, [0, 0]);
+      assert.equal(prompts.work.length, 2);
+      assert.equal(prompts.work[0], prompts.work[1]);
+      assert.equal(prompts.final.length, 2);
+      assert.equal(prompts.final[0], prompts.final[1]);
+      const summary = summarizeModelInvocations(
+        readDiagnostics(descriptor.config.repository, objective),
+      );
+      assert.equal(summary.byPhase["result-review"].invocationCount, 2);
+      assert.equal(summary.byPhase["result-review"].failedCount, 1);
+      assert.equal(summary.byPhase["result-review"].completedCount, 1);
+      assert.equal(summary.byPhase["objective-review"].invocationCount, 2);
+      assert.equal(summary.byPhase["objective-review"].failedCount, 1);
+      assert.equal(summary.byPhase["objective-review"].completedCount, 1);
+    } finally {
+      Codex.prototype.startThread = original;
+    }
+  });
+});
+
+test("application fails closed once after exhausted result-review capacity without replaying work", async () => {
+  await fixture("review-capacity-exhausted", async (root) => {
+    const original = Codex.prototype.startThread;
+    const target = createTarget(root);
+    const fakeRoot = join(root, "fake");
+    const command = 'test "$(cat exhausted.txt)" = validated';
+    const graph = {
+      objective,
+      baseSha: target.baseSha,
+      items: [item("review-exhausted", { path: "exhausted.txt", command })],
+    };
+    const resultPrompts = [];
+    let threadIndex = 0;
+    Codex.prototype.startThread = function () {
+      const id = `application-exhausted-${threadIndex++}`;
+      return {
+        id,
+        async runStreamed(prompt) {
+          async function* events() {
+            if (prompt.startsWith("Compile this human Objective")) {
+              yield {
+                type: "item.completed",
+                item: {
+                  id: `${id}-message`,
+                  type: "agent_message",
+                  text: JSON.stringify(encodeCodexCitationIndexes(graph)),
+                },
+              };
+              yield { type: "turn.completed", usage: null };
+              return;
+            }
+            if (
+              prompt.startsWith(
+                "Independently review this complete proposed Factory plan",
+              )
+            ) {
+              yield {
+                type: "item.completed",
+                item: {
+                  id: `${id}-message`,
+                  type: "agent_message",
+                  text: JSON.stringify({ findings: [] }),
+                },
+              };
+              yield { type: "turn.completed", usage: null };
+              return;
+            }
+            resultPrompts.push(prompt);
+            yield {
+              type: "turn.failed",
+              error: { message: "reviewer capacity unavailable" },
+            };
+          }
+          return { events: events() };
+        },
+      };
+    };
+    try {
+      const planningModel = new CodexPlanningModel(
+        target.checkout,
+        { model: "planner-choice", reasoningEffort: "medium" },
+        { model: "reviewer-choice", reasoningEffort: "high" },
+        undefined,
+        {
+          reviewCapacityRetryDelaysMs: [0, 0],
+          wait: async () => {},
+        },
+      );
+      const descriptor = {
+        config: factoryConfig(
+          target.checkout,
+          "example/review-capacity-exhausted",
+          "regular",
+          1,
+        ),
+        graph,
+        objectiveBody: body([command]),
+        fakeRoot,
+        planningModel,
+        actions: {
+          "review-exhausted": {
+            files: [{ path: "exhausted.txt", text: "validated\n" }],
+          },
+        },
+      };
+      const { application, eventsPath, github } = makeApplication(descriptor);
+      const plan = await application.planObjective(objective);
+      const waiting = await application.runObjective(objective, plan);
+      assert.equal(waiting.work["review-exhausted"].status, "waiting");
+      assert.equal(waiting.work["review-exhausted"].step, "approve-result");
+      assert.match(
+        waiting.work["review-exhausted"].acceptancePending.detail,
+        /Independent result review failed: reviewer capacity unavailable/,
+      );
+      assert.equal(resultPrompts.length, 3);
+      assert.ok(resultPrompts.every((prompt) => prompt === resultPrompts[0]));
+      assert.equal(
+        readEvents(eventsPath).filter(
+          (event) =>
+            event.type === "start" && event.item === "review-exhausted",
+        ).length,
+        1,
+      );
+      assert.equal(Object.keys(github.state().pullRequests).length, 0);
+      const summary = summarizeModelInvocations(
+        readDiagnostics(descriptor.config.repository, objective),
+      );
+      assert.equal(summary.byPhase["result-review"].invocationCount, 3);
+      assert.equal(summary.byPhase["result-review"].failedCount, 3);
+      assert.equal(summary.byPhase["result-review"].completedCount, 0);
+    } finally {
+      Codex.prototype.startThread = original;
+    }
+  });
+});
+
 test("Work Item review receives exact concurrent-attempt provenance from run state", async () => {
   await fixture("result-provenance", async (root) => {
     const target = createTarget(root);
@@ -702,6 +998,7 @@ test("Work Item review receives exact concurrent-attempt provenance from run sta
         };
       },
     };
+    const runStatus = [];
     const { application, eventsPath } = makeApplication({
       config: factoryConfig(
         target.checkout,
@@ -723,6 +1020,7 @@ test("Work Item review receives exact concurrent-attempt provenance from run sta
           files: [{ path: "right.txt", text: "right\n" }],
         },
       },
+      reportRunStatus: (message) => runStatus.push(message),
     });
     const running = application.runObjective(objective);
     await waitFor(
@@ -738,6 +1036,9 @@ test("Work Item review receives exact concurrent-attempt provenance from run sta
     mkdirSync(dirname(barrier), { recursive: true });
     writeFileSync(barrier, "go\n");
     const completed = await running;
+    assert.deepEqual(runStatus, [
+      "Factory: compiling and independently reviewing a fresh plan",
+    ]);
     assert.ok(completed.finalValidation, JSON.stringify(completed, null, 2));
     assert.equal(completed.finalValidation.passed, true);
     assert.deepEqual(reviewed, new Set(["rc-left", "rc-right"]));
@@ -1164,8 +1465,13 @@ test("application lifecycle reattaches once, cancels owned work, and retries onl
     await once(child, "exit");
     mkdirSync(dirnameFor(barrier), { recursive: true });
     writeFileSync(barrier, "go\n");
+    const runStatus = [];
+    descriptor.reportRunStatus = (message) => runStatus.push(message);
     const { application, eventsPath, github } = makeApplication(descriptor);
     const resumed = await application.runObjective(objective);
+    assert.deepEqual(runStatus, [
+      "Factory: resuming the existing run from atomic state",
+    ]);
     assert.equal(resumed.finalValidation.passed, true);
     assert.equal(Object.keys(github.state().pullRequests).length, 1);
     assert.equal(
@@ -1650,8 +1956,10 @@ test("regular and native asset selection preserve a complete set and hydrate tar
       target.baseSha = git(target.checkout, "rev-parse", "HEAD");
       git(target.checkout, "lfs", "install", "--local");
       const fakeRoot = join(root, "fake");
-      const command =
-        'test -s approved/model.bin && test "$(cat approved/metadata.json)" = \'{"candidate":"b"}\'';
+      const selectedDigest = createHash("sha256")
+        .update(selectedModel)
+        .digest("hex");
+      const command = `sha256sum approved/model.bin | grep -qx '${selectedDigest}  approved/model.bin' && test "$(cat approved/metadata.json)" = '{"candidate":"b"}'`;
       const consumerCommand = "test -s approved/consumed.txt";
       const media = item("media", {
         path: "approved/model.bin",
@@ -1670,6 +1978,17 @@ test("regular and native asset selection preserve a complete set and hydrate tar
         minimumAssetSets: 2,
         requiredLfsRoles: ["model"],
       });
+      const provenanceCriterion =
+        "The selected set's source, rights basis, repository visibility, and lineage are declared in .factory-assets.json.";
+      const sourceIdentityCriterion =
+        "The selected model is copied byte-for-byte from the repository source approved/model.bin and bound back to that destination.";
+      const materializationCriterion =
+        "The worker does not write, remove, or change the final destination; Factory materializes only the human-selected candidate to approved/model.bin and approved/metadata.json.";
+      media.acceptance.push(
+        provenanceCriterion,
+        sourceIdentityCriterion,
+        materializationCriterion,
+      );
       const provenance = {
         source: "approved/model.bin",
         rights: "public integration fixture",
@@ -1760,7 +2079,8 @@ test("regular and native asset selection preserve a complete set and hydrate tar
           },
         },
       };
-      const { application, github } = makeApplication(descriptor);
+      const { application, github, planningPath, contentStore } =
+        makeApplication(descriptor);
       const publish = github.publish.bind(github);
       let lfsObjectObservedBeforePublication = false;
       github.publish = async (request) => {
@@ -1807,11 +2127,25 @@ test("regular and native asset selection preserve a complete set and hydrate tar
         readFileSync(join(review, "metadata-metadata.json"), "utf8"),
         '{"candidate":"b"}\n',
       );
-      await application.selectAssetSet(objective, "media", "candidate-b", {
+      const selection = {
         actor: "test-operator",
         reason: "reviewed opaque pair",
         downstreamItems: ["consumer"],
-      });
+      };
+      if (delivery === "regular")
+        await selectAssetSetFromCli(
+          descriptor.config,
+          objective,
+          "media",
+          "candidate-b",
+          contentStore,
+          selection,
+        );
+      else
+        await application.selectAssetSet(objective, "media", "candidate-b", {
+          ...selection,
+          surface: "factory-cli",
+        });
       const completed = await application.runObjective(objective);
       assert.equal(lfsObjectObservedBeforePublication, true);
       assert.ok(
@@ -1835,6 +2169,84 @@ test("regular and native asset selection preserve a complete set and hydrate tar
       );
       assert.equal(completed.work.media.selectedAssetSet, "candidate-b");
       assert.equal(completed.work.media.selection.actor, "test-operator");
+      const mediaReview = readEvents(planningPath)
+        .filter(
+          (event) =>
+            event.type === "result-review" &&
+            event.observations?.reviewedItemId === "media",
+        )
+        .at(-1);
+      assert.equal(mediaReview.observations.delivery.kind, delivery);
+      assert.equal(mediaReview.observations.assetCaptureReceipts.length, 2);
+      assert.ok(
+        mediaReview.observations.assetCaptureReceipts.every(
+          (receipt) =>
+            receipt.authority === "factory-controller" &&
+            receipt.declarationPath === ".factory-assets.json" &&
+            JSON.stringify(receipt.declarationProvenance) ===
+              JSON.stringify(provenance) &&
+            receipt.inputs?.length === 1 &&
+            receipt.inputs[0].binding.path === "approved/model.bin" &&
+            receipt.inputs[0].ref.digest === selectedDigest &&
+            receipt.mediaRoot === ".factory-media" &&
+            receipt.complete === true,
+        ),
+      );
+      const selectedReceipt =
+        mediaReview.observations.assetCaptureReceipts.find(
+          (receipt) => receipt.setId === "candidate-b",
+        );
+      assert.equal(
+        selectedReceipt.inputs[0].ref.digest,
+        selectedReceipt.members.find(
+          (member) => member.destination === "approved/model.bin",
+        ).digest,
+      );
+      assert.equal(
+        mediaReview.observations.assetSelectionReceipt.setId,
+        "candidate-b",
+      );
+      assert.equal(
+        mediaReview.observations.assetSelectionReceipt.surface,
+        delivery === "regular" ? "factory-cli" : "application",
+      );
+      const materializationEvidence = mediaReview.evidence.find((entry) =>
+        entry.path.endsWith("controller materialization"),
+      );
+      assert.equal(materializationEvidence.complete, true);
+      const materializationPacket = JSON.parse(materializationEvidence.content);
+      assert.equal(
+        materializationPacket.authority,
+        "Factory supervisor controller materialization evidence",
+      );
+      assert.deepEqual(materializationPacket.workerDestinationChanges, []);
+      assert.deepEqual(
+        materializationPacket.destinations.map((entry) => entry.path),
+        ["approved/model.bin", "approved/metadata.json"],
+      );
+      assert.deepEqual(
+        materializationPacket.materializationChange.changes.map(
+          (entry) => entry.path,
+        ),
+        ["approved/metadata.json", "approved/model.bin"],
+      );
+      assert.ok(
+        materializationPacket.workerResultCommitSha ===
+          materializationPacket.resultBaseCommitSha ||
+          materializationPacket.workerChange.changes.length > 0,
+      );
+      const finalReview = readEvents(planningPath)
+        .filter(
+          (event) =>
+            event.type === "result-review" &&
+            event.observations?.integratedCommitSha,
+        )
+        .at(-1);
+      assert.ok(
+        finalReview.evidence.some(
+          (entry) => entry.path === materializationEvidence.path,
+        ),
+      );
       assert.deepEqual(completed.work.media.selection.downstreamItems, [
         "consumer",
       ]);
@@ -1924,6 +2336,172 @@ test("regular and native asset selection preserve a complete set and hydrate tar
         /hydration receipt differs/,
       );
     });
+});
+
+test("the exact two-item same-path LFS gate auto-proves every controller-owned boundary", async () => {
+  await fixture("same-path-lfs-release-gate", async (root) => {
+    const source = readFileSync(
+      join(
+        import.meta.dirname,
+        "fixtures",
+        "disposable-target",
+        "assets",
+        "source.png",
+      ),
+    );
+    const digest = createHash("sha256").update(source).digest("hex");
+    assert.equal(
+      digest,
+      "886eca293713dd0dc77ee8c492c64e81359f6e0286b79d5f6df20c506466d1e2",
+    );
+    const target = createTarget(root, { "assets/source.png": source });
+    const policyCommand =
+      "grep -Fxq 'assets/source.png filter=lfs diff=lfs merge=lfs -text' .gitattributes";
+    const hashCommand = `sha256sum assets/source.png | grep -qx '${digest}  assets/source.png'`;
+    const lfsCommand = "git lfs ls-files | grep -q 'assets/source.png'";
+    const policy = item("same-path-lfs-policy", {
+      path: ".gitattributes",
+      command: policyCommand,
+    });
+    const migration = item("same-path-lfs-migration", {
+      path: "assets/source.png",
+      command: hashCommand,
+      dependencies: ["same-path-lfs-policy"],
+      sourceAssets: [
+        {
+          kind: "repository",
+          path: "assets/source.png",
+          role: "image",
+          mediaType: "image/png",
+          visibility: "repository",
+        },
+      ],
+      expectedOutputRoles: ["image"],
+      minimumAssetSets: 1,
+      requiredLfsRoles: ["image"],
+    });
+    migration.validation.push({
+      command: lfsCommand,
+      provenance: "source-declared",
+      source: "OBJECTIVE",
+    });
+    migration.acceptance.push(
+      "The candidate is copied byte-for-byte from the repository source assets/source.png and bound back to that destination.",
+      "The selected set's source, rights basis, repository visibility, and lineage are declared in .factory-assets.json.",
+      "The worker does not write, remove, or change the final destination; Factory materializes only the human-selected candidate to assets/source.png.",
+    );
+    const materializationCriterion = migration.acceptance.at(-1);
+    const objectiveBody = `# Same-path LFS release gate
+
+## Acceptance
+- ${materializationCriterion}
+- Fresh-clone hydration preserves the selected bytes at assets/source.png.
+- \`${hashCommand}\`
+- \`${lfsCommand}\`
+
+## Final validation
+- \`${policyCommand}\`
+- \`${hashCommand}\`
+- \`${lfsCommand}\`
+`;
+    const descriptor = {
+      config: factoryConfig(
+        target.checkout,
+        "example/same-path-lfs-release-gate",
+        "native-stack",
+      ),
+      graph: {
+        objective,
+        baseSha: target.baseSha,
+        items: [policy, migration],
+      },
+      objectiveBody,
+      fakeRoot: join(root, "fake"),
+      actions: {
+        "same-path-lfs-policy": {
+          files: [
+            {
+              path: ".gitattributes",
+              text: "assets/source.png filter=lfs diff=lfs merge=lfs -text\n",
+            },
+          ],
+        },
+        "same-path-lfs-migration": {
+          assets: [
+            {
+              id: "candidate-a",
+              members: [
+                {
+                  role: "image",
+                  file: "source.png",
+                  mediaType: "image/png",
+                  destination: "assets/source.png",
+                  base64: source.toString("base64"),
+                },
+              ],
+              provenance: {
+                source: "assets/source.png",
+                rights: "public repository fixture",
+                visibility: "repository",
+                lineage: ["assets/source.png"],
+              },
+            },
+          ],
+        },
+      },
+    };
+    const { application, planningPath, contentStore } =
+      makeApplication(descriptor);
+    const waiting = await application.runObjective(objective);
+    assert.equal(waiting.work["same-path-lfs-migration"].step, "approve-asset");
+    await selectAssetSetFromCli(
+      descriptor.config,
+      objective,
+      "same-path-lfs-migration",
+      "candidate-a",
+      contentStore,
+      {
+        actor: "test-operator",
+        reason: "verified complete exact-byte candidate",
+        downstreamItems: [],
+      },
+    );
+    const completed = await application.runObjective(objective);
+    assert.equal(completed.objectiveClosure, "complete");
+    assert.equal(completed.finalValidation.passed, true);
+    assert.equal(completed.finalValidation.hydrationReceipt.passed, true);
+    const reviews = readEvents(planningPath).filter(
+      (event) => event.type === "result-review",
+    );
+    const workReview = reviews.find(
+      (event) =>
+        event.observations?.reviewedItemId === "same-path-lfs-migration",
+    );
+    const finalReview = reviews.find(
+      (event) => event.observations?.integratedCommitSha,
+    );
+    for (const review of [workReview, finalReview]) {
+      const evidence = review.evidence.find((entry) =>
+        entry.path.endsWith("controller materialization"),
+      );
+      assert.equal(evidence.complete, true);
+      const packet = JSON.parse(evidence.content);
+      assert.deepEqual(packet.workerDestinationChanges, []);
+      assert.deepEqual(
+        packet.materializationChange.changes.map((entry) => entry.path),
+        ["assets/source.png"],
+      );
+      assert.deepEqual(
+        packet.destinations.map((entry) => entry.digest),
+        [digest],
+      );
+    }
+    assert.ok(
+      completed.finalValidation.criteria.some(
+        (entry) => entry.criterion === materializationCriterion,
+      ),
+    );
+  });
 });
 
 test("hydration failure is URL-free and blocks final review, evidence, and closure on replay", async () => {

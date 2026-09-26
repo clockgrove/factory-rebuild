@@ -17,11 +17,16 @@ import {
   AcceptanceDecisionRequired,
   reviewAcceptance,
   validateWorkItem,
+  workItemMaterializationEvidence,
   workItemReviewObservations,
 } from "../validation.js";
 import { planningSources } from "../compiler.js";
 import { linearDeliveryUnits } from "./plan.js";
-import { materializeAssetSet, selectedInputsForItem } from "../media.js";
+import {
+  materializeAssetSet,
+  selectedInputsForItem,
+  validationLfsMembersForItem,
+} from "../media.js";
 import { itemsConflict } from "../scheduler.js";
 import { transplantIndependentChange } from "./transplant.js";
 import { closeWorkItem } from "../completion.js";
@@ -323,6 +328,13 @@ export async function runNativeGraph(args: {
               entry.final,
             ),
           itemBase,
+          validationLfsMembersForItem(
+            state,
+            item,
+            config.checkout,
+            work.changeRef!,
+          ),
+          args.contentStore,
         );
         const reviewResult = () =>
           reviewAcceptance({
@@ -338,6 +350,11 @@ export async function runNativeGraph(args: {
               config.checkout,
             ),
             decisions: work.acceptanceDecisions,
+            evidenceSources: workItemMaterializationEvidence({
+              state,
+              item,
+              checkout: config.checkout,
+            }),
             observations: workItemReviewObservations(
               state,
               item,
