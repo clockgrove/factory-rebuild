@@ -10,8 +10,9 @@ The public #121 reproduction and current clean regular runner supplied this
 contract. Ambiguous active `deliver` state still refuses rather than replaying
 workers or inferring continuation from remote publication. The refusal now names
 the unsupported recovery window and preservation/bypass guidance; focused tests
-verify refusal both with and without a recorded PR, with no runner operations or
-state changes. The outer controller may still record its last error. No archived
+verify refusal both with and without a recorded PR, including resumable execution,
+validation and selected-asset peers in either graph order. A whole-graph preflight
+refuses before any peer operation or state change. The outer controller may still record its last error. No archived
 source, historical run mutation, automatic retry or recovery journal was used.
 
 ## Provider idle timeout subscription (#130)

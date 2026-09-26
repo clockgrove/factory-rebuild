@@ -3,7 +3,9 @@
 **Interrupted regular delivery (#121):** The current contract refuses a running
 Work Item at `deliver` rather than reconciling publication from remote evidence.
 The narrow candidate adds actionable preservation/operator guidance and focused
-no-replay/no-publication tests with and without a recorded PR. This does not
+no-replay/no-publication tests with and without a recorded PR. Whole-graph
+preflight refuses before resuming execution, validation or selected-asset peers,
+independent of item order. This does not
 repair or qualify the historical interrupted v0.1.21 run; automatic recovery,
 state edits and retry remain outside this leaf. Independent acceptance is pending.
 

@@ -58,6 +58,15 @@ export async function runRegularGraph(args: {
   } = args;
   const graph = state.graph;
   const baseSha = state.baseSha;
+  // Refuse the whole restart before any resumable peer can perform work.
+  for (const item of graph.items) {
+    const work = state.work[item.id]!;
+    if (work.status === "running" && work.step === "deliver") {
+      throw new Error(
+        `Work Item ${item.id} has ambiguous active state at deliver; operator direction required; interrupted regular delivery cannot be resumed automatically. Preserve the original snapshot and exact remote branch/PR evidence; do not retry, edit state, or use a result decision to bypass this refusal`,
+      );
+    }
+  }
   let mergeTail: Promise<void> = Promise.resolve();
   const execute = async (
     item: WorkItem,
@@ -347,10 +356,7 @@ export async function runRegularGraph(args: {
     }
     if (work.step !== "execute" || !work.execution || !work.baseSha) {
       throw new Error(
-        `Work Item ${item.id} has ambiguous active state at ${work.step ?? "unknown"}; operator direction required` +
-          (work.step === "deliver"
-            ? "; interrupted regular delivery cannot be resumed automatically. Preserve the original snapshot and exact remote branch/PR evidence; do not retry, edit state, or use a result decision to bypass this refusal"
-            : ""),
+        `Work Item ${item.id} has ambiguous active state at ${work.step ?? "unknown"}; operator direction required`,
       );
     }
     const promise = execute(item, work.baseSha, work.execution).finally(() => {
