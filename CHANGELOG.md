@@ -2,6 +2,12 @@
 
 This file records public releases of Factory. See [BUILD-STATUS.md](docs/BUILD-STATUS.md) for development acceptance evidence.
 
+## 0.1.17 — 2026-09-25
+
+- Retry classified provider-capacity failures twice for graph, Work Item result, and final Objective review while preserving the selected reviewer model, reasoning, exact prompt, and schema.
+- Record each bounded provider attempt and delay independently in diagnostics without replaying workers, validation, planning, or delivery.
+- Keep non-capacity failures and exhausted capacity fail-closed through the existing exact human-decision path, with method-authoritative review phases controlling retry and diagnostic attribution.
+
 ## 0.1.16 — 2026-09-25
 
 - Align the installed setup skill with the independent runtime defaults for planner, reviewer, and worker model selections.
