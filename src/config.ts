@@ -38,7 +38,11 @@ export const CLAUDE_AGENT_SDK_ADAPTER_IDENTITY =
 export const GITHUB_COPILOT_SDK_ADAPTER_IDENTITY = "@github/copilot-sdk@1.0.13";
 
 export type HarnessReasoningEffort =
-  "low" | "medium" | "high" | "xhigh" | "max";
+  | "low"
+  | "medium"
+  | "high"
+  | "xhigh"
+  | "max";
 export type ClaudeSettingSource = "user" | "project" | "local";
 
 export interface ClaudeAgentSdkConfig {
@@ -68,7 +72,12 @@ export interface GitHubCopilotSdkConfig {
 }
 
 export type JsonValue =
-  null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
+  | null
+  | boolean
+  | number
+  | string
+  | JsonValue[]
+  | { [key: string]: JsonValue };
 
 export type LocalHarnessConfig =
   | ({ kind: "codex-sdk" } & CodexModelSelection)

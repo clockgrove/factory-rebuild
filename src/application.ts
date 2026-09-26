@@ -14,7 +14,10 @@ import { LocalContentStore } from "./content/local.js";
 import { NativeStackDelivery } from "./delivery/native-stack.js";
 import { RegularDelivery } from "./delivery/regular.js";
 import { ClaudeAgentSdkHarness } from "./execution/claude.js";
-import { GitHubCopilotSdkHarness } from "./execution/github-copilot.js";
+import {
+  GitHubCopilotSdkHarness,
+  requireCopilotRuntime,
+} from "./execution/github-copilot.js";
 import { CodexHarness, LocalExecutionDriver } from "./execution/local.js";
 import { RealGitHubGateway } from "./github.js";
 import type {
@@ -327,6 +330,7 @@ export function compose(input: FactoryConfig): FactoryApplication {
     );
   }
   if (config.execution.harness.kind === "github-copilot-sdk") {
+    requireCopilotRuntime();
     if (config.policy.network !== "host")
       throw new Error(
         "GitHub Copilot SDK requires policy.network host; no fallback is available",

@@ -8,6 +8,10 @@ Copilot SDK adapters and a package-root registration seam for another adapter.
 Planning and independent result review remain on the configured Codex SDK
 models. Selecting Claude or GitHub Copilot changes only Work Item execution.
 
+This is the unreleased `0.1.22` candidate interface, not a capability claim for
+the immutable public `v0.1.21` package. Credential-free checks do not qualify a
+real provider or authorize a live attempt.
+
 ## Capability contract
 
 Every harness must declare this exact capability record before composition:
@@ -143,6 +147,26 @@ The two optional SDK packages are declared as exact optional package
 dependencies. A normal online npm installation installs them. An installation
 using `--omit=optional` can still use Codex and the generic registered seam, but
 cannot select the Claude or GitHub Copilot built-in adapter.
+
+Factory's default Codex and Claude paths retain Node.js 22.0.0 or later. The
+exact Copilot SDK `1.0.13` dependency requires Node.js 22.12.0 or later on
+Factory's supported Node range. Selecting it on Node 22.0–22.11 fails before
+SDK loading, authentication or an attempt; there is no fallback or automatic
+installation. Optional-omitted installations retain the default/root seam at
+Factory's Node floor.
+
+Building and checking distribution notices requires a full dependency install:
+the generator reads the installed optional SDK license texts. That contributor
+prerequisite does not make either SDK necessary for an optional-omitted runtime.
+
+Each built-in worker records a correlated usage invocation before provider
+startup, requires an explicit successful terminal event, and bounds idle waits
+and cleanup using the existing provider-turn guard. Codex exposes only its
+supplied normalized counters. Claude and Copilot deliberately report normalized
+worker token usage as unavailable in this candidate: Claude's cache/input
+semantics differ from Codex, and Copilot conversation/context counters are not
+API usage. Safe provider-reported raw fields may remain in private evidence;
+summaries do not infer totals, cache ratios, or zero usage from those fields.
 
 All three built-in harnesses reuse the developer's local authentication. Factory
 does not add tokens to its configuration file. For example, an existing `codex`

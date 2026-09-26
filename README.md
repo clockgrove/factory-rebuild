@@ -48,7 +48,7 @@ npm run lint
 npm run format:check
 npm test
 npm pack
-npm install --prefix /tmp/factory-candidate ./clockgrove-factory-0.1.21.tgz
+npm install --prefix /tmp/factory-candidate ./clockgrove-factory-0.1.22.tgz
 ```
 
 The current source candidate declares the Claude Agent SDK and GitHub Copilot
@@ -58,7 +58,8 @@ package-root registration seam available. See [local agent harnesses](docs/AGENT
 for their exact versions/licenses, configuration shapes, capability/lifecycle
 contract, local-login behavior, security boundary, CLI examples, and
 `composeWithLocalHarness` package-root API. This candidate behavior is not a
-claim about the already published `v0.1.7` artifact.
+claim about the already published `v0.1.21` artifact. The `0.1.22` draft is
+unreleased and has not completed its live provider acceptance gates.
 
 The repository's [quality-tooling map](docs/QUALITY-TOOLING.md) records the
 pinned Biome release and the exact remaining compatibility checks.

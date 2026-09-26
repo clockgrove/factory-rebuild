@@ -19,6 +19,11 @@ import {
   githubCopilotSessionOptions,
 } from "./github-copilot-options.js";
 import { cleanupCopilotClient } from "./github-copilot-lifecycle.js";
+import type { WorkerUsageObservation } from "../contracts.js";
+import {
+  DEFAULT_PROVIDER_TURN_IDLE_TIMEOUT_MS,
+  ProviderTurnGuard,
+} from "../provider-turn.js";
 
 function progressEvent(
   event: SessionEvent,
@@ -59,51 +64,106 @@ async function main(): Promise<void> {
     ".progress.ndjson",
   );
   let progressLost = false;
+  const turn = new ProviderTurnGuard(
+    input.providerTurnIdleTimeoutMs ?? DEFAULT_PROVIDER_TURN_IDLE_TIMEOUT_MS,
+  );
+  let terminal = false;
+  let providerFailure: string | undefined;
+  const observeUsage = (type: WorkerUsageObservation["type"]): void => {
+    if (progressLost) return;
+    const workerUsage: WorkerUsageObservation = {
+      type,
+      invocationId: input.request.attemptId ?? "",
+      providerAttempt: 1,
+      role: "worker",
+      phase: "implementation",
+      provider: "github-copilot",
+      model: input.config.model,
+      reasoningEffort: input.config.reasoningEffort,
+      usage: {},
+    };
+    try {
+      privateProgress(progressPath, {
+        eventId: randomUUID(),
+        at: new Date().toISOString(),
+        attemptId: input.request.attemptId ?? "",
+        operation: "worker-usage",
+        workerUsage,
+      });
+    } catch (error) {
+      progressLost = true;
+      process.stderr.write(
+        `Factory GitHub Copilot progress unavailable: ${error instanceof Error ? error.message : String(error)}\n`,
+      );
+    }
+  };
   let client: import("@github/copilot-sdk").CopilotClient | undefined;
   let session: import("@github/copilot-sdk").CopilotSession | undefined;
   let outcome: Record<string, unknown> | undefined;
   let sessionStart:
-    Extract<SessionEvent, { type: "session.start" }>["data"] | undefined;
+    | Extract<SessionEvent, { type: "session.start" }>["data"]
+    | undefined;
   try {
-    const { CopilotClient } = await import("@github/copilot-sdk");
+    observeUsage("started");
+    const { CopilotClient } = await turn.race(import("@github/copilot-sdk"));
     const baseDirectory =
       process.env.COPILOT_HOME ?? join(process.env.HOME ?? "", ".copilot");
     client = new CopilotClient(
       githubCopilotClientOptions(input, process.env, baseDirectory),
     );
-    await client.start();
-    const authentication = await client.getAuthStatus();
+    await turn.race(client.start());
+    const authentication = await turn.race(client.getAuthStatus());
     if (!authentication.isAuthenticated)
       throw new Error(
         authentication.statusMessage ?? "Not authenticated with GitHub Copilot",
       );
-    session = await client.createSession({
-      ...githubCopilotSessionOptions(input),
-      onEvent: (event) => {
-        if (event.type === "session.start") sessionStart = event.data;
-        if (!progressLost)
-          try {
-            privateProgress(
-              progressPath,
-              progressEvent(
-                event,
-                input.request.attemptId ?? "",
-                redactionValues,
-              ),
-            );
-          } catch (error) {
-            progressLost = true;
-            process.stderr.write(
-              `Factory GitHub Copilot progress unavailable: ${error instanceof Error ? error.message : String(error)}\n`,
-            );
-          }
-      },
-    });
-    process.once("SIGTERM", () => void session?.abort().catch(() => undefined));
-    const response = await session.sendAndWait(
-      { prompt: workItemPrompt(input.request) },
-      input.config.timeoutSeconds * 1_000,
+    session = await turn.race(
+      client.createSession({
+        ...githubCopilotSessionOptions(input),
+        onEvent: (event) => {
+          turn.progress();
+          if (event.type === "session.idle") terminal = true;
+          if (event.type === "session.error")
+            providerFailure = event.data.message;
+          if (event.type === "session.start") sessionStart = event.data;
+          if (!progressLost)
+            try {
+              privateProgress(
+                progressPath,
+                progressEvent(
+                  event,
+                  input.request.attemptId ?? "",
+                  redactionValues,
+                ),
+              );
+            } catch (error) {
+              progressLost = true;
+              process.stderr.write(
+                `Factory GitHub Copilot progress unavailable: ${error instanceof Error ? error.message : String(error)}\n`,
+              );
+            }
+        },
+      }),
     );
+    turn.signal.addEventListener(
+      "abort",
+      () => void session?.abort().catch(() => undefined),
+      { once: true },
+    );
+    process.once("SIGTERM", () => void session?.abort().catch(() => undefined));
+    if (providerFailure) throw new Error(providerFailure);
+    // Startup idleness cannot qualify the implementation turn.
+    terminal = false;
+    const response = await turn.race(
+      session.sendAndWait(
+        { prompt: workItemPrompt(input.request) },
+        input.config.timeoutSeconds * 1_000,
+      ),
+    );
+    if (providerFailure) throw new Error(providerFailure);
+    if (!terminal)
+      throw new Error("GitHub Copilot SDK ended without session.idle");
+    turn.finish();
     if (!sessionStart)
       throw new Error("GitHub Copilot SDK did not report session startup");
     if (sessionStart.context?.cwd !== input.request.worktree)
@@ -141,6 +201,7 @@ async function main(): Promise<void> {
     outcome = harnessFailure("github-copilot", error, redactionValues);
     process.exitCode = 1;
   } finally {
+    turn.finish();
     try {
       if (client) await cleanupCopilotClient(client, session);
     } catch (error) {
@@ -150,6 +211,7 @@ async function main(): Promise<void> {
   }
   if (!outcome) throw new Error("GitHub Copilot worker produced no outcome");
   writeHarnessResult(resultPath, outcome);
+  observeUsage(outcome.state === "complete" ? "completed" : "failed");
 }
 
 main().catch((error: unknown) => {

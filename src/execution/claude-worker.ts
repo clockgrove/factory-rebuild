@@ -19,6 +19,12 @@ import {
   writeHarnessResult,
 } from "./harness-support.js";
 import { claudeQueryOptions } from "./claude-options.js";
+import type { WorkerUsageObservation } from "../contracts.js";
+import {
+  DEFAULT_PROVIDER_TURN_IDLE_TIMEOUT_MS,
+  ProviderTurnGuard,
+  closeProviderEventStream,
+} from "../provider-turn.js";
 
 function progressEvent(
   message: SDKMessage,
@@ -101,16 +107,60 @@ async function main(): Promise<void> {
   );
   const controller = new AbortController();
   process.once("SIGTERM", () => controller.abort());
+  const turn = new ProviderTurnGuard(
+    input.providerTurnIdleTimeoutMs ?? DEFAULT_PROVIDER_TURN_IDLE_TIMEOUT_MS,
+  );
+  turn.signal.addEventListener(
+    "abort",
+    () => controller.abort(turn.signal.reason),
+    { once: true },
+  );
+  let events: AsyncIterator<SDKMessage> | undefined;
+  let closeStarted = false;
   let progressLost = false;
+  const observeUsage = (type: WorkerUsageObservation["type"]): void => {
+    if (progressLost) return;
+    const workerUsage: WorkerUsageObservation = {
+      type,
+      invocationId: input.request.attemptId ?? "",
+      providerAttempt: 1,
+      role: "worker",
+      phase: "implementation",
+      provider: "claude",
+      model: input.config.model,
+      reasoningEffort: input.config.reasoningEffort,
+      usage: {},
+    };
+    try {
+      privateProgress(progressPath, {
+        eventId: randomUUID(),
+        at: new Date().toISOString(),
+        attemptId: input.request.attemptId ?? "",
+        operation: "worker-usage",
+        workerUsage,
+      });
+    } catch (error) {
+      progressLost = true;
+      process.stderr.write(
+        `Factory Claude worker progress unavailable: ${error instanceof Error ? error.message : String(error)}\n`,
+      );
+    }
+  };
   try {
-    const { query } = await import("@anthropic-ai/claude-agent-sdk");
+    observeUsage("started");
+    const { query } = await turn.race(import("@anthropic-ai/claude-agent-sdk"));
     const stream = query({
       prompt: workItemPrompt(input.request),
       options: claudeQueryOptions(input, process.env, controller),
     });
     let result: SDKResultMessage | undefined;
     let initialization: SDKSystemMessage | undefined;
-    for await (const message of stream) {
+    events = stream[Symbol.asyncIterator]();
+    for (;;) {
+      const next = await turn.race(events.next());
+      if (next.done) break;
+      const message = next.value;
+      turn.progress();
       if (message.type === "system" && message.subtype === "init") {
         assertInitialization(message, input);
         initialization = message;
@@ -132,12 +182,16 @@ async function main(): Promise<void> {
             `Factory Claude worker progress unavailable: ${error instanceof Error ? error.message : String(error)}\n`,
           );
         }
+      if (message.type === "result") break;
     }
     if (!initialization)
       throw new Error("Claude SDK did not report its initialized session");
     if (!result) throw new Error("Claude SDK ended without a result");
     const error = resultError(result);
     if (error) throw new Error(error);
+    closeStarted = true;
+    await closeProviderEventStream(events, turn, true);
+    turn.finish();
     const assets = readProducedAssets(input.request);
     writeHarnessResult(resultPath, {
       state: "complete",
@@ -157,12 +211,26 @@ async function main(): Promise<void> {
         totalCostUsd: result.total_cost_usd,
       },
     });
+    observeUsage("completed");
   } catch (error) {
+    if (events && !closeStarted && !turn.signal.aborted) {
+      closeStarted = true;
+      try {
+        await closeProviderEventStream(events, turn, true);
+      } catch {
+        /* Preserve the authoritative provider failure. */
+      }
+    }
     writeHarnessResult(
       resultPath,
       harnessFailure("claude", error, redactionValues),
     );
+    observeUsage("failed");
     process.exitCode = 1;
+  } finally {
+    if (events && !closeStarted)
+      void closeProviderEventStream(events, turn, false);
+    turn.finish();
   }
 }
 

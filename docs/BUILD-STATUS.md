@@ -125,6 +125,28 @@ Those final checks have now passed: all nine reviewed files are unchanged at the
 
 These later source changes do not alter the already published v0.1.21 bytes or retroactively extend its installed-artifact evidence. A pilot artifact must identify its actual source, version, digest and normal installation evidence.
 
-**Next action:** finish integrated-main acceptance and the source handoff, then reconcile #55's installed harness candidate against accepted main. #55/PR #62 remains open/draft for required exact-artifact live second-provider evidence; developer login remains deferred. [#26's reconciled dependency and pilot checklist](https://github.com/clockgrove/factory-rebuild/issues/26) distinguishes closed prerequisites, public fixture acceptance and the not-yet-accepted actual Clockgrove W0-001/LFS pilot. Prepare and approve the exact graph/live scope before target projection or execution; do not infer private activation from public source-work approval. #70, #121 and #127 are queued nonblocking leaves, while #7/#8/#9 remain future branches. The [compilation and telemetry postmortem](V0.1.21-POSTMORTEM.md) is supporting evidence, not new acceptance blockers. `AGENTS.md` governs building Factory; packaged skills govern using the installed CLI.
+**Installed harness refresh (issue #55):** Existing draft [PR #62](https://github.com/clockgrove/factory-rebuild/pull/62) is being refreshed onto accepted main, including [PR #128](https://github.com/clockgrove/factory-rebuild/pull/128)'s public handoff. The unreleased package/plugin candidate is `0.1.22`; exact optional Claude SDK `0.3.281` and Copilot SDK `1.0.13` remain unchanged. The package-root registration and identity/configuration binding retain production controller services, current media/validation/receipt behavior, #123's shared staging boundary, and typed started/terminal usage correlation. Optional workers use the existing idle guard and fail closed without a terminal; their normalized token counters are deliberately unavailable, not inferred zero or estimated cache totals. Historical PR #62 test, CI and tarball receipts do not qualify this refreshed source. Fresh deterministic, packed, hosted and independent exact-head evidence must identify the actual candidate.
+
+The pinned Copilot SDK requires Node 22.12.0 on Factory's supported Node range;
+selection below that SDK minimum fails before loading or authentication. A
+separate audit also found a pre-existing advertised-default-Node-floor mismatch
+in accepted main: bundled `normalize-package-data@8.0.0` and
+`hosted-git-info@9.0.3` declare Node 22.9.0 or later on that range. Those production
+lock entries are unchanged by this refresh. Node 24 checks cannot prove the
+advertised Node 22.0.0 compatibility; that default dependency-policy blocker
+remains pending coordinated resolution, without a floor waiver or unapproved
+dependency override here.
+
+The refreshed local credential-free gate passes 133 tests on Node 24.20.0,
+including fresh empty-cache offline optional-omitted installation, package-root
+scripted harness execution through production validation/delivery/final review,
+and production optional workers behind scripted SDK modules. Sequential build,
+typecheck, Biome/fallback lint and format, notices and package checks pass. A
+real Node 22.0.0 optional-omitted root import and CLI help probe also pass; these
+narrow runtime observations do not resolve the dependency engine-policy gap or
+prove live provider acceptance. Hosted Quality and independent final-head audit
+are still required for this source candidate.
+
+**Next action:** complete and independently audit the refreshed #55 source/package gate. #55/PR #62 remains open/draft for required exact-artifact Codex and Claude live acceptance; the included Copilot adapter also needs live proof unless explicitly split or deferred. Developer login remains deferred and no live attempt is authorized by this source refresh. The historical failed Objective remains immutable and nonqualifying; do not retry or override it. [#26's reconciled dependency and pilot checklist](https://github.com/clockgrove/factory-rebuild/issues/26) distinguishes closed prerequisites, public fixture acceptance and the not-yet-accepted actual Clockgrove W0-001/LFS pilot. Prepare and approve the exact graph/live scope before target projection or execution; do not infer private activation from public source-work approval. #70, #121 and #127 are queued nonblocking leaves, while #7/#8/#9 remain future branches. The [compilation and telemetry postmortem](V0.1.21-POSTMORTEM.md) is supporting evidence, not new acceptance blockers. `AGENTS.md` governs building Factory; packaged skills govern using the installed CLI.
 
 **Explicit non-goals now:** managed-agent execution, sandbox providers, Daytona, automatic local/cloud bursting, distributed controllers, media generation providers, and private adopter-specific product work. Factory source must never be its own target. The public fixture files and Objective templates are sufficient to reproduce generic Factory acceptance in a repository the contributor controls.

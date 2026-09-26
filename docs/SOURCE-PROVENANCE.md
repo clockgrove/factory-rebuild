@@ -123,6 +123,15 @@ The archived `src/backends/codex-sdk-local.ts` at commit `994bbfcadb317aed2dfa93
 
 The Claude Agent SDK and GitHub Copilot SDK adapters were designed from their current official SDK APIs and package metadata, not from the archived repository. Their provider-specific option builders, local-profile authentication, extension-surface disabling, process handles, progress normalization, and tests are new clean implementation. The credential-free packed conformance test was written from issue #55's public acceptance and imports only `@clockgrove/factory`; no archived test, fixture, transcript, or qualification protocol was inspected or copied.
 
+The September 26 refresh reconciles that historical candidate with accepted
+public main, including the existing provider-turn guard, typed usage observation
+contract, controller media/evidence changes, and #123's staging boundary. It
+retains the exact optional SDK pins and preserves public v0.1.21 history. Fresh
+tests replace only the SDK module boundary with scripted modules while running
+the production optional workers, checking terminal/idle/cleanup failures and
+honest unavailable normalized usage. No archived or private source, real
+provider login, live target, or release claim was added by this refresh.
+
 ## Role-specific Factory defaults (#59)
 
 Issue #59 and the current explicit-selection implementation supplied this change. No additional archived source or provider policy was inspected or copied. Factory now resolves planner, reviewer, and worker defaults separately at installation, persists the resulting explicit values, and keeps provider-neutral harness work in issue #55. A post-merge boundary audit rejected a shared-default compatibility alias that was not required by #59; the package root exposes only the role-specific defaults.

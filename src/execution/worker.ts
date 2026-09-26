@@ -5,7 +5,14 @@ import { pathToFileURL } from "node:url";
 import type { HarnessRequest, WorkerUsageObservation } from "../contracts.js";
 import { codexTokenUsage } from "../usage.js";
 import type { ThreadEvent } from "@openai/codex-sdk";
-import { harnessFailure, privateProgress, readProducedAssets, redact, workItemPrompt, writeHarnessResult } from "./harness-support.js";
+import {
+  harnessFailure,
+  privateProgress,
+  readProducedAssets,
+  redact,
+  workItemPrompt,
+  writeHarnessResult,
+} from "./harness-support.js";
 import type { CodexModelSelection } from "../config.js";
 import {
   DEFAULT_PROVIDER_TURN_IDLE_TIMEOUT_MS,
@@ -77,7 +84,9 @@ export async function runCodexWorker(
     model,
     providerTurnIdleTimeoutMs,
   } = JSON.parse(readFileSync(inputPath, "utf8")) as WorkerInput;
-  const redactionValues = allowedSecretNames.map((name) => process.env[name]).filter((value): value is string => Boolean(value));
+  const redactionValues = allowedSecretNames
+    .map((name) => process.env[name])
+    .filter((value): value is string => Boolean(value));
   const progressPath = resultPath.replace(
     /\.result\.json$/,
     ".progress.ndjson",
@@ -205,7 +214,10 @@ export async function runCodexWorker(
     return true;
   } catch (caught) {
     const error = caught;
-    writeHarnessResult(resultPath, harnessFailure("codex", error, redactionValues));
+    writeHarnessResult(
+      resultPath,
+      harnessFailure("codex", error, redactionValues),
+    );
     observeUsage("failed");
     return false;
   } finally {

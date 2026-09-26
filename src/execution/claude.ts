@@ -39,6 +39,7 @@ interface ClaudeWorkerHandleData {
 export interface ClaudeWorkerInput {
   request: HarnessRequest;
   config: ClaudeAgentSdkConfig;
+  providerTurnIdleTimeoutMs?: number;
 }
 
 const claudeLocalAuthenticationEnvironment = [

@@ -1,18 +1,158 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import {
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { AuthenticationRequiredError } from "../dist/contracts.js";
 import { runRegularGraph } from "../dist/delivery/regular-runner.js";
 import { statusDocument } from "../dist/diagnostics.js";
 import { ClaudeAgentSdkHarness } from "../dist/execution/claude.js";
-import { GitHubCopilotSdkHarness } from "../dist/execution/github-copilot.js";
+import {
+  GitHubCopilotSdkHarness,
+  requireCopilotRuntime,
+} from "../dist/execution/github-copilot.js";
 import {
   cleanupCopilotClient,
   stopCopilotClient,
 } from "../dist/execution/github-copilot-lifecycle.js";
 import { CodexHarness } from "../dist/execution/local.js";
+
+test("only the selected Copilot adapter requires its genuine SDK Node minimum", () => {
+  for (const version of ["22.0.0", "22.11.9"])
+    assert.throws(
+      () => requireCopilotRuntime(version),
+      new RegExp(
+        `GitHub Copilot SDK 1.0.13 requires Node >=22.12.0; current runtime is ${version}`,
+      ),
+    );
+  for (const version of ["22.12.0", "24.0.0"])
+    assert.doesNotThrow(() => requireCopilotRuntime(version));
+});
+
+test("optional production workers bound turns, require terminals and report unavailable normalized usage", () => {
+  const root = mkdtempSync(join(tmpdir(), "factory-optional-workers-"));
+  try {
+    for (const provider of ["claude", "github-copilot"])
+      for (const scenario of [
+        "complete",
+        "nonterminal",
+        "creation",
+        "timeout",
+        "cleanup",
+        "auth",
+        "failure",
+      ]) {
+        const attemptId = `${provider}-${scenario}`;
+        const input = join(root, `${attemptId}.request.json`);
+        const result = join(root, `${attemptId}.result.json`);
+        writeFileSync(
+          input,
+          JSON.stringify({
+            providerTurnIdleTimeoutMs: 100,
+            request: {
+              attemptId,
+              worktree: root,
+              item: {
+                title: "Scripted",
+                goal: "Bound the worker",
+                acceptance: [],
+                nonGoals: [],
+                ownedPaths: ["result.txt"],
+                brief: "Only the owned file",
+                validation: [],
+              },
+            },
+            config: {
+              adapter: "scripted-exact",
+              model: "scripted-model",
+              reasoningEffort: "medium",
+              tools: [],
+              allowedTools: [],
+              permissionMode: "default",
+              settingSources: [],
+              maxTurns: 2,
+              availableTools: [],
+              timeoutSeconds: 1,
+            },
+          }),
+        );
+        const started = Date.now();
+        const child = spawnSync(
+          process.execPath,
+          [
+            "--loader",
+            fileURLToPath(
+              new URL("./fixtures/provider-worker-loader.mjs", import.meta.url),
+            ),
+            fileURLToPath(
+              new URL(
+                `../dist/execution/${provider}-worker.js`,
+                import.meta.url,
+              ),
+            ),
+            input,
+            result,
+          ],
+          {
+            env: {
+              PATH: process.env.PATH,
+              FACTORY_SCRIPTED_PROVIDER_SCENARIO: scenario,
+            },
+            encoding: "utf8",
+            timeout: 5_000,
+          },
+        );
+        assert.ifError(child.error);
+        const outcome = JSON.parse(readFileSync(result, "utf8"));
+        assert.equal(
+          outcome.state,
+          scenario === "complete" ? "complete" : "failed",
+          `${attemptId}: ${child.stderr}`,
+        );
+        assert.equal(child.status, scenario === "complete" ? 0 : 1, attemptId);
+        assert.ok(Date.now() - started < 4_000, attemptId);
+        if (
+          ["creation", "timeout"].includes(scenario) ||
+          (provider === "claude" && scenario === "cleanup")
+        )
+          assert.match(outcome.error, /no progress/);
+        if (scenario === "failure")
+          assert.match(outcome.error, /authoritative provider failure/);
+        if (scenario === "auth")
+          assert.equal(outcome.authentication.provider, provider);
+        const observations = readFileSync(
+          result.replace(/\.result\.json$/, ".progress.ndjson"),
+          "utf8",
+        )
+          .trim()
+          .split("\n")
+          .map(JSON.parse)
+          .filter((event) => event.operation === "worker-usage");
+        assert.equal(observations[0].workerUsage.type, "started");
+        const terminal = observations.at(-1).workerUsage;
+        assert.equal(
+          terminal.type,
+          scenario === "complete" ? "completed" : "failed",
+        );
+        assert.equal(terminal.provider, provider);
+        assert.equal(terminal.invocationId, attemptId);
+        assert.equal(terminal.providerAttempt, 1);
+        assert.equal(terminal.phase, "implementation");
+        assert.equal(terminal.model, "scripted-model");
+        assert.deepEqual(terminal.usage, {});
+      }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test("Copilot cleanup errors force stop and fail the durable outcome", async () => {
   let forced = 0;

@@ -494,10 +494,6 @@ async function main(): Promise<void> {
     const acceptedPlan = planPath
       ? (JSON.parse(readFileSync(planPath, "utf8")) as PlanCandidate)
       : undefined;
-    if (!planPath)
-      console.error(
-        "Factory: compiling and independently reviewing a fresh plan",
-      );
     const state = await requireApplication().runObjective(
       objective,
       acceptedPlan,

@@ -380,7 +380,9 @@ test("fresh packed artifact composes a registered harness through the package ro
     assert.equal(summary.combinedUsage.tokenTotals.inputTokens, 122);
     assert.equal(summary.combinedUsage.tokenTotals.cachedInputTokens, 90);
     assert.equal(summary.combinedUsage.tokenTotals.outputTokens, 15);
-    assert.equal(summary.workerUsage.coverage.unobservedAttemptCount, 0);
+    // The real injected harness deliberately supplied no typed usage; its
+    // completed attempt remains unobserved instead of being inferred as zero.
+    assert.equal(summary.workerUsage.coverage.unobservedAttemptCount, 1);
     assert.equal(
       Object.values(summary.workerUsage.byInvocation)[0].itemId,
       "worker-item",

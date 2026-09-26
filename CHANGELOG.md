@@ -9,6 +9,7 @@ This file records public releases of Factory. See [BUILD-STATUS.md](docs/BUILD-S
 - Reuse developer-local provider authentication, fail with actionable login-and-retry guidance when it is absent, and keep controller GitHub publication credentials out of worker environments.
 - Preserve every exact Work Item validation command with its provenance and source in the common Codex, Claude, and GitHub Copilot worker prompt while retaining controller-only command execution and validation authority.
 - Derive Claude and GitHub Copilot client telemetry versions from the installed Factory package metadata instead of a stale release literal.
+- Refresh the unreleased `0.1.22` harness candidate onto accepted main, preserving controller capabilities, media receipts, shared staging/stop boundaries, exact validation constraints, terminal/idle guards, worker-usage correlation, and the Biome/Node 22 quality gate. Claude and Copilot normalized token counters remain explicitly unavailable rather than estimated.
 
 ## 0.1.21 — 2026-09-25
 

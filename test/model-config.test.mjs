@@ -133,7 +133,10 @@ test("shared worker prompt preserves controller-owned media destinations", () =>
     prompt,
     /Do not write, remove, or otherwise change final destinations directly/,
   );
-  assert.match(prompt, /controller owns final selected-set materialization/i);
+  assert.match(
+    prompt,
+    /controller owns capture, whole-set selection, final destination materialization/i,
+  );
   assert.match(prompt, /authorized byte-identical same-path LFS replacement/);
 });
 

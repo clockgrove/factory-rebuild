@@ -35,9 +35,19 @@ interface GitHubCopilotWorkerHandleData {
   logPath: string;
 }
 
+/** Exact SDK 1.0.13 requires Node >=22.12 on Factory's Node >=22 surface. */
+export function requireCopilotRuntime(version = process.versions.node): void {
+  const [major = 0, minor = 0] = version.split(".").map(Number);
+  if (major < 22 || (major === 22 && minor < 12))
+    throw new Error(
+      `GitHub Copilot SDK 1.0.13 requires Node >=22.12.0; current runtime is ${version}. No fallback is available`,
+    );
+}
+
 export interface GitHubCopilotWorkerInput {
   request: HarnessRequest;
   config: GitHubCopilotSdkConfig;
+  providerTurnIdleTimeoutMs?: number;
 }
 
 const copilotAuthenticationEnvironment = [
@@ -127,6 +137,7 @@ export class GitHubCopilotSdkHarness implements AgentHarness {
   }
 
   async start(request: HarnessRequest): Promise<HarnessHandle> {
+    requireCopilotRuntime();
     const identity = request.attemptId ?? randomUUID();
     mkdirSync(this.root, { recursive: true, mode: 0o700 });
     const credentialDirectory = join(this.root, "empty-gh-config");
