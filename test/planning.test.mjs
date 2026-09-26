@@ -266,6 +266,38 @@ test("compiler rejects a Markdown-prefixed citation heading without normalizatio
   });
 });
 
+test("compiler rejects terminal line separators in section and whole-source citations", async () => {
+  await fixture("citation-terminal-lines", async (root) => {
+    const target = createTarget(root, {
+      "docs/plan.md": "# Plan\n\n## Wave 0\nCanonical obligation\n",
+      "docs/plain.txt": "Canonical source without a Markdown heading\n",
+    });
+    const objective = body.replace(
+      "- `docs/plan.md#Wave 0`",
+      "- `docs/plan.md#Wave 0`\n- `docs/plain.txt`",
+    );
+    const terminalLineSeparators = ["\n", "\r", "\r\n", "\u2028", "\u2029"];
+    for (const separator of terminalLineSeparators) {
+      for (const citation of [
+        { path: "OBJECTIVE", heading: `Acceptance${separator}` },
+        { path: "docs/plain.txt", heading: separator },
+      ]) {
+        await assert.rejects(
+          compilePlan(1, objective, target.baseSha, target.checkout, {
+            async generateStructured() {
+              return graph(target.baseSha, citation);
+            },
+            async reviewGraph() {
+              throw new Error("review should not run");
+            },
+          }),
+          /cites missing heading/,
+        );
+      }
+    }
+  });
+});
+
 test("preview shows an undeclared command as blocked before host execution", async () => {
   await fixture("command", async (root) => {
     const target = createTarget(root, {

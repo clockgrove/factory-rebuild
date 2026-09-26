@@ -163,5 +163,6 @@ export function compose(config: FactoryConfig): FactoryApplication {
     github,
     delivery: new RegularDelivery(config.checkout, github),
     contentStore,
+    reportRunStatus: (message) => console.error(message),
   });
 }

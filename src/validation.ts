@@ -280,6 +280,7 @@ export function workItemMaterializationEvidence(args: {
   state: FactoryState;
   item: WorkItem;
   checkout: string;
+  textBudgetPerBoundary?: number;
 }): ResultReviewEvidenceSource[] {
   const { state, item, checkout } = args;
   const current = state.work[item.id];
@@ -319,7 +320,9 @@ export function workItemMaterializationEvidence(args: {
     "rev-parse",
     `${workerResultCommitSha}^{tree}`,
   );
-  const perBoundaryBudget = Math.floor(configuredResultReviewTextBudget() / 2);
+  const perBoundaryBudget =
+    args.textBudgetPerBoundary ??
+    Math.floor(configuredResultReviewTextBudget() / 2);
   const worker = resultChangePacket(
     checkout,
     current.baseSha,
@@ -763,8 +766,16 @@ export function objectiveReviewEvidence(args: {
     resultCommitSha: string;
     integratedCommitSha: string;
   }[] = [];
-  const perItemTextBudget = Math.floor(
-    configuredResultReviewTextBudget() / Math.max(1, state.graph.items.length),
+  const materializationPacketCount = state.graph.items.filter(
+    (item) => state.work[item.id]?.selectedAssetSet,
+  ).length;
+  // Every item contributes one ordinary delta packet. A selected-asset item
+  // adds separate worker and controller-boundary packets to the same budget.
+  const finalReviewPatchPacketCount =
+    state.graph.items.length + materializationPacketCount * 2;
+  const perPatchTextBudget = Math.floor(
+    configuredResultReviewTextBudget() /
+      Math.max(1, finalReviewPatchPacketCount),
   );
   const work = state.graph.items.map((item) => {
     const current = state.work[item.id];
@@ -849,7 +860,7 @@ export function objectiveReviewEvidence(args: {
       checkout,
       current.baseSha,
       current.changeRef,
-      perItemTextBudget,
+      perPatchTextBudget,
     );
     const changePacket = parseResultChangePacket(change);
     const unownedChanges = changePacket.changes
@@ -882,7 +893,12 @@ export function objectiveReviewEvidence(args: {
       }),
     });
     evidence.push(
-      ...workItemMaterializationEvidence({ state, item, checkout }),
+      ...workItemMaterializationEvidence({
+        state,
+        item,
+        checkout,
+        textBudgetPerBoundary: perPatchTextBudget,
+      }),
     );
     return {
       id: item.id,

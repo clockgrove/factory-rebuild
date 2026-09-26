@@ -105,3 +105,21 @@ test("path and named resource conflicts serialize otherwise ready items", () => 
     /cycle/,
   );
 });
+
+test("named resource conflicts use exact whitespace-sensitive identity", () => {
+  const plain = item("plain", [], ["plain.txt"], ["shared"]);
+  const same = item("same", [], ["same.txt"], ["shared"]);
+  const leading = item("leading", [], ["leading.txt"], [" shared"]);
+  const sameLeading = item(
+    "same-leading",
+    [],
+    ["same-leading.txt"],
+    [" shared"],
+  );
+  const trailing = item("trailing", [], ["trailing.txt"], ["shared "]);
+
+  assert.equal(itemsConflict(plain, same), true);
+  assert.equal(itemsConflict(plain, leading), false);
+  assert.equal(itemsConflict(plain, trailing), false);
+  assert.equal(itemsConflict(leading, sameLeading), true);
+});
