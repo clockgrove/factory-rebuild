@@ -2,6 +2,12 @@
 
 This file records public releases of Factory. See [BUILD-STATUS.md](docs/BUILD-STATUS.md) for development acceptance evidence.
 
+## 0.1.18 — 2026-09-25
+
+- Bind the exact source, rights basis, visibility, and lineage parsed from `.factory-assets.json` into the controller-owned capture receipt alongside its declaration digest.
+- Reject partial, forged, edited, cross-set, or unrecognized manifest-provenance receipt fields during state ingress while keeping provider-neutral non-manifest captures non-authoritative for manifest claims.
+- Expose only the bounded controller-verified declaration to Work Item review, preserving generic selected-asset provenance as separately harness-declared evidence.
+
 ## 0.1.17 — 2026-09-25
 
 - Retry classified provider-capacity failures twice for graph, Work Item result, and final Objective review while preserving the selected reviewer model, reasoning, exact prompt, and schema.
