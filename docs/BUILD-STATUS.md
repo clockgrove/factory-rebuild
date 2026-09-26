@@ -137,6 +137,14 @@ advertised Node 22.0.0 compatibility; that default dependency-policy blocker
 remains pending coordinated resolution, without a floor waiver or unapproved
 dependency override here.
 
+A real Node 22.0.0 probe also reproduces a scanner-runtime failure with Factory's
+existing `--no-glob`/`--no-gitignore` argument surface: Secretlint 13's use of
+`util.parseArgs` negative options is rejected before scanning. The identical
+public synthetic file and installed scanner arguments succeed on Node 24.20.0.
+The scanner and argument surface are unchanged from accepted main; this is
+additional evidence for the separate default-floor blocker, not a #55 fix or
+a reason to weaken scanning.
+
 The refreshed local credential-free gate passes 133 tests on Node 24.20.0,
 including fresh empty-cache offline optional-omitted installation, package-root
 scripted harness execution through production validation/delivery/final review,
