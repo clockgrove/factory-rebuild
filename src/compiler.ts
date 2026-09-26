@@ -875,7 +875,7 @@ function objectiveSection(body: string, names: string[]): string {
     const heading = line.match(/^(#{2,3})\s+(.+?)\s*$/);
     return Boolean(
       heading &&
-      names.some((name) => heading[2]!.toLowerCase() === name.toLowerCase()),
+        names.some((name) => heading[2]!.toLowerCase() === name.toLowerCase()),
     );
   });
   if (start < 0) return "";
@@ -1275,7 +1275,11 @@ function semanticFailureField(error: unknown): string {
 }
 
 type GraphReviewRejectionReason =
-  "not-array" | "not-object" | "unknown-source" | "empty" | "quote-not-found";
+  | "not-array"
+  | "not-object"
+  | "unknown-source"
+  | "empty"
+  | "quote-not-found";
 
 interface GraphReviewRejection {
   field: string;
@@ -1523,14 +1527,14 @@ function completeAcceptedDecision(
 ): decision is NonNullable<PlanCandidate["humanDecision"]> {
   return Boolean(
     decision?.outcome === "accept" &&
-    typeof decision.actor === "string" &&
-    decision.actor.trim() &&
-    typeof decision.answer === "string" &&
-    decision.answer.trim() &&
-    typeof decision.reason === "string" &&
-    decision.reason.trim() &&
-    typeof decision.at === "string" &&
-    decision.at.trim(),
+      typeof decision.actor === "string" &&
+      decision.actor.trim() &&
+      typeof decision.answer === "string" &&
+      decision.answer.trim() &&
+      typeof decision.reason === "string" &&
+      decision.reason.trim() &&
+      typeof decision.at === "string" &&
+      decision.at.trim(),
   );
 }
 

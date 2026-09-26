@@ -40,7 +40,10 @@ export interface WorkGraph {
 }
 
 export type ModelInvocationPhase =
-  "compile" | "graph-review" | "result-review" | "objective-review";
+  | "compile"
+  | "graph-review"
+  | "result-review"
+  | "objective-review";
 
 export interface ModelInvocationUsage {
   inputTokens?: number;
