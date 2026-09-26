@@ -11,7 +11,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
 import { Codex } from "@openai/codex-sdk";
-import { CodexPlanningModel } from "../dist/compiler.js";
+import { CodexPlanningModel, graphSchemaForSources } from "../dist/compiler.js";
 import * as configModule from "../dist/config.js";
 import {
   CONTROLLER_CAPABILITIES_DIGEST,
@@ -292,13 +292,23 @@ test("Codex adapter passes phase selections to every planning and review thread"
       ordinal,
       observe: (event) => observations.push(event),
     });
+    const compileSources = [
+      {
+        path: "OBJECTIVE",
+        content: "# Objective\n\n## Acceptance\nRequired",
+      },
+      {
+        path: "AGENTS.md",
+        content: "# Disposable target instructions\n\nFollow the Objective.",
+      },
+    ];
     await model.generateStructured({
       objective: "private-objective-marker",
       baseSha,
-      sources: [{ path: "OBJECTIVE", content: "private-source-marker" }],
+      sources: compileSources,
       controllerCapabilities: installedControllerCapabilities(),
       controllerCapabilitiesDigest: CONTROLLER_CAPABILITIES_DIGEST,
-      schema: { type: "object" },
+      schema: graphSchemaForSources(compileSources),
       invocation: invocation("compile", 0),
     });
     await model.reviewGraph({
@@ -364,6 +374,41 @@ test("Codex adapter passes phase selections to every planning and review thread"
     assert.deepEqual(
       captured[1].outputSchema.properties.findings.items.properties.source,
       { type: "string", enum: ["OBJECTIVE", "docs/plan.md"] },
+    );
+    const compileCitationChoices =
+      captured[0].outputSchema.properties.items.items.properties.citations.items
+        .anyOf;
+    assert.ok(
+      compileCitationChoices.some(
+        (choice) =>
+          choice.properties.path.enum[0] === "OBJECTIVE" &&
+          choice.properties.heading.enum.includes("Acceptance"),
+      ),
+    );
+    assert.ok(
+      compileCitationChoices.some(
+        (choice) =>
+          choice.properties.path.enum[0] === "AGENTS.md" &&
+          choice.properties.heading.enum.includes(
+            "Disposable target instructions",
+          ),
+      ),
+    );
+    assert.equal(
+      compileCitationChoices.some((choice) =>
+        choice.properties.heading.enum.some((heading) =>
+          heading.startsWith("#"),
+        ),
+      ),
+      false,
+    );
+    assert.match(
+      captured[0].prompt,
+      /set path and heading to exactly one pair from this supplied citation JSON list/,
+    );
+    assert.match(
+      captured[0].prompt,
+      /exact bare Markdown heading text without # markers/,
     );
     assert.match(
       captured[1].prompt,

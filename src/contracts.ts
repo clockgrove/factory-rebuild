@@ -108,7 +108,7 @@ export interface ModelInvocationContext {
 export interface PlanningRequest<T> {
   objective: string;
   baseSha: string;
-  sources: { path: string; content: string }[];
+  sources: { path: string; content: string; heading?: string }[];
   controllerCapabilities: ControllerCapabilitiesManifest;
   controllerCapabilitiesDigest: string;
   schema: unknown;

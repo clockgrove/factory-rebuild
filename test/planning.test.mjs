@@ -139,6 +139,133 @@ test("read-only plan uses pinned selected heading despite dirty checkout", async
   });
 });
 
+test("compiler schema binds citations to exact supplied path and bare heading pairs", async () => {
+  await fixture("citation-schema", async (root) => {
+    const target = createTarget(root, {
+      "docs/plan.md": "# Plan\n\n## Wave 0\nCanonical obligation\n",
+      "docs/plain.txt": "Canonical source without a Markdown heading\n",
+    });
+    const objective = body.replace(
+      "- `docs/plan.md#Wave 0`",
+      "- `docs/plan.md#Wave 0`\n- `docs/plain.txt`",
+    );
+    const requests = [];
+    const model = {
+      async generateStructured(request) {
+        requests.push(structuredClone(request));
+        return graph(target.baseSha);
+      },
+      async reviewGraph() {
+        return { findings: [] };
+      },
+    };
+
+    const candidate = await compilePlan(
+      1,
+      objective,
+      target.baseSha,
+      target.checkout,
+      model,
+    );
+    assert.equal(candidate.review.status, "clean");
+    assert.equal(requests.length, 1);
+
+    const choices =
+      requests[0].schema.properties.items.items.properties.citations.items
+        .anyOf;
+    const allows = (path, heading) =>
+      choices.some(
+        (choice) =>
+          choice.properties.path.enum[0] === path &&
+          choice.properties.heading.enum.includes(heading),
+      );
+    assert.ok(allows("OBJECTIVE", "Acceptance"));
+    assert.ok(allows("docs/plan.md", "Wave 0"));
+    assert.equal(
+      allows("docs/plan.md", ""),
+      false,
+      "a selected heading packet must not grant whole-source authority",
+    );
+    assert.ok(allows("docs/plain.txt", ""));
+    assert.equal(allows("docs/plan.md", "Acceptance"), false);
+    assert.equal(
+      choices.some((choice) =>
+        choice.properties.heading.enum.some((heading) =>
+          heading.startsWith("#"),
+        ),
+      ),
+      false,
+    );
+    assert.equal(
+      choices.length,
+      new Set(requests[0].sources.map((source) => source.path)).size,
+      "schema must add one object branch per source path, not per heading",
+    );
+  });
+});
+
+test("compiler rejects a whole-source citation when only one heading was supplied", async () => {
+  await fixture("citation-selected-heading", async (root) => {
+    const target = createTarget(root, {
+      "docs/plan.md":
+        "# Plan\n\n## Wave 0\nCanonical obligation\n\n## Wave 1\nNot supplied\n",
+    });
+    await assert.rejects(
+      compilePlan(1, body, target.baseSha, target.checkout, {
+        async generateStructured() {
+          return graph(target.baseSha, {
+            path: "docs/plan.md",
+            heading: "",
+          });
+        },
+        async reviewGraph() {
+          throw new Error("review should not run");
+        },
+      }),
+      /cites missing heading "" in docs\/plan\.md; expected exact bare heading \["Wave 0"\]/,
+    );
+  });
+});
+
+test("compiler rejects a Markdown-prefixed citation heading without normalization", async () => {
+  await fixture("citation-marker", async (root) => {
+    const target = createTarget(root, {
+      "docs/plan.md": "# Plan\n\n## Wave 0\nCanonical obligation\n",
+    });
+    const observations = [];
+    await assert.rejects(
+      compilePlan(
+        1,
+        body,
+        target.baseSha,
+        target.checkout,
+        {
+          async generateStructured() {
+            return graph(target.baseSha, {
+              path: "OBJECTIVE",
+              heading: "## Acceptance",
+            });
+          },
+          async reviewGraph() {
+            throw new Error("review should not run");
+          },
+        },
+        undefined,
+        (event) => observations.push(event),
+      ),
+      /cites missing heading ## Acceptance in OBJECTIVE; expected exact bare heading .*"Acceptance"/,
+    );
+    assert.ok(
+      observations.some(
+        (event) =>
+          event.type === "response-invalid" &&
+          event.failureClass === "semantic-validation" &&
+          event.failureField === "one",
+      ),
+    );
+  });
+});
+
 test("preview shows an undeclared command as blocked before host execution", async () => {
   await fixture("command", async (root) => {
     const target = createTarget(root, {

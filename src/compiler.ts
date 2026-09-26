@@ -199,6 +199,75 @@ export const graphSchema = {
   additionalProperties: false,
 };
 
+interface CitationChoice {
+  path: string;
+  heading: string;
+}
+
+function markdownHeadings(content: string): string[] {
+  return content.split("\n").flatMap((line) => {
+    const heading = line.match(/^#{1,6}\s+(.+?)\s*#*\s*$/)?.[1];
+    return heading ? [heading] : [];
+  });
+}
+
+function citationChoices(
+  sources: { path: string; content: string; heading?: string }[],
+): CitationChoice[] {
+  const choices: CitationChoice[] = [];
+  const identities = new Set<string>();
+  for (const source of sources) {
+    const headings = [
+      ...(source.heading === undefined ? [""] : []),
+      ...markdownHeadings(source.content),
+    ];
+    for (const heading of headings) {
+      const identity = JSON.stringify([source.path, heading]);
+      if (identities.has(identity)) continue;
+      identities.add(identity);
+      choices.push({ path: source.path, heading });
+    }
+  }
+  return choices;
+}
+
+export function graphSchemaForSources(
+  sources: { path: string; content: string; heading?: string }[],
+): unknown {
+  const schema = structuredClone(graphSchema) as {
+    properties: {
+      items: {
+        items: {
+          properties: { citations: { items: unknown } };
+        };
+      };
+    };
+  };
+  const headingsByPath = new Map<string, string[]>();
+  for (const { path, heading } of citationChoices(sources)) {
+    const headings = headingsByPath.get(path) ?? [];
+    headings.push(heading);
+    headingsByPath.set(path, headings);
+  }
+  schema.properties.items.items.properties.citations.items = {
+    anyOf: [...headingsByPath].map(([path, headings]) => ({
+      type: "object",
+      properties: {
+        path: { type: "string", enum: [path] },
+        heading: {
+          type: "string",
+          enum: headings,
+          description:
+            "Exact bare Markdown heading text without # markers, or the empty string for the whole source.",
+        },
+      },
+      required: ["path", "heading"],
+      additionalProperties: false,
+    })),
+  };
+  return schema;
+}
+
 export class CodexPlanningModel implements PlanningModel {
   private readonly reviewCapacityRetryDelaysMs: readonly number[];
   private readonly wait: (milliseconds: number) => Promise<void>;
@@ -471,7 +540,8 @@ export class CodexPlanningModel implements PlanningModel {
   }
 
   async generateStructured<T>(request: PlanningRequest<T>): Promise<T> {
-    const prompt = `Compile this human Objective into the smallest complete dependency-aware Work Item graph. Use parallel lanes only when ownership and resources allow them. Return the requested JSON only. Use exact supplied base SHA and Objective number. Cite only supplied source paths. Give each item explicit non-goals. Choose observable acceptance and owned paths. For every validation command, set provenance to base-observed or source-declared and name its exact source path. A source-declared command must be an exact command line in a supplied source (OBJECTIVE or a pinned source). A base-observed command must identify a tracked file in the exact base containing that command as an exact line, or a package.json script invoked by npm test/npm run NAME/pnpm test/pnpm check/pnpm run NAME. The exact source-declared command pnpm install --frozen-lockfile --ignore-scripts may precede pnpm checks in a fresh validation worktree when supplied; plain install is unsupported. Do not invent commands or use a vague source. For each source asset, bind its path, role, media type, visibility, and kind: repository for a pinned checkout path, local for an explicitly approved absolute private file, or github-attachment for a recognized URL literally present in the Objective. Use an explicitly declared media type when available, otherwise application/octet-stream; never infer format from an extension. List expected output roles for media work; use empty arrays for ordinary work. Set minimumAssetSets from the Objective candidate count, or 1 for unspecified media and 0 for ordinary work. List requiredLfsRoles only when a supplied source requires them; the target repository .gitattributes is authoritative. The supplied Factory controller capabilities are immutable supervisor guarantees enforced outside target Work Items and target Final commands. Do not create a target Work Item or invent target command authority solely to reimplement an Objective obligation that an exact supplied guarantee covers. Do not use a guarantee for an obligation it does not cover. Do not add deployment, paid services, providers, recovery, or later scope.\n\nObjective:\n${request.objective}\n\nBase: ${request.baseSha}\n\nFactory controller capabilities digest: ${request.controllerCapabilitiesDigest}\nFactory controller capabilities:\n${JSON.stringify(request.controllerCapabilities)}\n\nSources:\n${request.sources.map((s) => `--- ${s.path} ---\n${s.content}`).join("\n")}`;
+    const exactCitationChoices = citationChoices(request.sources);
+    const prompt = `Compile this human Objective into the smallest complete dependency-aware Work Item graph. Use parallel lanes only when ownership and resources allow them. Return the requested JSON only. Use exact supplied base SHA and Objective number. For every citation, set path and heading to exactly one pair from this supplied citation JSON list: ${JSON.stringify(exactCitationChoices)}. A non-empty heading is the exact bare Markdown heading text without # markers; use the empty string to cite the whole source. Do not add a Markdown marker, section suffix, separator, or explanation to either value. Give each item explicit non-goals. Choose observable acceptance and owned paths. For every validation command, set provenance to base-observed or source-declared and name its exact source path. A source-declared command must be an exact command line in a supplied source (OBJECTIVE or a pinned source). A base-observed command must identify a tracked file in the exact base containing that command as an exact line, or a package.json script invoked by npm test/npm run NAME/pnpm test/pnpm check/pnpm run NAME. The exact source-declared command pnpm install --frozen-lockfile --ignore-scripts may precede pnpm checks in a fresh validation worktree when supplied; plain install is unsupported. Do not invent commands or use a vague source. For each source asset, bind its path, role, media type, visibility, and kind: repository for a pinned checkout path, local for an explicitly approved absolute private file, or github-attachment for a recognized URL literally present in the Objective. Use an explicitly declared media type when available, otherwise application/octet-stream; never infer format from an extension. List expected output roles for media work; use empty arrays for ordinary work. Set minimumAssetSets from the Objective candidate count, or 1 for unspecified media and 0 for ordinary work. List requiredLfsRoles only when a supplied source requires them; the target repository .gitattributes is authoritative. The supplied Factory controller capabilities are immutable supervisor guarantees enforced outside target Work Items and target Final commands. Do not create a target Work Item or invent target command authority solely to reimplement an Objective obligation that an exact supplied guarantee covers. Do not use a guarantee for an obligation it does not cover. Do not add deployment, paid services, providers, recovery, or later scope.\n\nObjective:\n${request.objective}\n\nBase: ${request.baseSha}\n\nFactory controller capabilities digest: ${request.controllerCapabilitiesDigest}\nFactory controller capabilities:\n${JSON.stringify(request.controllerCapabilities)}\n\nSources:\n${request.sources.map((s) => `--- ${s.path} ---\n${s.content}`).join("\n")}`;
     return this.runStructured<T>({
       selection: this.planner,
       prompt,
@@ -1039,6 +1109,35 @@ export function planningSources(
   return sources;
 }
 
+const MAX_CITATION_DIAGNOSTIC_VALUE_LENGTH = 120;
+const MAX_CITATION_DIAGNOSTIC_HEADINGS = 8;
+
+function boundedDiagnosticValue(value: string): string {
+  const bounded =
+    value.length <= MAX_CITATION_DIAGNOSTIC_VALUE_LENGTH
+      ? value
+      : `${value.slice(0, MAX_CITATION_DIAGNOSTIC_VALUE_LENGTH - 3)}...`;
+  return JSON.stringify(bounded);
+}
+
+function boundedDiagnosticText(value: string): string {
+  const singleLine = value.replace(/\s+/g, " ").trim();
+  return singleLine.length <= MAX_CITATION_DIAGNOSTIC_VALUE_LENGTH
+    ? singleLine
+    : `${singleLine.slice(0, MAX_CITATION_DIAGNOSTIC_VALUE_LENGTH - 3)}...`;
+}
+
+function boundedAllowedHeadings(sources: PlanningSource[]): string {
+  const headings = [
+    ...new Set(citationChoices(sources).map((choice) => choice.heading)),
+  ];
+  const shown = headings
+    .slice(0, MAX_CITATION_DIAGNOSTIC_HEADINGS)
+    .map(boundedDiagnosticValue);
+  const omitted = headings.length - shown.length;
+  return `[${shown.join(", ")}${omitted > 0 ? `, ... ${omitted} more` : ""}]`;
+}
+
 function validateCitations(graph: WorkGraph, sources: PlanningSource[]): void {
   for (const item of graph.items) {
     for (const citation of item.citations) {
@@ -1049,17 +1148,12 @@ function validateCitations(graph: WorkGraph, sources: PlanningSource[]): void {
         throw new Error(
           `Work Item ${item.id} cites unavailable source ${citation.path}`,
         );
+      const heading = citation.heading ?? "";
       if (
-        citation.heading &&
-        !matching.some((source) =>
-          source.content.split("\n").some((line) => {
-            const heading = line.match(/^#{1,6}\s+(.+?)\s*#*\s*$/)?.[1];
-            return heading === citation.heading;
-          }),
-        )
+        !citationChoices(matching).some((choice) => choice.heading === heading)
       )
         throw new Error(
-          `Work Item ${item.id} cites missing heading ${citation.heading} in ${citation.path}`,
+          `Work Item ${item.id} cites missing heading ${citation.heading === undefined ? "<missing>" : citation.heading === "" ? '""' : boundedDiagnosticText(citation.heading)} in ${boundedDiagnosticText(citation.path)}; expected exact bare heading ${boundedAllowedHeadings(matching)}`,
         );
     }
   }
@@ -1085,7 +1179,7 @@ export async function compileObjective(
       sources,
       controllerCapabilities: installedControllerCapabilities(),
       controllerCapabilitiesDigest: CONTROLLER_CAPABILITIES_DIGEST,
-      schema: graphSchema,
+      schema: graphSchemaForSources(sources),
       invocation,
     })
     .catch(planningFailure);
