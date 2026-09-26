@@ -19,11 +19,10 @@ import { itemsConflict } from "./scheduler.js";
 import { linearDeliveryUnits } from "./delivery/plan.js";
 import {
   readAgentTimeline,
-  readDiagnostics,
   readWorkerOutput,
   redactDiagnosticDetail,
   statusDocument,
-  summarizeModelInvocations,
+  summarizeDiagnosticUsage,
 } from "./diagnostics.js";
 
 function option(args: string[], name: string): string | undefined {
@@ -285,8 +284,12 @@ async function main(): Promise<void> {
     if (args.includes("--summary")) {
       console.log(
         JSON.stringify(
-          summarizeModelInvocations(
-            readDiagnostics(config.repository, objective),
+          summarizeDiagnosticUsage(
+            readAgentTimeline(
+              config.repository,
+              objective,
+              readState(config.repository, objective),
+            ),
           ),
         ),
       );

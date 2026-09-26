@@ -54,6 +54,20 @@ export interface ModelInvocationUsage {
   totalTokens?: number;
 }
 
+/** Cumulative provider counters for one worker invocation/provider attempt.
+ * This is optional telemetry, never execution or recovery authority. */
+export interface WorkerUsageObservation {
+  type: "started" | "progress" | "completed" | "failed";
+  invocationId: string;
+  providerAttempt: number;
+  role: "worker";
+  phase: "implementation";
+  provider?: string;
+  model?: string;
+  reasoningEffort?: string;
+  usage?: ModelInvocationUsage;
+}
+
 export interface ModelInvocationObservation {
   type:
     | "started"

@@ -16,7 +16,8 @@ import {
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import type { HarnessRequest } from "../contracts.js";
+import type { HarnessRequest, WorkerUsageObservation } from "../contracts.js";
+import { codexTokenUsage } from "../usage.js";
 import type { ThreadEvent } from "@openai/codex-sdk";
 import { parseProducedAssetSets } from "../media.js";
 import type { CodexModelSelection } from "../config.js";
@@ -171,18 +172,50 @@ export async function runCodexWorker(
       : "";
   const prompt = `Implement this Work Item in the current repository checkout. Change only the owned paths. Do not commit, push, create issues, create pull requests, or access GitHub credentials. Stop and report if acceptance is impossible.\n\nTitle: ${request.item.title}\nGoal: ${request.item.goal}\nAcceptance:\n${request.item.acceptance.join("\n")}\nNon-goals:\n${request.item.nonGoals.join("\n")}\nOwned paths:\n${request.item.ownedPaths.join("\n")}\nBrief:\n${request.item.brief}${mediaInstructions}${inputInstructions}`;
   let turn: ProviderTurnGuard | undefined;
+  let usage: unknown = null;
+  let progressLost = false;
+  const observe = (event: unknown): void => {
+    if (progressLost) return;
+    try {
+      privateProgress(progressPath, event);
+    } catch (error) {
+      progressLost = true;
+      process.stderr.write(
+        `Factory worker progress unavailable: ${error instanceof Error ? error.message : String(error)}\n`,
+      );
+    }
+  };
+  const observeUsage = (type: WorkerUsageObservation["type"]): void => {
+    const workerUsage: WorkerUsageObservation = {
+      type,
+      invocationId: request.attemptId ?? "",
+      providerAttempt: 1,
+      role: "worker",
+      phase: "implementation",
+      provider: "codex",
+      model: model.model,
+      reasoningEffort: model.reasoningEffort,
+      usage: codexTokenUsage(usage),
+    };
+    observe({
+      eventId: randomUUID(),
+      at: new Date().toISOString(),
+      attemptId: request.attemptId ?? "",
+      operation: "worker-usage",
+      workerUsage,
+    });
+  };
   try {
     turn = new ProviderTurnGuard(
       providerTurnIdleTimeoutMs ?? DEFAULT_PROVIDER_TURN_IDLE_TIMEOUT_MS,
     );
+    observeUsage("started");
     const streamed = await turn.race(
       thread.runStreamed(prompt, { signal: turn.signal }),
     );
     let finalResponse = "";
-    let usage: unknown = null;
     let turnCompleted = false;
     const commandOffsets = new Map<string, number>();
-    let progressLost = false;
     const events = streamed.events[Symbol.asyncIterator]();
     let closeStarted = false;
     try {
@@ -197,15 +230,7 @@ export async function runCodexWorker(
           redactionValues,
           commandOffsets,
         );
-        if (!progressLost)
-          try {
-            privateProgress(progressPath, observation);
-          } catch (error) {
-            progressLost = true;
-            process.stderr.write(
-              `Factory worker progress unavailable: ${error instanceof Error ? error.message : String(error)}\n`,
-            );
-          }
+        observe(observation);
         if (
           (event.type === "item.started" ||
             event.type === "item.updated" ||
@@ -216,6 +241,7 @@ export async function runCodexWorker(
         if (event.type === "turn.completed") {
           turnCompleted = true;
           usage = event.usage;
+          observeUsage("progress");
         }
         if (event.type === "turn.failed") throw new Error(event.error.message);
         if (event.type === "error") throw new Error(event.message);
@@ -278,6 +304,7 @@ export async function runCodexWorker(
         usage,
       },
     });
+    observeUsage("completed");
     return true;
   } catch (caught) {
     const error = caught;
@@ -285,6 +312,7 @@ export async function runCodexWorker(
       state: "failed",
       error: error instanceof Error ? error.message : String(error),
     });
+    observeUsage("failed");
     return false;
   } finally {
     turn?.finish();

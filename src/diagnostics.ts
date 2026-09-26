@@ -15,6 +15,7 @@ import { stateRoot } from "./config.js";
 import type { FactoryState, WorkState } from "./state.js";
 import { itemsConflict } from "./scheduler.js";
 import { linearDeliveryUnits } from "./delivery/plan.js";
+import { normalizeTokenUsage, tokenCategories } from "./usage.js";
 import type {
   ModelInvocationObservation,
   ModelInvocationPhase,
@@ -304,6 +305,7 @@ export interface ModelInvocationAggregate {
 }
 
 export interface ModelInvocationSummary {
+  scope: "planning-and-review-model-invocations";
   objective: ModelInvocationAggregate;
   byPhase: Partial<Record<ModelInvocationPhase, ModelInvocationAggregate>>;
   byScope: Record<string, ModelInvocationAggregate>;
@@ -442,6 +444,7 @@ export function summarizeModelInvocations(
     "objective-review",
   ];
   return {
+    scope: "planning-and-review-model-invocations",
     objective: aggregate(all),
     byPhase: Object.fromEntries(
       phases.flatMap((phase) => {
@@ -455,6 +458,182 @@ export function summarizeModelInvocations(
         aggregate(all.filter((entry) => entry.scopeId === scopeId)),
       ]),
     ),
+  };
+}
+
+/** Summary-only telemetry: never read evidence or reconstruct execution state. */
+export function summarizeDiagnosticUsage(events: Record<string, unknown>[]) {
+  const model = summarizeModelInvocations(events);
+  const workerEvents: ModelEvent[] = [];
+  const observedAttempts = new Set<string>();
+  const knownAttempts = new Set<string>();
+  const identities = new Map<
+    string,
+    {
+      attemptId: string;
+      invocationId: string;
+      providerAttempt: number;
+      runId?: string;
+      itemId?: string;
+    }
+  >();
+  for (const event of events) {
+    if (event.operation === "harness" && typeof event.attemptId === "string")
+      knownAttempts.add(event.attemptId);
+    if (
+      event.operation !== "worker-usage" ||
+      typeof event.attemptId !== "string"
+    )
+      continue;
+    const value = event.workerUsage;
+    if (!value || typeof value !== "object" || Array.isArray(value)) continue;
+    const observation = value as Record<string, unknown>;
+    if (
+      observation.role !== "worker" ||
+      observation.phase !== "implementation" ||
+      typeof observation.invocationId !== "string" ||
+      !observation.invocationId ||
+      typeof observation.providerAttempt !== "number" ||
+      !Number.isSafeInteger(observation.providerAttempt) ||
+      observation.providerAttempt < 1 ||
+      !["started", "progress", "completed", "failed"].includes(
+        String(observation.type),
+      )
+    )
+      continue;
+    const key = JSON.stringify([
+      event.attemptId,
+      observation.invocationId,
+      observation.providerAttempt,
+    ]);
+    const usage = normalizeTokenUsage(observation.usage);
+    observedAttempts.add(event.attemptId);
+    identities.set(key, {
+      attemptId: event.attemptId,
+      invocationId: observation.invocationId,
+      providerAttempt: observation.providerAttempt,
+      ...(typeof event.runId === "string" ? { runId: event.runId } : {}),
+      ...(typeof event.workItemId === "string"
+        ? { itemId: event.workItemId }
+        : {}),
+    });
+    workerEvents.push({
+      at: String(event.at ?? ""),
+      operation: "model-invocation",
+      metadata: {
+        invocationId: key,
+        providerAttempt: 1,
+        phase: "compile",
+        scopeId: key,
+        observationType: String(observation.type),
+        usageAvailable: Object.keys(usage).length > 0,
+        ...usage,
+      },
+    });
+  }
+  // Reuse only the observational counter aggregation, not model phase semantics.
+  const workers = summarizeModelInvocations(workerEvents);
+  const unobservedAttemptCount = [...knownAttempts].filter(
+    (id) => !observedAttempts.has(id),
+  ).length;
+  const combine = (
+    left: ModelInvocationAggregate,
+    right: ModelInvocationAggregate,
+  ): ModelInvocationAggregate => {
+    const tokenTotals: ModelInvocationUsage = {};
+    const tokenAvailability: Partial<
+      Record<keyof ModelInvocationUsage, number>
+    > = {};
+    for (const key of tokenCategories) {
+      if (
+        left.tokenTotals[key] !== undefined ||
+        right.tokenTotals[key] !== undefined
+      )
+        tokenTotals[key] =
+          (left.tokenTotals[key] ?? 0) + (right.tokenTotals[key] ?? 0);
+      if (
+        left.tokenAvailability[key] !== undefined ||
+        right.tokenAvailability[key] !== undefined
+      )
+        tokenAvailability[key] =
+          (left.tokenAvailability[key] ?? 0) +
+          (right.tokenAvailability[key] ?? 0);
+    }
+    const numerator =
+      (left.cacheReadRatio?.numeratorCachedInputTokens ?? 0) +
+      (right.cacheReadRatio?.numeratorCachedInputTokens ?? 0);
+    const denominator =
+      (left.cacheReadRatio?.denominatorInputTokens ?? 0) +
+      (right.cacheReadRatio?.denominatorInputTokens ?? 0);
+    return {
+      invocationCount: left.invocationCount + right.invocationCount,
+      completedCount: left.completedCount + right.completedCount,
+      failedCount: left.failedCount + right.failedCount,
+      activeCount: left.activeCount + right.activeCount,
+      usageAvailableCount: left.usageAvailableCount + right.usageAvailableCount,
+      usageUnavailableCount:
+        left.usageUnavailableCount + right.usageUnavailableCount,
+      tokenTotals,
+      tokenAvailability,
+      cacheReadRatio:
+        denominator > 0
+          ? {
+              numeratorCachedInputTokens: numerator,
+              denominatorInputTokens: denominator,
+              value: numerator / denominator,
+            }
+          : null,
+    };
+  };
+  const coverage = (aggregate: ModelInvocationAggregate, unobserved = 0) => ({
+    unobservedAttemptCount: unobserved,
+    byCategory: Object.fromEntries(
+      tokenCategories.map((key) => {
+        const supplied = aggregate.tokenAvailability[key] ?? 0;
+        const terminal = aggregate.completedCount + aggregate.failedCount;
+        return [
+          key,
+          supplied === 0
+            ? "unavailable"
+            : supplied === terminal &&
+                aggregate.activeCount === 0 &&
+                unobserved === 0
+              ? "available"
+              : "partial",
+        ];
+      }),
+    ),
+  });
+  const combined = combine(model.objective, workers.objective);
+  return {
+    ...model,
+    modelUsage: {
+      scope: model.scope,
+      ...model.objective,
+      coverage: coverage(model.objective),
+    },
+    workerUsage: {
+      scope: "worker-implementation-invocations",
+      role: "worker",
+      phase: "implementation",
+      ...workers.objective,
+      coverage: coverage(workers.objective, unobservedAttemptCount),
+      byInvocation: Object.fromEntries(
+        Object.entries(workers.byScope).map(([key, aggregate]) => [
+          key,
+          {
+            ...identities.get(key),
+            ...aggregate,
+            coverage: coverage(aggregate),
+          },
+        ]),
+      ),
+    },
+    combinedUsage: {
+      scope: "observed-model-and-worker-invocations",
+      ...combined,
+      coverage: coverage(combined, unobservedAttemptCount),
+    },
   };
 }
 
@@ -543,16 +722,17 @@ export function readAgentTimeline(
       /^[0-9a-f-]{36}\.progress\.ndjson$/.test(name),
     )) {
       const path = join(root, name);
+      const attemptId = name.slice(0, 36);
+      if (!itemByAttempt.has(attemptId)) continue;
       for (const line of completeLines(readPrivateFile(path))) {
         const event = JSON.parse(line) as Record<string, unknown>;
-        const attemptId = name.slice(0, 36);
-        if (!itemByAttempt.has(attemptId)) continue;
         events.push({
+          ...event,
           repository,
           objective,
           runId: runByAttempt.get(attemptId),
           workItemId: itemByAttempt.get(attemptId),
-          ...event,
+          attemptId,
         });
       }
     }
