@@ -19,6 +19,7 @@ import { itemsConflict } from "./scheduler.js";
 import { linearDeliveryUnits } from "./delivery/plan.js";
 import {
   readAgentTimeline,
+  readUsageSummaryEvents,
   readWorkerOutput,
   redactDiagnosticDetail,
   statusDocument,
@@ -285,7 +286,7 @@ async function main(): Promise<void> {
       console.log(
         JSON.stringify(
           summarizeDiagnosticUsage(
-            readAgentTimeline(
+            readUsageSummaryEvents(
               config.repository,
               objective,
               readState(config.repository, objective),

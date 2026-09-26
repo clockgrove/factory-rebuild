@@ -160,7 +160,22 @@ Issue #111, the preserved fresh installed v0.1.20 result-review packet, and the 
 
 The current public issues, source contracts and fresh public v0.1.21 gate/postmortem supplied these changes; no additional archived source, tests, operational journal or private adopter requirements were inspected or copied. Exact resource-name guidance preserves whitespace-sensitive scheduler identities. Resume messages follow the existing state branch rather than adding a second lifecycle read. Final review shares its existing text budget across ordinary and materialization packets without weakening truncated-evidence rejection. The Codex citation adapter uses bounded integer choices mapped back to exact canonical source/heading pairs; strict semantic validation remains authoritative.
 
-Media brief guidance and actual worker packet regressions preserve accepted requirements, immutable-byte obligations, ordinary owned code and staging declarations while excluding controller operations. Optional provider-neutral worker usage observations normalize supplied counters at the adapter seam and feed the existing private observational progress stream. Usage summaries label scope, cumulative deduplication, supplied-category coverage and matched cache denominators; they do not parse arbitrary evidence, infer charges or reconstruct execution state. The startup correction records the observation before guarded provider stream creation, without changing timeout or result authority. Memory scaling from retaining unrelated progress transcripts remains the queued leaf #127. These source acceptances are not new installed-artifact or private-adopter qualification.
+Media brief guidance and actual worker packet regressions preserve accepted requirements, immutable-byte obligations, ordinary owned code and staging declarations while excluding controller operations. Optional provider-neutral worker usage observations normalize supplied counters at the adapter seam and feed the existing private observational progress stream. Usage summaries label scope, cumulative deduplication, supplied-category coverage and matched cache denominators; they do not parse arbitrary evidence, infer charges or reconstruct execution state. The startup correction records the observation before guarded provider stream creation, without changing timeout or result authority. These source acceptances are not new installed-artifact or private-adopter qualification.
+
+## Summary transcript retention (#127)
+
+Issue #127 and the current public diagnostic reader, correlation and usage
+aggregation contracts supplied this focused leaf. The summary-only reader parses
+private NDJSON incrementally, validates every complete record and discards
+unrelated transcript fields before retention or sorting. It preserves restrictive
+regular-file/no-follow checks, ignores the final unterminated record, and retains
+the existing controller and snapshot correlation precedence. Ordinary timeline,
+follow, logs and usage aggregation remain unchanged. Memory still depends on the
+largest current record, selected usage observations and correlation identities;
+this is not a fixed memory cap or a streaming JSON-field parser. Synthetic public
+transcript parity and isolated retained-heap probes demonstrate the difference
+without claiming an observed OOM, lifecycle authority or live provider proof.
+No archived or private material, provider calls, new limits or journals were used.
 
 ## Default Node 22.0 scanner compatibility (#129)
 
