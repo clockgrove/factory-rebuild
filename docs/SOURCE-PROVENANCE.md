@@ -16,6 +16,12 @@ already-settled cleanup ordering. No archived source, provider credentials,
 payload diagnostics, live target or new event/byte policy was inspected or added.
 The separately accepted #55 source/artifact is not edited or requalified here.
 
+The final normal merge retains accepted #127 streaming and #121 preflight source,
+tests and documentation. A single provenance conflict kept both issue records;
+the #133 guard, focused tests, fixture and dependency identities are unchanged.
+The refreshed full gate and actual Node22 affected checks cover those accepted
+changes together without copying historical payloads or invoking providers.
+
 ## Interrupted regular-delivery contract (#121)
 
 The public #121 reproduction and current clean regular runner supplied this
