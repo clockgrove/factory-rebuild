@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   mkdirSync,
   mkdtempSync,
@@ -460,6 +461,19 @@ test("Codex adapter passes phase selections to every planning and review thread"
     );
     assert.match(captured[1].prompt, /return exactly \{"findings":\[\]\}/);
     assert.match(captured[0].prompt, /immutable supervisor guarantees/);
+    assert.match(
+      captured[0].prompt,
+      /candidate staging, manifest declaration, and completion boundary/,
+    );
+    assert.match(
+      captured[0].prompt,
+      /immutable bytes or candidate variation only when required/,
+    );
+    assert.match(
+      captured[0].prompt,
+      /Do not instruct media workers to run installed Factory CLI operations/,
+    );
+    assert.match(captured[0].prompt, /do not infer a copy-only task/);
     assert.match(
       captured[0].prompt,
       new RegExp(CONTROLLER_CAPABILITIES_DIGEST),
@@ -1414,6 +1428,257 @@ test("Codex harness private request carries selection and turn timeout", () => {
     reasoningEffort: "xhigh",
   });
   assert.equal(input.providerTurnIdleTimeoutMs, 1234);
+});
+
+test("actual worker packets preserve media requirements and isolate controller operations", async () => {
+  const original = Codex.prototype.startThread;
+  const root = mkdtempSync(join(tmpdir(), "factory-worker-packets-"));
+  const bytes = Buffer.from("immutable repository source\n");
+  const ref = {
+    digest: createHash("sha256").update(bytes).digest("hex"),
+    bytes: bytes.length,
+    mediaType: "image/png",
+  };
+  const scenarios = [
+    {
+      id: "same-path",
+      roles: ["image"],
+      count: 1,
+      owned: ["assets/source.png"],
+      sourcePath: "assets/source.png",
+      acceptance: [
+        "Copy assets/source.png byte-for-byte into staging for the same destination.",
+      ],
+      brief:
+        "Using installed Factory CLI, preserve the exact source bytes. Report any controller-operation conflict.",
+    },
+    {
+      id: "multi-role",
+      roles: ["image", "metadata"],
+      count: 2,
+      owned: ["assets/result.png", "assets/result.json", "consumer.ts"],
+      sourcePath: ".factory-inputs/source-0",
+      acceptance: [
+        "Stage two complete sets with source-required visual variation and update consumer.ts.",
+      ],
+      brief:
+        "Use the read-only source to create the two requested variants, declare provenance and any authoritative metadata, and update consumer.ts.",
+    },
+    {
+      id: "ordinary",
+      roles: [],
+      count: 0,
+      owned: ["consumer.ts"],
+      acceptance: ["consumer.ts exports the requested value."],
+      brief:
+        "Update consumer.ts using the exact source-declared command npm test.",
+    },
+  ];
+  let scenario;
+  let captured;
+  let worktree;
+  Codex.prototype.startThread = function (options) {
+    assert.equal(options.workingDirectory, worktree);
+    assert.equal(options.networkAccessEnabled, false);
+    return {
+      id: `packet-${scenario.id}`,
+      async runStreamed(prompt) {
+        captured = prompt;
+        async function* events() {
+          if (scenario.roles.length) {
+            const sets = Array.from({ length: scenario.count }, (_, index) => ({
+              id: `candidate-${index}`,
+              members: scenario.roles.map((role, roleIndex) => {
+                const path = `.factory-media/candidate-${index}/${role}`;
+                mkdirSync(join(worktree, `.factory-media/candidate-${index}`), {
+                  recursive: true,
+                });
+                writeFileSync(
+                  join(worktree, path),
+                  scenario.id === "same-path"
+                    ? bytes
+                    : `${role} variant ${index}\n`,
+                );
+                return {
+                  role,
+                  path,
+                  mediaType:
+                    role === "image" ? "image/png" : "application/json",
+                  destination: scenario.owned[roleIndex],
+                };
+              }),
+              provenance: {
+                source: scenario.sourcePath,
+                rights: "test fixture",
+                visibility: "repository",
+                lineage: [scenario.sourcePath],
+              },
+            }));
+            writeFileSync(
+              join(worktree, ".factory-assets.json"),
+              JSON.stringify({ sets }),
+            );
+          }
+          yield { type: "turn.completed", usage: null };
+        }
+        return { events: events() };
+      },
+    };
+  };
+  try {
+    for (scenario of scenarios) {
+      worktree = join(root, scenario.id);
+      mkdirSync(worktree);
+      const sourceAssets = scenario.roles.length
+        ? [
+            {
+              binding: {
+                kind: scenario.id === "same-path" ? "repository" : "local",
+                path:
+                  scenario.id === "same-path"
+                    ? "assets/source.png"
+                    : "/approved/source.png",
+                role: "image",
+                mediaType: ref.mediaType,
+                visibility: "repository",
+              },
+              ref,
+              ...(scenario.id === "multi-role"
+                ? { path: join(worktree, scenario.sourcePath) }
+                : {}),
+            },
+          ]
+        : [];
+      if (scenario.sourcePath) {
+        mkdirSync(join(worktree, scenario.sourcePath, ".."), {
+          recursive: true,
+        });
+        writeFileSync(join(worktree, scenario.sourcePath), bytes);
+      }
+      const item = {
+        id: scenario.id,
+        title: scenario.id,
+        goal: "Implement accepted source requirements",
+        acceptance: scenario.acceptance,
+        nonGoals: ["No deployment"],
+        citations: [],
+        dependencies: [],
+        ownedPaths: scenario.owned,
+        resources: ["exact scheduling identity"],
+        validation: [],
+        brief: scenario.brief,
+        sourceAssets: sourceAssets.map((source) => source.binding),
+        expectedOutputRoles: scenario.roles,
+        minimumAssetSets: scenario.count,
+        requiredLfsRoles: scenario.id === "same-path" ? ["image"] : [],
+      };
+      const inputPath = join(root, `${scenario.id}.request.json`);
+      const resultPath = join(root, `${scenario.id}.result.json`);
+      writeFileSync(
+        inputPath,
+        JSON.stringify({
+          request: { item, worktree, sourceAssets },
+          network: "off",
+          model: { model: "worker-choice", reasoningEffort: "medium" },
+        }),
+      );
+      assert.equal(await runCodexWorker(inputPath, resultPath), true);
+      assert.equal(
+        JSON.parse(readFileSync(resultPath, "utf8")).state,
+        "complete",
+      );
+      assert.ok(captured.includes(`Brief:\n${item.brief}`));
+      assert.ok(
+        captured.includes(`Acceptance:\n${item.acceptance.join("\n")}`),
+      );
+      assert.ok(
+        captured.includes(`Owned paths:\n${item.ownedPaths.join("\n")}`),
+      );
+      if (!scenario.roles.length) {
+        assert.equal(
+          captured,
+          `Implement this Work Item in the current repository checkout. Change only the owned paths. Do not commit, push, create issues, create pull requests, or access GitHub credentials. Stop and report if acceptance is impossible.\n\nTitle: ${item.title}\nGoal: ${item.goal}\nAcceptance:\n${item.acceptance.join("\n")}\nNon-goals:\n${item.nonGoals.join("\n")}\nOwned paths:\n${item.ownedPaths.join("\n")}\nBrief:\n${item.brief}`,
+        );
+        continue;
+      }
+      assert.ok(
+        captured.includes(
+          `Produce at least ${scenario.count} complete candidate AssetSets.`,
+        ),
+      );
+      assert.ok(
+        captured.includes(`Source bindings: ${JSON.stringify(sourceAssets)}`),
+      );
+      assert.ok(
+        captured.includes(
+          `Expected output roles: ${scenario.roles.join(", ")}`,
+        ),
+      );
+      const manifest = JSON.parse(
+        captured.match(
+          /manifest shape[^]*?: (\{"sets":.*?\})\. Include every expected role/,
+        )[1],
+      );
+      assert.deepEqual(Object.keys(manifest.sets[0].members[0]), [
+        "role",
+        "path",
+        "mediaType",
+        "destination",
+      ]);
+      assert.deepEqual(Object.keys(manifest.sets[0].provenance), [
+        "source",
+        "rights",
+        "visibility",
+        "lineage",
+      ]);
+      assert.match(
+        captured,
+        /preserve source bytes exactly when byte identity is required/,
+      );
+      assert.doesNotMatch(captured, /AssetSets with different content/);
+      assert.match(
+        captured,
+        /Do not write, remove, or otherwise change final destinations directly/,
+      );
+      assert.match(
+        captured,
+        /controller owns capture, whole-set selection, final destination materialization/,
+      );
+      assert.match(captured, /publication, and Objective lifecycle/);
+      assert.match(
+        captured,
+        /Do not run Factory CLI operations or inspect controller installation, configuration, status, or logs/,
+      );
+      assert.match(
+        captured,
+        /do not remove explicitly owned ordinary code work/,
+      );
+      assert.match(
+        captured,
+        /Stop after completing the authorized owned code changes, candidate files, and manifest/,
+      );
+      assert.match(captured, /report the conflict rather than performing it/);
+      if (scenario.id === "same-path") {
+        assert.deepEqual(
+          readFileSync(join(worktree, ".factory-media/candidate-0/image")),
+          bytes,
+        );
+        assert.deepEqual(
+          readFileSync(join(worktree, "assets/source.png")),
+          bytes,
+        );
+      } else {
+        assert.match(captured, /Authorized read-only asset inputs/);
+        assert.match(captured, /do not edit or commit them/);
+        assert.match(captured, /formatMetadata/);
+        assert.match(captured, /relationships with from, toRole, and kind/);
+        assert.match(captured, /Do not invent metadata or tool identities/);
+      }
+    }
+  } finally {
+    Codex.prototype.startThread = original;
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("Codex worker closes completed streams and durably fails nonterminal streams", async () => {
