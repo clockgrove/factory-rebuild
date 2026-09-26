@@ -21,7 +21,11 @@ export type WorkStatus =
   | "failed"
   | "cancelled";
 export type WorkStep =
-  "execute" | "validate" | "approve-asset" | "approve-result" | "deliver";
+  | "execute"
+  | "validate"
+  | "approve-asset"
+  | "approve-result"
+  | "deliver";
 
 export type ReviewRejectionReason =
   | "missing-finding"

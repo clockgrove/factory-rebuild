@@ -967,7 +967,12 @@ function reviewFindingRejection(
 ):
   | {
       field:
-        "finding" | "criterion" | "verdict" | "detail" | "source" | "quote";
+        | "finding"
+        | "criterion"
+        | "verdict"
+        | "detail"
+        | "source"
+        | "quote";
       reason: ReviewRejectionReason;
     }
   | undefined {
