@@ -3,7 +3,7 @@ import { readdirSync, existsSync, mkdirSync } from "node:fs";
 import { basename, isAbsolute, join, resolve, sep } from "node:path";
 import { userInfo } from "node:os";
 import type { FactoryConfig } from "./config.js";
-import { stateRoot, validateTarget } from "./config.js";
+import { factoryConfigDigest, stateRoot, validateTarget } from "./config.js";
 import type { FactoryState } from "./state.js";
 import {
   closeObjectiveIssue,
@@ -62,10 +62,6 @@ export interface ApplicationServices {
   reportRunStatus?: (message: string) => void;
 }
 
-function configDigest(config: FactoryConfig): string {
-  return createHash("sha256").update(JSON.stringify(config)).digest("hex");
-}
-
 function configuredDiagnosticSecrets(config: FactoryConfig): string[] {
   return config.policy.allowedSecretNames
     .map((name) => process.env[name])
@@ -100,7 +96,7 @@ export async function planObjective(
       baseSha,
       config.checkout,
       services.planningModel,
-      configDigest(config),
+      factoryConfigDigest(config),
       diagnostics.modelObserver({ scopeId: planningScopeId }),
     );
     diagnostics.emit({
@@ -157,7 +153,7 @@ export async function decidePlan(
       baseSha,
       config.checkout,
       input,
-      configDigest(config),
+      factoryConfigDigest(config),
     );
     diagnostics.emit({
       operation: "planning-decision",
@@ -235,7 +231,7 @@ export async function runObjective(
   try {
     diagnostics.emit({ operation: "objective-run", outcome: "started" });
     const issue = await github.objective(objective);
-    const installationConfigDigest = configDigest(config);
+    const installationConfigDigest = factoryConfigDigest(config);
     let state = readState(config.repository, objective);
     if (state) {
       if (
