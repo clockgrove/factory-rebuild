@@ -67,12 +67,12 @@
   },
   "dependencies": {
     "@openai/codex-sdk": "0.156.0",
-    "@secretlint/secretlint-rule-preset-recommend": "^13.0.5",
-    "secretlint": "^13.0.5"
+    "@secretlint/node": "13.0.5",
+    "@secretlint/secretlint-rule-preset-recommend": "^13.0.5"
   },
   "bundleDependencies": [
     "@openai/codex-sdk",
-    "@secretlint/secretlint-rule-preset-recommend",
-    "secretlint"
+    "@secretlint/node",
+    "@secretlint/secretlint-rule-preset-recommend"
   ]
 }
