@@ -472,6 +472,19 @@ export function parseFactoryState(
     if (item.assets !== undefined) {
       if (!Array.isArray(item.assets))
         throw new Error(`Work Item ${id} assets are invalid`);
+      const acceptedItem = (graph.items as WorkGraph["items"]).find(
+        (candidate) => candidate.id === id,
+      )!;
+      const acceptedSourceBindings = (acceptedItem.sourceAssets ?? []).map(
+        (binding) => ({
+          kind: binding.kind ?? "repository",
+          path: binding.path,
+          role: binding.role,
+          mediaType: binding.mediaType,
+          visibility: binding.visibility,
+        }),
+      );
+      let sharedInputIdentity: string | undefined;
       for (const rawSet of item.assets) {
         const set = record(rawSet, `work.${id}.assetSet`);
         string(set.id, "AssetSet ID");
@@ -509,6 +522,36 @@ export function parseFactoryState(
               throw new Error("AssetSet source reference is invalid");
           }
         }
+        const canonicalInputs = (
+          (set.inputs ?? []) as NonNullable<CapturedAssetSet["inputs"]>
+        ).map((input) => ({
+          binding: {
+            kind: input.binding.kind ?? "repository",
+            path: input.binding.path,
+            role: input.binding.role,
+            mediaType: input.binding.mediaType,
+            visibility: input.binding.visibility,
+          },
+          ref: {
+            digest: input.ref.digest,
+            bytes: input.ref.bytes,
+            mediaType: input.ref.mediaType,
+          },
+        }));
+        if (
+          JSON.stringify(canonicalInputs.map((input) => input.binding)) !==
+          JSON.stringify(acceptedSourceBindings)
+        )
+          throw new Error(
+            "AssetSet inputs differ from accepted source bindings",
+          );
+        const inputIdentity = JSON.stringify(canonicalInputs);
+        if (
+          sharedInputIdentity !== undefined &&
+          sharedInputIdentity !== inputIdentity
+        )
+          throw new Error("AssetSet inputs differ across candidate sets");
+        sharedInputIdentity = inputIdentity;
         if (!Array.isArray(set.members) || !set.members.length)
           throw new Error("AssetSet has no members");
         const memberRoles = new Set<string>();

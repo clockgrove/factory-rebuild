@@ -1953,7 +1953,9 @@ test("regular and native asset selection preserve a complete set and hydrate tar
       });
       const provenanceCriterion =
         "The selected set's source, rights basis, repository visibility, and lineage are declared in .factory-assets.json.";
-      media.acceptance.push(provenanceCriterion);
+      const sourceIdentityCriterion =
+        "The selected model is copied byte-for-byte from the repository source approved/model.bin and bound back to that destination.";
+      media.acceptance.push(provenanceCriterion, sourceIdentityCriterion);
       const provenance = {
         source: "approved/model.bin",
         rights: "public integration fixture",
@@ -2150,9 +2152,22 @@ test("regular and native asset selection preserve a complete set and hydrate tar
             receipt.declarationPath === ".factory-assets.json" &&
             JSON.stringify(receipt.declarationProvenance) ===
               JSON.stringify(provenance) &&
+            receipt.inputs?.length === 1 &&
+            receipt.inputs[0].binding.path === "approved/model.bin" &&
+            receipt.inputs[0].ref.digest === selectedDigest &&
             receipt.mediaRoot === ".factory-media" &&
             receipt.complete === true,
         ),
+      );
+      const selectedReceipt =
+        mediaReview.observations.assetCaptureReceipts.find(
+          (receipt) => receipt.setId === "candidate-b",
+        );
+      assert.equal(
+        selectedReceipt.inputs[0].ref.digest,
+        selectedReceipt.members.find(
+          (member) => member.destination === "approved/model.bin",
+        ).digest,
       );
       assert.equal(
         mediaReview.observations.assetSelectionReceipt.setId,

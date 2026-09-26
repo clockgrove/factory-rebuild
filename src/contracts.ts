@@ -377,10 +377,11 @@ export interface CapturedAssetSet {
   production?: ProducedAssetSet["production"];
   evidence: { harnessIdentity: string; resultDigest: string };
   /**
-   * Controller-generated only after every declared member has been verified as
-   * a regular file beneath the private media staging root and imported into the
-   * content store. Older snapshots may not contain this receipt and therefore
-   * cannot use it as automatic review evidence.
+   * Controller-generated from the imported source identities after every
+   * declared member has been verified as a regular file beneath the private
+   * media staging root and imported into the content store. Older snapshots
+   * may not contain this receipt and therefore cannot use it as automatic
+   * review evidence.
    */
   capture?: AssetCaptureReceipt;
 }
@@ -393,6 +394,16 @@ export interface AssetCaptureReceipt {
   mediaRoot: ".factory-media";
   complete: true;
   setId: string;
+  inputs?: {
+    binding: {
+      kind: NonNullable<SourceAssetBinding["kind"]>;
+      path: string;
+      role: string;
+      mediaType: string;
+      visibility: SourceAssetBinding["visibility"];
+    };
+    ref: ContentRef;
+  }[];
   members: {
     role: string;
     stagingPath: string;

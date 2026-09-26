@@ -407,6 +407,22 @@ export async function captureAssetSets(
   )
     throw new Error("Produced media root is missing or redirected");
   const captured: CapturedAssetSet[] = [];
+  const receiptInputs: NonNullable<AssetCaptureReceipt["inputs"]> = inputs.map(
+    (input) => ({
+      binding: {
+        kind: input.binding.kind ?? "repository",
+        path: input.binding.path,
+        role: input.binding.role,
+        mediaType: input.binding.mediaType,
+        visibility: input.binding.visibility,
+      },
+      ref: {
+        digest: input.ref.digest,
+        bytes: input.ref.bytes,
+        mediaType: input.ref.mediaType,
+      },
+    }),
+  );
   for (const set of sets) {
     if (!/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(set.id) || !set.members.length)
       throw new Error(
@@ -500,6 +516,7 @@ export async function captureAssetSets(
         mediaRoot: ".factory-media",
         complete: true,
         setId: set.id,
+        ...(receiptInputs.length && { inputs: receiptInputs }),
         members: receiptMembers,
       },
     });
@@ -531,6 +548,28 @@ export function assertAssetCaptureReceipt(set: CapturedAssetSet): void {
     receipt.members.length !== set.members.length
   )
     throw new Error("AssetSet controller capture receipt is invalid");
+  const expectedInputs: NonNullable<AssetCaptureReceipt["inputs"]> = (
+    set.inputs ?? []
+  ).map((input) => ({
+    binding: {
+      kind: input.binding.kind ?? "repository",
+      path: input.binding.path,
+      role: input.binding.role,
+      mediaType: input.binding.mediaType,
+      visibility: input.binding.visibility,
+    },
+    ref: {
+      digest: input.ref.digest,
+      bytes: input.ref.bytes,
+      mediaType: input.ref.mediaType,
+    },
+  }));
+  if (
+    (receipt.inputs === undefined) !== (expectedInputs.length === 0) ||
+    (receipt.inputs !== undefined &&
+      !isDeepStrictEqual(receipt.inputs, expectedInputs))
+  )
+    throw new Error("AssetSet controller input receipt differs from inputs");
   const declarationFieldCount = [
     receipt.declarationPath,
     receipt.declarationDigest,
