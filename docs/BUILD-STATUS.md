@@ -1,5 +1,14 @@
 # Factory build status
 
+**Interrupted regular delivery (#121):** The current contract refuses a running
+Work Item at `deliver` rather than reconciling publication from remote evidence.
+The narrow candidate adds actionable preservation/operator guidance and focused
+no-replay/no-publication tests with and without a recorded PR. Whole-graph
+preflight refuses before resuming execution, validation or selected-asset peers,
+independent of item order. This does not
+repair or qualify the historical interrupted v0.1.21 run; automatic recovery,
+state edits and retry remain outside this leaf. Independent acceptance is pending.
+
 Updated September 26, 2026. This page is the handoff for a contributor starting with only this public repository. Use [the implementation plan](IMPLEMENTATION-PLAN.md) for scope and acceptance, [the project board](https://github.com/orgs/clockgrove/projects/2) for issue status, and [the provenance ledger](SOURCE-PROVENANCE.md) for archived-source references.
 
 The [archive-to-rebuild capability review](ARCHIVE-CAPABILITY-DECISIONS.md) records the operator-approved product-scope reconciliation. Acceptance of a capability is not a claim that it is implemented.
