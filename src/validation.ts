@@ -98,9 +98,16 @@ export function workItemReviewObservations(
       ? {
           authority: "factory-controller" as const,
           ...(asset.capture.declarationPath &&
-            asset.capture.declarationDigest && {
+            asset.capture.declarationDigest &&
+            asset.capture.declarationProvenance && {
               declarationPath: asset.capture.declarationPath,
               declarationDigest: asset.capture.declarationDigest,
+              declarationProvenance: {
+                source: asset.capture.declarationProvenance.source,
+                rights: asset.capture.declarationProvenance.rights,
+                visibility: asset.capture.declarationProvenance.visibility,
+                lineage: [...asset.capture.declarationProvenance.lineage],
+              },
             }),
           mediaRoot: ".factory-media" as const,
           complete: true as const,

@@ -415,10 +415,13 @@ export async function captureAssetSets(
     const provenance = set.provenance;
     if (
       !provenance ||
+      typeof provenance.source !== "string" ||
       !provenance.source ||
+      typeof provenance.rights !== "string" ||
       !provenance.rights ||
       !["private", "repository"].includes(provenance.visibility) ||
-      !Array.isArray(provenance.lineage)
+      !Array.isArray(provenance.lineage) ||
+      !provenance.lineage.every((entry) => typeof entry === "string")
     )
       throw new Error(
         "Produced AssetSet lacks provenance, rights, visibility, or lineage",
@@ -487,6 +490,12 @@ export async function captureAssetSets(
         ...(declarationDigest && {
           declarationPath: ".factory-assets.json" as const,
           declarationDigest,
+          declarationProvenance: {
+            source: provenance.source,
+            rights: provenance.rights,
+            visibility: provenance.visibility,
+            lineage: [...provenance.lineage],
+          },
         }),
         mediaRoot: ".factory-media",
         complete: true,
@@ -522,12 +531,31 @@ export function assertAssetCaptureReceipt(set: CapturedAssetSet): void {
     receipt.members.length !== set.members.length
   )
     throw new Error("AssetSet controller capture receipt is invalid");
+  const declarationFieldCount = [
+    receipt.declarationPath,
+    receipt.declarationDigest,
+    receipt.declarationProvenance,
+  ].filter((value) => value !== undefined).length;
+  const declarationProvenance = receipt.declarationProvenance;
+  const expectedProvenance = {
+    source: set.provenance.source,
+    rights: set.provenance.rights,
+    visibility: set.provenance.visibility,
+    lineage: [...set.provenance.lineage],
+  };
   if (
-    (receipt.declarationPath === undefined) !==
-      (receipt.declarationDigest === undefined) ||
+    (declarationFieldCount !== 0 && declarationFieldCount !== 3) ||
     (receipt.declarationPath !== undefined &&
       (receipt.declarationPath !== ".factory-assets.json" ||
-        !/^[0-9a-f]{64}$/.test(receipt.declarationDigest ?? "")))
+        !/^[0-9a-f]{64}$/.test(receipt.declarationDigest ?? "") ||
+        !declarationProvenance ||
+        !isDeepStrictEqual(Object.keys(declarationProvenance).sort(), [
+          "lineage",
+          "rights",
+          "source",
+          "visibility",
+        ]) ||
+        !isDeepStrictEqual(declarationProvenance, expectedProvenance)))
   )
     throw new Error("AssetSet controller declaration receipt is invalid");
   for (const [index, member] of set.members.entries()) {

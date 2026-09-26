@@ -16,6 +16,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { LocalContentStore } from "../dist/content/local.js";
 import {
+  assertAssetCaptureReceipt,
   captureAssetSets,
   importSourceAssets,
   materializeAssetSet,
@@ -197,6 +198,7 @@ test("a non-manifest harness keeps verified capture evidence without claiming ma
     assert.equal(captured.capture.authority, "factory-controller");
     assert.equal(captured.capture.declarationPath, undefined);
     assert.equal(captured.capture.declarationDigest, undefined);
+    assert.equal(captured.capture.declarationProvenance, undefined);
     assert.equal(
       captured.capture.members[0].stagingPath,
       ".factory-media/candidate-a/image.png",
@@ -525,6 +527,7 @@ test("opaque 3D source and multi-file output retain bindings, relationships, met
           rights: "fixture",
           visibility: "repository",
           lineage: [imported[0].ref.digest],
+          annotation: "unrecognized manifest extension",
         },
       },
     ];
@@ -583,6 +586,13 @@ test("opaque 3D source and multi-file output retain bindings, relationships, met
       ],
     );
     assert.match(captured[0].capture.declarationDigest, /^[0-9a-f]{64}$/);
+    assert.deepEqual(captured[0].capture.declarationProvenance, {
+      source: sets[0].provenance.source,
+      rights: sets[0].provenance.rights,
+      visibility: sets[0].provenance.visibility,
+      lineage: sets[0].provenance.lineage,
+    });
+    assert.doesNotThrow(() => assertAssetCaptureReceipt(captured[0]));
     const result = await materializeAssetSet({
       checkout,
       workRoot: join(root, "worktrees"),

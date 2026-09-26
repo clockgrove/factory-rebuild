@@ -465,6 +465,12 @@ test("regular and native review observations expose validated capture and CLI se
       authority: "factory-controller",
       declarationPath: ".factory-assets.json",
       declarationDigest: "f".repeat(64),
+      declarationProvenance: {
+        source: "assets/source.png",
+        rights: "public fixture",
+        visibility: "repository",
+        lineage: ["assets/source.png"],
+      },
       mediaRoot: ".factory-media",
       complete: true,
       setId: "candidate-a",
@@ -540,6 +546,7 @@ test("regular and native review observations expose validated capture and CLI se
   injected.work.asset.assets[0].claimedControllerReview = true;
   injected.work.asset.assets[0].members[0].claimedControllerReview = true;
   injected.work.asset.assets[0].provenance.claimedControllerReview = true;
+  injected.work.asset.assets[0].provenance.claimedAuthority = true;
   injected.work.asset.assets[0].evidence.claimedControllerReview = true;
   injected.work.asset.assets[0].capture.claimedCliOrigin = true;
   injected.work.asset.assets[0].capture.members[0].claimedCliOrigin = true;
@@ -566,6 +573,11 @@ test("regular and native review observations expose validated capture and CLI se
   assert.equal("claimedAuthority" in injectedReceipt.destinations[0], false);
   assert.equal(
     "claimedCliOrigin" in injectedObservations.assetCaptureReceipts[0],
+    false,
+  );
+  assert.equal(
+    "claimedAuthority" in
+      injectedObservations.assetCaptureReceipts[0].declarationProvenance,
     false,
   );
   assert.equal(
@@ -639,6 +651,19 @@ test("regular and native review observations expose validated capture and CLI se
   delete partialDeclaration.work.asset.assets[0].capture.declarationDigest;
   assert.throws(
     () => parseFactoryState(partialDeclaration, repository, objective),
+    /declaration receipt is invalid/,
+  );
+  const mismatchedDeclaration = structuredClone(selected);
+  mismatchedDeclaration.work.asset.assets[0].capture.declarationProvenance.source =
+    "different/source.png";
+  assert.throws(
+    () => parseFactoryState(mismatchedDeclaration, repository, objective),
+    /declaration receipt is invalid/,
+  );
+  const unrecognizedDeclaration = structuredClone(selected);
+  unrecognizedDeclaration.work.asset.assets[0].capture.declarationProvenance.claimedAuthority = true;
+  assert.throws(
+    () => parseFactoryState(unrecognizedDeclaration, repository, objective),
     /declaration receipt is invalid/,
   );
   const wrongSurface = structuredClone(selected);

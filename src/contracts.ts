@@ -389,6 +389,7 @@ export interface AssetCaptureReceipt {
   authority: "factory-controller";
   declarationPath?: ".factory-assets.json";
   declarationDigest?: string;
+  declarationProvenance?: ProducedAssetSet["provenance"];
   mediaRoot: ".factory-media";
   complete: true;
   setId: string;

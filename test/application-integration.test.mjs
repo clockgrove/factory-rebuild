@@ -1951,6 +1951,9 @@ test("regular and native asset selection preserve a complete set and hydrate tar
         minimumAssetSets: 2,
         requiredLfsRoles: ["model"],
       });
+      const provenanceCriterion =
+        "The selected set's source, rights basis, repository visibility, and lineage are declared in .factory-assets.json.";
+      media.acceptance.push(provenanceCriterion);
       const provenance = {
         source: "approved/model.bin",
         rights: "public integration fixture",
@@ -2145,6 +2148,8 @@ test("regular and native asset selection preserve a complete set and hydrate tar
           (receipt) =>
             receipt.authority === "factory-controller" &&
             receipt.declarationPath === ".factory-assets.json" &&
+            JSON.stringify(receipt.declarationProvenance) ===
+              JSON.stringify(provenance) &&
             receipt.mediaRoot === ".factory-media" &&
             receipt.complete === true,
         ),

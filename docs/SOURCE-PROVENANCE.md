@@ -85,6 +85,10 @@ Issue #73, the current clean model/configuration contracts, and the installed `@
 
 Issue #94, the preserved fresh installed v0.1.16 qualification diagnostics, and the current clean model-observation and acceptance contracts supplied this correction. No archived retry policy, provider fallback, state format, or test was inspected or copied. The clean adapter retries only the same selected reviewer after a classified provider-capacity failure, reusing the exact in-memory structured request with two bounded delays. Attempt metadata remains observational; the atomic snapshot is still the only continuation truth. Non-capacity failures and exhausted capacity retain the existing fail-closed decision path.
 
+## Manifest provenance capture receipt (#99)
+
+Issue #99, the preserved fresh installed v0.1.17 qualification state, and the current clean media, atomic-state, and review-observation contracts supplied this correction. No archived receipt format, provenance protocol, state schema, prompt, or test was inspected or copied. The clean change extends the existing controller capture receipt with an exact clone of the provenance declaration already parsed from `.factory-assets.json`, validates that clone against the captured AssetSet on state ingress, and projects only the validated fields into result-review observations. Harness-declared selected-asset metadata remains separately labeled and absence of the controller fields proves nothing.
+
 ## Graph-review rejection diagnostics (#76)
 
 Issue #76, the live #55 qualification evidence, and the current graph-review and diagnostic contracts supplied this correction. No archived reviewer parser, error format, prompt journal, or test was inspected or copied. The clean validator rejects each malformed field independently, emits only its bounded path and fixed reason plus an exact recognized supplied-source label when available, and preserves the existing fail-closed human-decision path. Provider quotes, details, questions, and unknown source text remain outside diagnostic metadata. The prompt and focused current-repository tests also establish an empty findings array as the only clean no-defect result.
