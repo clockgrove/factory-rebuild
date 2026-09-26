@@ -136,6 +136,8 @@ test("regular application path runs a source-grounded concurrent DAG with stable
         },
       },
     };
+    const runStatus = [];
+    descriptor.reportRunStatus = (message) => runStatus.push(message);
     const { application, eventsPath, github } = makeApplication(descriptor);
     const acceptedPlan = await application.planObjective(objective);
     assert.equal(acceptedPlan.review.status, "clean");
@@ -201,6 +203,7 @@ test("regular application path runs a source-grounded concurrent DAG with stable
     mkdirSync(join(root, "barriers"), { recursive: true });
     writeFileSync(barrier, "go\n");
     const state = await running;
+    assert.deepEqual(runStatus, ["Factory: activating the accepted plan"]);
     assert.equal(state.finalValidation.passed, true);
     assert.ok(
       Object.values(state.work).every((work) => work.status === "done"),
@@ -266,6 +269,10 @@ test("regular application path runs a source-grounded concurrent DAG with stable
       starts: events.filter((event) => event.type === "start").length,
     };
     const rerun = await application.runObjective(objective);
+    assert.deepEqual(runStatus, [
+      "Factory: activating the accepted plan",
+      "Factory: resuming the existing run from atomic state",
+    ]);
     assert.equal(rerun.integratedSha, state.integratedSha);
     assert.deepEqual(github.state().issues, identities.issues);
     assert.deepEqual(
@@ -981,6 +988,7 @@ test("Work Item review receives exact concurrent-attempt provenance from run sta
         };
       },
     };
+    const runStatus = [];
     const { application, eventsPath } = makeApplication({
       config: factoryConfig(
         target.checkout,
@@ -1002,6 +1010,7 @@ test("Work Item review receives exact concurrent-attempt provenance from run sta
           files: [{ path: "right.txt", text: "right\n" }],
         },
       },
+      reportRunStatus: (message) => runStatus.push(message),
     });
     const running = application.runObjective(objective);
     await waitFor(
@@ -1017,6 +1026,9 @@ test("Work Item review receives exact concurrent-attempt provenance from run sta
     mkdirSync(dirname(barrier), { recursive: true });
     writeFileSync(barrier, "go\n");
     const completed = await running;
+    assert.deepEqual(runStatus, [
+      "Factory: compiling and independently reviewing a fresh plan",
+    ]);
     assert.ok(completed.finalValidation, JSON.stringify(completed, null, 2));
     assert.equal(completed.finalValidation.passed, true);
     assert.deepEqual(reviewed, new Set(["rc-left", "rc-right"]));
@@ -1443,8 +1455,13 @@ test("application lifecycle reattaches once, cancels owned work, and retries onl
     await once(child, "exit");
     mkdirSync(dirnameFor(barrier), { recursive: true });
     writeFileSync(barrier, "go\n");
+    const runStatus = [];
+    descriptor.reportRunStatus = (message) => runStatus.push(message);
     const { application, eventsPath, github } = makeApplication(descriptor);
     const resumed = await application.runObjective(objective);
+    assert.deepEqual(runStatus, [
+      "Factory: resuming the existing run from atomic state",
+    ]);
     assert.equal(resumed.finalValidation.passed, true);
     assert.equal(Object.keys(github.state().pullRequests).length, 1);
     assert.equal(
