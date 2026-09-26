@@ -32,6 +32,7 @@ upstream recommended-preset change cannot silently alter Factory's gate.
 | `no-constant-condition`                                                                                                               | `lint/correctness/noConstantCondition`           |
 | `no-control-regex`                                                                                                                    | `lint/suspicious/noControlCharactersInRegex`     |
 | `no-debugger`                                                                                                                         | `lint/suspicious/noDebugger`                     |
+| `no-delete-var`                                                                                                                       | Biome parser rejects invalid delete targets      |
 | `no-dupe-else-if`                                                                                                                     | `lint/suspicious/noDuplicateElseIf`              |
 | `no-duplicate-case`                                                                                                                   | `lint/suspicious/noDuplicateCase`                |
 | `no-empty`, `no-empty-static-block`                                                                                                   | `lint/suspicious/noEmptyBlockStatements`         |
@@ -45,6 +46,7 @@ upstream recommended-preset change cannot silently alter Factory's gate.
 | `no-loss-of-precision`                                                                                                                | `lint/correctness/noPrecisionLoss`               |
 | `no-misleading-character-class`                                                                                                       | `lint/suspicious/noMisleadingCharacterClass`     |
 | `no-nonoctal-decimal-escape`                                                                                                          | `lint/correctness/noNonoctalDecimalEscape`       |
+| `no-octal`                                                                                                                            | Biome parser and `npm run typecheck`             |
 | `no-prototype-builtins`                                                                                                               | `lint/suspicious/noPrototypeBuiltins`            |
 | `no-regex-spaces`                                                                                                                     | `lint/complexity/noAdjacentSpacesInRegex`        |
 | `no-self-assign`                                                                                                                      | `lint/correctness/noSelfAssign`                  |
@@ -76,27 +78,28 @@ upstream recommended-preset change cannot silently alter Factory's gate.
 | `@typescript-eslint/no-this-alias`                                                                                                    | `lint/complexity/noUselessThisAlias`             |
 | `@typescript-eslint/no-unnecessary-type-constraint`                                                                                   | `lint/complexity/noUselessTypeConstraint`        |
 | `@typescript-eslint/no-unsafe-declaration-merging`                                                                                    | `lint/suspicious/noUnsafeDeclarationMerging`     |
+| `@typescript-eslint/no-unused-expressions`                                                                                            | `lint/suspicious/noUnusedExpressions`            |
 | `@typescript-eslint/no-unused-vars`                                                                                                   | `lint/correctness/noUnusedVariables`             |
 | `@typescript-eslint/prefer-as-const`                                                                                                  | `lint/style/useAsConstAssertion`                 |
 | `@typescript-eslint/prefer-namespace-keyword`                                                                                         | `lint/suspicious/useNamespaceKeyword`            |
 
-The focused `eslint.config.js` retains these effective checks because Biome
-2.5.14 does not implement them or does not match the TypeScript rule's full
-directive/expression behavior:
+The focused `eslint.config.js` retains only these effective checks because
+Biome 2.5.14 does not implement them or does not match the TypeScript rule's
+full directive behavior:
 
-- `no-delete-var`
 - `no-invalid-regexp`
-- `no-octal`
 - `no-unexpected-multiline`
 - `@typescript-eslint/ban-ts-comment`
-- `@typescript-eslint/no-unused-expressions`
 - `@typescript-eslint/triple-slash-reference`
 
-Biome's `lint/suspicious/noUnusedExpressions` and
-`lint/suspicious/noTsIgnore` also remain enabled as overlapping diagnostics.
-The migrator also reported `no-new-symbol` as unavailable, but that core rule
-was disabled by the previous TypeScript preset; `npm run typecheck` continues
-to reject constructing `Symbol`.
+Biome's `lint/suspicious/noTsIgnore` remains enabled as an overlapping check
+for `@ts-ignore`, while the ESLint fallback also rejects `@ts-nocheck` and
+enforces the TypeScript preset's `@ts-expect-error` description policy. The
+focused quality-tooling test exercises the four fallback gaps and proves that
+Biome or TypeScript still reject the three checks removed from ESLint. The
+migrator also reported `no-new-symbol` as unavailable, but that core rule was
+disabled by the previous TypeScript preset; `npm run typecheck` continues to
+reject constructing `Symbol`.
 
 Secret scanning is unchanged. Packaged Secretlint remains a production
 dependency and still checks changed staged and working bytes before publication;
@@ -117,6 +120,11 @@ Prettier remains only for file kinds Biome 2.5.14 does not format here:
 - GitHub Actions YAML and other YAML
 - `package-lock.json`, which Biome deliberately protects as tool-owned
 
-`npm run format:check` runs both formatters over their non-overlapping sets.
-Biome's Git integration honors `.gitignore`; neither command checks `dist/` or
-`node_modules/`.
+This is a temporary unsupported-surface fallback, not shared formatter
+ownership. It can be removed when the pinned Biome release supports Markdown
+and YAML formatting and no longer protects the npm lockfile. Removing it before
+then would silently drop formatting enforcement for those files.
+
+`npm run format:check` runs both formatters over their strictly non-overlapping
+sets. Biome's Git integration honors `.gitignore`; neither command checks
+`dist/` or `node_modules/`.

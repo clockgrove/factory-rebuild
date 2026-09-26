@@ -9,11 +9,8 @@ export default tseslint.config({
   plugins: { "@typescript-eslint": tseslint.plugin },
   rules: {
     "@typescript-eslint/ban-ts-comment": "error",
-    "@typescript-eslint/no-unused-expressions": "error",
     "@typescript-eslint/triple-slash-reference": "error",
-    "no-delete-var": "error",
     "no-invalid-regexp": "error",
-    "no-octal": "error",
     "no-unexpected-multiline": "error",
   },
 });
