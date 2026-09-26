@@ -4,6 +4,21 @@ The clean implementation starts from the Factory plan reviewed September 22, 202
 
 The MIT license text is retained from the archived repository. Runtime code does not read this ledger.
 
+## Provider idle timeout subscription (#130)
+
+Issue #130 and the accepted public `src/provider-turn.ts` supplied the
+delayed-callback progress reproduction. The focused fix keeps the guard's
+existing timeout promise subscribed while resetting only its idle timer.
+Independent read-only review also reproduced cleanup-window callbacks restarting
+that timer after finish. The existing guard now ends idempotently and ignores
+later progress; synthetic delayed-cleanup and isolated process-exit tests verify
+no late abort or referenced idle timer. No optional SDK implementation is added.
+Standalone tests use synthetic pending operations, delayed progress, original
+provider failure and successful completion; no archived source, private material,
+provider authentication or live target was inspected or used. The optional-worker
+callback regression remains separately evidenced in draft PR #62; no harness or
+dependency change is included here.
+
 ## Repository quality tooling (#105)
 
 Issue #105, the repository's effective ESLint/TypeScript-ESLint and Prettier
