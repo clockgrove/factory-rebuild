@@ -305,8 +305,55 @@ test("model diagnostics preserve safe correlation and aggregate only supplied us
       failureSource: "OBJECTIVE",
       detail: "Graph review rejected findings[0].quote: quote-not-found",
     });
+    const retried = emitter.modelObserver({ scopeId: "plan-attempt-1" });
+    retried({
+      invocationId: "invoke-5",
+      phase: "graph-review",
+      ordinal: 3,
+      providerAttempt: 1,
+      providerMaxAttempts: 3,
+      type: "started",
+    });
+    retried({
+      invocationId: "invoke-5",
+      phase: "graph-review",
+      ordinal: 3,
+      providerAttempt: 1,
+      providerMaxAttempts: 3,
+      type: "failed",
+      usageAvailable: false,
+      failureClass: "provider-capacity",
+    });
+    retried({
+      invocationId: "invoke-5",
+      phase: "graph-review",
+      ordinal: 3,
+      providerAttempt: 1,
+      providerMaxAttempts: 3,
+      type: "retry-scheduled",
+      retryDelayMs: 250,
+      failureClass: "provider-capacity",
+    });
+    retried({
+      invocationId: "invoke-5",
+      phase: "graph-review",
+      ordinal: 3,
+      providerAttempt: 2,
+      providerMaxAttempts: 3,
+      type: "started",
+    });
+    retried({
+      invocationId: "invoke-5",
+      phase: "graph-review",
+      ordinal: 3,
+      providerAttempt: 2,
+      providerMaxAttempts: 3,
+      type: "completed",
+      usageAvailable: true,
+      usage: { inputTokens: 50, cachedInputTokens: 25 },
+    });
     const events = readDiagnostics("example/model-diagnostics", 7);
-    assert.equal(events.length, 6);
+    assert.equal(events.length, 11);
     assert.ok(events.every((event) => event.operation === "model-invocation"));
     assert.equal(events[0].metadata.scopeId, "plan-attempt-1");
     assert.equal(events[2].metadata.inputTokens, 100);
@@ -318,30 +365,34 @@ test("model diagnostics preserve safe correlation and aggregate only supplied us
     assert.equal(events[5].metadata.failureField, "findings[0].quote");
     assert.equal(events[5].metadata.failureReason, "quote-not-found");
     assert.equal(events[5].metadata.failureSource, "OBJECTIVE");
+    assert.equal(events[8].metadata.observationType, "retry-scheduled");
+    assert.equal(events[8].metadata.providerAttempt, 1);
+    assert.equal(events[8].metadata.providerMaxAttempts, 3);
+    assert.equal(events[8].metadata.retryDelayMs, 250);
 
     const summary = summarizeModelInvocations(events);
     assert.deepEqual(summary.objective.tokenTotals, {
-      inputTokens: 200,
-      cachedInputTokens: 40,
+      inputTokens: 250,
+      cachedInputTokens: 65,
       cacheWriteInputTokens: 5,
       outputTokens: 12,
       reasoningOutputTokens: 3,
     });
-    assert.equal(summary.objective.invocationCount, 4);
-    assert.equal(summary.objective.completedCount, 2);
-    assert.equal(summary.objective.failedCount, 2);
-    assert.equal(summary.objective.usageAvailableCount, 2);
-    assert.equal(summary.objective.usageUnavailableCount, 2);
+    assert.equal(summary.objective.invocationCount, 6);
+    assert.equal(summary.objective.completedCount, 3);
+    assert.equal(summary.objective.failedCount, 3);
+    assert.equal(summary.objective.usageAvailableCount, 3);
+    assert.equal(summary.objective.usageUnavailableCount, 3);
     assert.deepEqual(summary.objective.cacheReadRatio, {
-      numeratorCachedInputTokens: 40,
-      denominatorInputTokens: 100,
-      value: 0.4,
+      numeratorCachedInputTokens: 65,
+      denominatorInputTokens: 150,
+      value: 65 / 150,
     });
-    assert.equal(summary.objective.tokenAvailability.inputTokens, 2);
-    assert.equal(summary.objective.tokenAvailability.cachedInputTokens, 1);
+    assert.equal(summary.objective.tokenAvailability.inputTokens, 3);
+    assert.equal(summary.objective.tokenAvailability.cachedInputTokens, 2);
     assert.equal(summary.byPhase.compile.invocationCount, 1);
-    assert.equal(summary.byPhase["graph-review"].failedCount, 2);
-    assert.equal(summary.byScope["plan-attempt-1"].invocationCount, 4);
+    assert.equal(summary.byPhase["graph-review"].failedCount, 3);
+    assert.equal(summary.byScope["plan-attempt-1"].invocationCount, 6);
   } finally {
     if (previous === undefined) delete process.env.XDG_STATE_HOME;
     else process.env.XDG_STATE_HOME = previous;

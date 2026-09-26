@@ -506,6 +506,7 @@ export async function runObjective(
       const reviewFinal = () =>
         reviewAcceptance({
           model: planningModel,
+          reviewPhase: "objective-review",
           checkout: config.checkout,
           baseSha: state.baseSha,
           commit: integratedSha,

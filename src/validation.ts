@@ -847,6 +847,7 @@ function reviewFindingRejection(
 /** A separate read-only review evaluates each criterion on an exact-tree packet. */
 export async function reviewAcceptance(args: {
   model: PlanningModel;
+  reviewPhase?: "result-review" | "objective-review";
   checkout: string;
   baseSha: string;
   commit: string;
@@ -899,6 +900,7 @@ export async function reviewAcceptance(args: {
   if (model.reviewResult) {
     try {
       const reviewed = await model.reviewResult({
+        reviewPhase: args.reviewPhase ?? "result-review",
         criteria,
         baseSha,
         treeSha: evidence.treeSha,
@@ -1006,6 +1008,12 @@ function observeInvalidReview(
       invocationId: invocation.invocationId,
       phase: invocation.phase,
       ordinal: invocation.ordinal,
+      ...(invocation.providerAttempt === undefined
+        ? {}
+        : { providerAttempt: invocation.providerAttempt }),
+      ...(invocation.providerMaxAttempts === undefined
+        ? {}
+        : { providerMaxAttempts: invocation.providerMaxAttempts }),
       type: "response-invalid",
       failureClass: "semantic-validation",
       failureField: field,

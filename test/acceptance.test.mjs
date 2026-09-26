@@ -37,6 +37,11 @@ import {
   assetSelectionDigest,
   validationLfsMembersForItem,
 } from "../dist/media.js";
+import {
+  DiagnosticEmitter,
+  readDiagnostics,
+  summarizeModelInvocations,
+} from "../dist/diagnostics.js";
 
 function item(baseSha, validation) {
   return {
@@ -1029,6 +1034,81 @@ test("result review auto-accepts sourced evidence, otherwise asks one exact-tree
       malformedEvents.map((event) => [event.type, event.failureField]),
       [["response-invalid", "findings"]],
     );
+    const previousStateRoot = process.env.XDG_STATE_HOME;
+    process.env.XDG_STATE_HOME = join(root, "diagnostic-state");
+    try {
+      const emitter = new DiagnosticEmitter("example/retry-semantic", 1);
+      const observe = emitter.modelObserver({ scopeId: "result-attempt" });
+      const common = {
+        invocationId: "capacity-then-semantic-invalid",
+        phase: "result-review",
+        ordinal: 0,
+        providerMaxAttempts: 3,
+      };
+      observe({
+        ...common,
+        providerAttempt: 1,
+        type: "started",
+      });
+      observe({
+        ...common,
+        providerAttempt: 1,
+        type: "failed",
+        failureClass: "provider-capacity",
+        usageAvailable: false,
+      });
+      observe({
+        ...common,
+        providerAttempt: 2,
+        type: "started",
+      });
+      observe({
+        ...common,
+        providerAttempt: 2,
+        type: "completed",
+        usageAvailable: false,
+      });
+      await assert.rejects(
+        reviewAcceptance({
+          ...request,
+          model: {
+            async reviewResult() {
+              return {
+                findings: [
+                  {
+                    criterion: "result.txt exists",
+                    verdict: "pass",
+                    source: "OBJECTIVE",
+                    quote: "not present in the source",
+                    detail: "Invalid semantic evidence",
+                    question: "",
+                  },
+                ],
+              };
+            },
+          },
+          invocation: {
+            ...common,
+            providerAttempt: 2,
+            observe,
+          },
+        }),
+        AcceptanceDecisionRequired,
+      );
+      const events = readDiagnostics("example/retry-semantic", 1);
+      const invalid = events.find(
+        (event) => event.metadata.observationType === "response-invalid",
+      );
+      assert.equal(invalid.metadata.providerAttempt, 2);
+      assert.equal(invalid.metadata.providerMaxAttempts, 3);
+      const summary = summarizeModelInvocations(events);
+      assert.equal(summary.objective.invocationCount, 2);
+      assert.equal(summary.objective.failedCount, 2);
+      assert.equal(summary.objective.completedCount, 0);
+    } finally {
+      if (previousStateRoot === undefined) delete process.env.XDG_STATE_HOME;
+      else process.env.XDG_STATE_HOME = previousStateRoot;
+    }
     const clean = await reviewAcceptance({
       ...request,
       model: {

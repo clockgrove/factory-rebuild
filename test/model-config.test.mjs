@@ -600,7 +600,7 @@ test("Codex adapter reports unavailable usage, malformed output, and provider fa
         schema: { type: "object" },
         invocation: {
           invocationId: "setup-failure",
-          phase: "compile",
+          phase: "graph-review",
           ordinal: 1,
           observe: (event) => setupFailure.push(event),
         },
@@ -612,9 +612,264 @@ test("Codex adapter reports unavailable usage, malformed output, and provider fa
       ["started", "failed"],
     );
     assert.equal(setupFailure.at(-1).failureClass, "provider-capacity");
+    assert.ok(setupFailure.every((event) => event.phase === "compile"));
+    assert.ok(setupFailure.every((event) => event.providerMaxAttempts === 1));
   } finally {
     Codex.prototype.startThread = original;
   }
+});
+
+test("Codex adapter retries review capacity with the exact request and explicit attempt diagnostics", async () => {
+  const original = Codex.prototype.startThread;
+  const calls = [];
+  let call = 0;
+  Codex.prototype.startThread = function (options) {
+    const index = call++;
+    return {
+      id: `capacity-thread-${index}`,
+      async runStreamed(prompt, runOptions) {
+        calls.push({
+          prompt,
+          outputSchema: runOptions.outputSchema,
+          model: options.model,
+          reasoningEffort: options.modelReasoningEffort,
+        });
+        async function* events() {
+          yield {
+            type: "thread.started",
+            thread_id: `capacity-thread-${index}`,
+          };
+          if (index === 0) {
+            yield {
+              type: "turn.failed",
+              error: {
+                message:
+                  "Selected model is at capacity. Please try a different model.",
+              },
+            };
+            return;
+          }
+          yield {
+            type: "item.completed",
+            item: {
+              id: `message-${index}`,
+              type: "agent_message",
+              text: JSON.stringify({ findings: [] }),
+            },
+          };
+          yield { type: "turn.completed", usage: null };
+        }
+        return { events: events() };
+      },
+    };
+  };
+  try {
+    const waits = [];
+    const observations = [];
+    const model = new CodexPlanningModel(
+      "/tmp/model-config-test",
+      { model: "planner-choice", reasoningEffort: "high" },
+      { model: "reviewer-choice", reasoningEffort: "medium" },
+      undefined,
+      {
+        reviewCapacityRetryDelaysMs: [7, 11],
+        wait: async (milliseconds) => waits.push(milliseconds),
+      },
+    );
+    const baseSha = "a".repeat(40);
+    const result = await model.reviewGraph({
+      objective: "objective",
+      baseSha,
+      sources: [{ path: "OBJECTIVE", content: "objective" }],
+      graph: { objective: 1, baseSha, items: [] },
+      commands: [],
+      finalCommands: [],
+      controllerCapabilities: installedControllerCapabilities(),
+      controllerCapabilitiesDigest: CONTROLLER_CAPABILITIES_DIGEST,
+      invocation: {
+        invocationId: "capacity-then-success",
+        phase: "compile",
+        ordinal: 0,
+        observe: (event) => observations.push(event),
+      },
+    });
+    assert.deepEqual(result, { findings: [] });
+    assert.equal(calls.length, 2);
+    assert.equal(calls[0].prompt, calls[1].prompt);
+    assert.deepEqual(calls[0].outputSchema, calls[1].outputSchema);
+    assert.deepEqual(
+      calls.map(({ model, reasoningEffort }) => ({ model, reasoningEffort })),
+      [
+        { model: "reviewer-choice", reasoningEffort: "medium" },
+        { model: "reviewer-choice", reasoningEffort: "medium" },
+      ],
+    );
+    assert.deepEqual(waits, [7]);
+    assert.ok(observations.every((event) => event.phase === "graph-review"));
+    assert.deepEqual(
+      observations
+        .filter((event) =>
+          ["started", "failed", "retry-scheduled", "completed"].includes(
+            event.type,
+          ),
+        )
+        .map((event) => ({
+          type: event.type,
+          attempt: event.providerAttempt,
+          maxAttempts: event.providerMaxAttempts,
+          retryDelayMs: event.retryDelayMs,
+          failureClass: event.failureClass,
+        })),
+      [
+        {
+          type: "started",
+          attempt: 1,
+          maxAttempts: 3,
+          retryDelayMs: undefined,
+          failureClass: undefined,
+        },
+        {
+          type: "failed",
+          attempt: 1,
+          maxAttempts: 3,
+          retryDelayMs: undefined,
+          failureClass: "provider-capacity",
+        },
+        {
+          type: "retry-scheduled",
+          attempt: 1,
+          maxAttempts: 3,
+          retryDelayMs: 7,
+          failureClass: "provider-capacity",
+        },
+        {
+          type: "started",
+          attempt: 2,
+          maxAttempts: 3,
+          retryDelayMs: undefined,
+          failureClass: undefined,
+        },
+        {
+          type: "completed",
+          attempt: 2,
+          maxAttempts: 3,
+          retryDelayMs: undefined,
+          failureClass: undefined,
+        },
+      ],
+    );
+  } finally {
+    Codex.prototype.startThread = original;
+  }
+});
+
+test("Codex adapter exhausts bounded capacity retries for final review without changing policy", async () => {
+  const original = Codex.prototype.startThread;
+  const calls = [];
+  Codex.prototype.startThread = function (options) {
+    const index = calls.length;
+    return {
+      id: `exhausted-thread-${index}`,
+      async runStreamed(prompt, runOptions) {
+        calls.push({
+          prompt,
+          outputSchema: runOptions.outputSchema,
+          model: options.model,
+          reasoningEffort: options.modelReasoningEffort,
+        });
+        async function* events() {
+          yield {
+            type: "turn.failed",
+            error: { message: "provider temporarily unavailable at capacity" },
+          };
+        }
+        return { events: events() };
+      },
+    };
+  };
+  try {
+    const waits = [];
+    const observations = [];
+    const model = new CodexPlanningModel(
+      "/tmp/model-config-test",
+      { model: "planner-choice", reasoningEffort: "high" },
+      { model: "reviewer-choice", reasoningEffort: "medium" },
+      undefined,
+      {
+        reviewCapacityRetryDelaysMs: [3, 5],
+        wait: async (milliseconds) => waits.push(milliseconds),
+      },
+    );
+    const treeSha = "b".repeat(40);
+    await assert.rejects(
+      model.reviewResult({
+        reviewPhase: "objective-review",
+        criteria: ["Criterion"],
+        baseSha: "a".repeat(40),
+        treeSha,
+        sources: [{ path: "OBJECTIVE", content: "Criterion" }],
+        change: "{}",
+        commands: [],
+        invocation: {
+          invocationId: "exhausted-capacity",
+          phase: "compile",
+          ordinal: 0,
+          observe: (event) => observations.push(event),
+        },
+      }),
+      /temporarily unavailable at capacity/,
+    );
+    assert.equal(calls.length, 3);
+    assert.deepEqual(waits, [3, 5]);
+    assert.ok(calls.every((entry) => entry.prompt === calls[0].prompt));
+    assert.ok(
+      calls.every(
+        (entry) =>
+          entry.model === "reviewer-choice" &&
+          entry.reasoningEffort === "medium",
+      ),
+    );
+    assert.deepEqual(
+      observations
+        .filter((event) => event.type === "started")
+        .map((event) => event.providerAttempt),
+      [1, 2, 3],
+    );
+    assert.deepEqual(
+      observations
+        .filter((event) => event.type === "retry-scheduled")
+        .map((event) => ({
+          attempt: event.providerAttempt,
+          delay: event.retryDelayMs,
+        })),
+      [
+        { attempt: 1, delay: 3 },
+        { attempt: 2, delay: 5 },
+      ],
+    );
+    assert.equal(
+      observations.filter((event) => event.type === "failed").length,
+      3,
+    );
+    assert.ok(
+      observations.every((event) => event.phase === "objective-review"),
+    );
+  } finally {
+    Codex.prototype.startThread = original;
+  }
+});
+
+test("Codex adapter rejects unbounded review-capacity retry timing", () => {
+  const create = (reviewCapacityRetryDelaysMs) =>
+    new CodexPlanningModel(
+      "/tmp/model-config-test",
+      { model: "planner-choice", reasoningEffort: "high" },
+      { model: "reviewer-choice", reasoningEffort: "medium" },
+      undefined,
+      { reviewCapacityRetryDelaysMs },
+    );
+  assert.throws(() => create([0, 0, 0]), /bounded attempts or delay/);
+  assert.throws(() => create([10_001]), /bounded attempts or delay/);
 });
 
 test("Codex adapter aborts and records an abort-aware stalled stream", async () => {
