@@ -116,7 +116,8 @@ test("fresh packed artifact composes a registered harness through the package ro
       checked++;
     }
     const requiredCount = Object.entries(lock.packages).filter(
-      ([path, entry]) => path && !entry.dev && !entry.optional,
+      ([path, entry]) =>
+        path && !entry.dev && !entry.optional && !entry.devOptional,
     ).length;
     assert.ok(requiredCount > 0);
     assert.ok(

@@ -129,21 +129,21 @@ These later source changes do not alter the already published v0.1.21 bytes or r
 
 The pinned Copilot SDK requires Node 22.12.0 on Factory's supported Node range;
 selection below that SDK minimum fails before loading or authentication. A
-separate audit also found a pre-existing advertised-default-Node-floor mismatch
+separate initial audit found a pre-existing advertised-default-Node-floor mismatch
 in accepted main: bundled `normalize-package-data@8.0.0` and
 `hosted-git-info@9.0.3` declare Node 22.9.0 or later on that range. Those production
-lock entries are unchanged by this refresh. Node 24 checks cannot prove the
-advertised Node 22.0.0 compatibility; that default dependency-policy blocker
-remains pending coordinated resolution, without a floor waiver or unapproved
-dependency override here.
+lock entries were unchanged in the initial refresh. Node 24 checks could not
+prove advertised Node 22.0.0 compatibility. Accepted #129 later replaced the
+unused scanner CLI with the pinned public file API, removing that CLI-only
+dependency chain without a floor waiver or dependency override.
 
 A real Node 22.0.0 probe also reproduces a scanner-runtime failure with Factory's
 existing `--no-glob`/`--no-gitignore` argument surface: Secretlint 13's use of
 `util.parseArgs` negative options is rejected before scanning. The identical
 public synthetic file and installed scanner arguments succeed on Node 24.20.0.
-The scanner and argument surface are unchanged from accepted main; this is
-additional evidence for the separate default-floor blocker, not a #55 fix or
-a reason to weaken scanning.
+That initial scanner surface was unchanged from then-accepted main. The
+subsequent accepted #129 implementation removes this CLI parse failure while
+preserving literal-byte scanning, recommended rules and fail-closed behavior.
 
 The initial refreshed head `37624f7f8596101ee4c414e60b95ff26729b1396`
 passed 133 credential-free tests on Node 24.20.0 and [hosted Quality](https://github.com/clockgrove/factory-rebuild/actions/runs/36226596693),
@@ -177,9 +177,30 @@ worker timeout. Sequential typecheck, lint, format and notices checks also
 pass. The corrected 151,358,021-byte tarball has SHA-256
 `3f570a15c1c13c5d236173461cfe17b7b3ecd8b8ce407b847e8a074742dc04d0`;
 the initial `983d433a` artifact is retained separately and does not qualify these
-fixes. Hosted Quality, independent corrected-head audit, accepted #129 main
-reconciliation and live provider gates remain open. #130 closure belongs to the
-reviewed merge and integrated-main check, not this local receipt.
+fixes. That exact head's hosted Quality passed, but this historical artifact does
+not qualify the later accepted #129/#130 reconciliation or live provider gates.
+
+The existing draft now normally merges accepted main
+`8735797c84c65abd4537c807be4b5590559a5ea9`, including the accepted #129 scanner
+and #130 stable timeout/terminal-finish fixes. All 68 accepted-main production
+lock entries remain deep-identical and optional SDK versions remain unchanged.
+A new scripted production-worker cleanup-window scenario reproduces a complete
+worker waiting 1002 ms for a configured 1000 ms idle deadline before the #130
+merge; afterward it requires durable completion, terminal usage and prompt
+natural process exit. This is the 23rd scripted optional SDK-boundary case, not
+a claim about actual provider event frequency. Default-install, full/static,
+fresh artifact and independent exact-head gates must identify this new source;
+earlier 133/135-test receipts are not substitutes. Nonblocking #133 remains
+queued, with no out-of-memory or present gate failure claimed.
+
+After correcting the packed test's dev-optional count (the first reconciled run
+passed 144/145), the fresh full suite passes 145/145 on Node24.20.0. Actual
+Node22.0.0 guard, scanner, production-engine and scripted optional-worker checks
+pass 14/14. These scripted SDK replacements do not waive Copilot's real Node
+22.12.0 adapter minimum. A separate normal lifecycle-enabled, engine-strict,
+empty-cache optional-omitted artifact installation remains part of the final
+default-floor packet; npm11 withholding Koffi's full-source install script does
+not prove optional SDK installation or live provider acceptance.
 
 **Next action:** complete and independently audit the refreshed #55 source/package gate. #55/PR #62 remains open/draft for required exact-artifact Codex and Claude live acceptance; the included Copilot adapter also needs live proof unless explicitly split or deferred. Developer login remains deferred and no live attempt is authorized by this source refresh. The historical failed Objective remains immutable and nonqualifying; do not retry or override it. [#26's reconciled dependency and pilot checklist](https://github.com/clockgrove/factory-rebuild/issues/26) distinguishes closed prerequisites, public fixture acceptance and the not-yet-accepted actual Clockgrove W0-001/LFS pilot. Prepare and approve the exact graph/live scope before target projection or execution; do not infer private activation from public source-work approval. #70, #121 and #127 are queued nonblocking leaves, while #7/#8/#9 remain future branches. The [compilation and telemetry postmortem](V0.1.21-POSTMORTEM.md) is supporting evidence, not new acceptance blockers. `AGENTS.md` governs building Factory; packaged skills govern using the installed CLI.
 
@@ -197,8 +218,9 @@ separate evidence in draft PR #62, not optional dependencies of this fix.
 The corrected local Node24 full suite passes all 127 tests; eight focused guard,
 scanner and production-engine checks also pass on actual Node22.0.0. The earlier
 125-test gate preceded the terminal-finish correction and is superseded. Hosted
-exact-head review and integrated-main acceptance remain required; #130 must not
-wait for #55's deferred live-provider gate. No provider policy, dependency,
+exact-head and integrated-main checks subsequently passed at
+`8735797c84c65abd4537c807be4b5590559a5ea9`; #130 is closed independently of
+#55's deferred live-provider gate. No provider policy, dependency,
 release, target or #129 scanner change is included.
 
 **Explicit non-goals now:** managed-agent execution, sandbox providers, Daytona, automatic local/cloud bursting, distributed controllers, media generation providers, and private adopter-specific product work. Factory source must never be its own target. The public fixture files and Objective templates are sufficient to reproduce generic Factory acceptance in a repository the contributor controls.

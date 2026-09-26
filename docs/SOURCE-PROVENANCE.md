@@ -147,6 +147,17 @@ the production optional workers, checking terminal/idle/cleanup failures and
 honest unavailable normalized usage. No archived or private source, real
 provider login, live target, or release claim was added by this refresh.
 
+The final normal merge reconciles accepted #129's pinned Secretlint file API and
+#130's shared terminal guard. Four merge conflicts preserve both accepted-main
+scanner assertions and the package-root harness conformance surface; all 68
+accepted-main production lock entries remain exact, with optional SDK versions
+unchanged. A new scripted detach-window callback exercises the actual Copilot
+worker after it finishes its turn: the pre-merge guard held a completed process
+until idle expiry; the accepted terminal guard must permit prompt natural exit.
+The packed test excludes dev-optional tooling from required default-install
+counts while checking every actual required installed dependency individually.
+No new SDK, provider/auth call, target, archive or private source is used.
+
 Independent review of the refreshed candidate exposed two Copilot boundary
 gaps: ambient/default `gh` discovery could expose the controller publication
 store, and startup identity was checked after prompt dispatch. The correction

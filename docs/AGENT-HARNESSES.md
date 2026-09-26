@@ -144,7 +144,8 @@ The Claude adapter maps that field to the Claude SDK's provider-native `effort`
 option; provider vocabulary does not leak into persisted Factory configuration.
 
 The two optional SDK packages are declared as exact optional package
-dependencies. A normal online npm installation installs them. An installation
+dependencies. A normal online npm installation on a runtime satisfying the
+selected SDK's engine requirements installs them. An installation
 using `--omit=optional` can still use Codex and the generic registered seam, but
 cannot select the Claude or GitHub Copilot built-in adapter.
 
@@ -154,6 +155,12 @@ Factory's supported Node range. Selecting it on Node 22.0–22.11 fails before
 SDK loading, authentication or an attempt; there is no fallback or automatic
 installation. Optional-omitted installations retain the default/root seam at
 Factory's Node floor.
+
+Package-manager lifecycle approval policy is separate from SDK availability:
+the contributor npm11 install withheld Koffi's unapproved native install script.
+That credential-free source gate is not proof of a ready live Copilot runtime.
+Operators must satisfy their package-manager policy and verify the selected
+runtime normally; Factory never approves scripts or falls back automatically.
 
 Building and checking distribution notices requires a full dependency install:
 the generator reads the installed optional SDK license texts. That contributor
