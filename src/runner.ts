@@ -59,6 +59,7 @@ export interface ApplicationServices {
   github: GitHubGateway;
   delivery: DeliveryStrategy;
   contentStore: ContentStore;
+  reportRunStatus?: (message: string) => void;
 }
 
 function configDigest(config: FactoryConfig): string {
@@ -207,7 +208,14 @@ export async function runObjective(
     }
   };
   const active = new Map<string, Promise<void>>();
-  const { driver, github, delivery, contentStore, planningModel } = services;
+  const {
+    driver,
+    github,
+    delivery,
+    contentStore,
+    planningModel,
+    reportRunStatus,
+  } = services;
   let stateForSignal: FactoryState | undefined;
   let cancellationRequested = false;
   const onCancel = () => {
@@ -282,6 +290,9 @@ export async function runObjective(
             config.delivery.kind === "native-stack",
           );
       if (state.finalValidation?.passed) {
+        reportRunStatus?.(
+          "Factory: resuming the existing run from atomic state",
+        );
         await closeObjectiveIssue(state, issue.body, github, saveCurrent);
         return state;
       }
@@ -289,6 +300,7 @@ export async function runObjective(
         throw new Error(
           "Objective was cancelled; use explicit retry or operator direction",
         );
+      reportRunStatus?.("Factory: resuming the existing run from atomic state");
     } else {
       const objectivesRoot = join(root, "objectives");
       if (existsSync(objectivesRoot)) {
@@ -309,9 +321,15 @@ export async function runObjective(
           metadata: { baseSha, scopeId: planningScopeId },
         },
         async () => {
-          const candidate =
-            acceptedPlan ??
-            (await compilePlan(
+          let candidate: PlanCandidate;
+          if (acceptedPlan) {
+            reportRunStatus?.("Factory: activating the accepted plan");
+            candidate = acceptedPlan;
+          } else {
+            reportRunStatus?.(
+              "Factory: compiling and independently reviewing a fresh plan",
+            );
+            candidate = await compilePlan(
               objective,
               issue.body,
               baseSha,
@@ -319,7 +337,8 @@ export async function runObjective(
               planningModel,
               installationConfigDigest,
               diagnostics.modelObserver({ scopeId: planningScopeId }),
-            ));
+            );
+          }
           verifyPlanCandidate(
             candidate,
             objective,

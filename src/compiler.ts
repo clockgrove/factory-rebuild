@@ -134,7 +134,14 @@ export const graphSchema = {
           },
           dependencies: { type: "array", items: { type: "string" } },
           ownedPaths: { type: "array", items: { type: "string" } },
-          resources: { type: "array", items: { type: "string" } },
+          resources: {
+            type: "array",
+            items: {
+              type: "string",
+              description:
+                "Exact, whitespace-sensitive resource identity. Reproduce source-declared names exactly; avoid accidental leading or trailing whitespace in planner-authored names.",
+            },
+          },
           validation: {
             type: "array",
             items: {
@@ -632,7 +639,7 @@ export class CodexPlanningModel implements PlanningModel {
     const prompt = `Compile this human Objective into the smallest complete dependency-aware Work Item graph. Use parallel lanes only when ownership and resources allow them. Return the requested JSON only. Use exact supplied base SHA and Objective number. ${citationInstruction} Give each item explicit non-goals. Choose observable acceptance and owned paths. For every validation command, set provenance to base-observed or source-declared and name its exact source path. A source-declared command must be an exact command line in a supplied source (OBJECTIVE or a pinned source). A base-observed command must identify a tracked file in the exact base containing that command as an exact line, or a package.json script invoked by npm test/npm run NAME/pnpm test/pnpm check/pnpm run NAME. The exact source-declared command pnpm install --frozen-lockfile --ignore-scripts may precede pnpm checks in a fresh validation worktree when supplied; plain install is unsupported. Do not invent commands or use a vague source. For each source asset, bind its path, role, media type, visibility, and kind: repository for a pinned checkout path, local for an explicitly approved absolute private file, or github-attachment for a recognized URL literally present in the Objective. Use an explicitly declared media type when available, otherwise application/octet-stream; never infer format from an extension. List expected output roles for media work; use empty arrays for ordinary work. Set minimumAssetSets from the Objective candidate count, or 1 for unspecified media and 0 for ordinary work. List requiredLfsRoles only when a supplied source requires them; the target repository .gitattributes is authoritative. The supplied Factory controller capabilities are immutable supervisor guarantees enforced outside target Work Items and target Final commands. Do not create a target Work Item or invent target command authority solely to reimplement an Objective obligation that an exact supplied guarantee covers. Do not use a guarantee for an obligation it does not cover. Do not add deployment, paid services, providers, recovery, or later scope.\n\nObjective:\n${request.objective}\n\nBase: ${request.baseSha}\n\nFactory controller capabilities digest: ${request.controllerCapabilitiesDigest}\nFactory controller capabilities:\n${JSON.stringify(request.controllerCapabilities)}\n\nSources:\n${request.sources.map((s) => `--- ${s.path} ---\n${s.content}`).join("\n")}`;
     const result = await this.runStructured<unknown>({
       selection: this.planner,
-      prompt,
+      prompt: `${prompt}\n\nResource identity guidance: Treat every resource name as an exact, whitespace-sensitive scheduling identity. Reproduce any source-declared resource name exactly. For a planner-authored resource name, avoid accidental leading or trailing whitespace.`,
       schema: useIndexedCitations
         ? codexGraphSchemaForSources(request.sources)
         : request.schema,

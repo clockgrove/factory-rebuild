@@ -433,6 +433,23 @@ test("Codex adapter passes phase selections to every planning and review thread"
       /exact bare Markdown heading text without # markers/,
     );
     assert.match(
+      captured[0].prompt,
+      /resource name as an exact, whitespace-sensitive scheduling identity/,
+    );
+    assert.match(
+      captured[0].prompt,
+      /Reproduce any source-declared resource name exactly/,
+    );
+    assert.match(
+      captured[0].prompt,
+      /planner-authored resource name, avoid accidental leading or trailing whitespace/,
+    );
+    assert.match(
+      captured[0].outputSchema.properties.items.items.properties.resources.items
+        .description,
+      /Exact, whitespace-sensitive resource identity/,
+    );
+    assert.match(
       captured[1].prompt,
       /set source to exactly one value from this supplied-path JSON list/,
     );
