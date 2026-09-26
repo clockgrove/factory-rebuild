@@ -239,14 +239,20 @@ export function graphSchemaForSources(
       };
     };
   };
+  const headingsByPath = new Map<string, string[]>();
+  for (const { path, heading } of citationChoices(sources)) {
+    const headings = headingsByPath.get(path) ?? [];
+    headings.push(heading);
+    headingsByPath.set(path, headings);
+  }
   schema.properties.items.items.properties.citations.items = {
-    anyOf: citationChoices(sources).map(({ path, heading }) => ({
+    anyOf: [...headingsByPath].map(([path, headings]) => ({
       type: "object",
       properties: {
         path: { type: "string", enum: [path] },
         heading: {
           type: "string",
-          enum: [heading],
+          enum: headings,
           description:
             "Exact bare Markdown heading text without # markers, or the empty string for the whole source.",
         },

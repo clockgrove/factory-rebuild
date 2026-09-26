@@ -173,37 +173,28 @@ test("compiler schema binds citations to exact supplied path and bare heading pa
     const choices =
       requests[0].schema.properties.items.items.properties.citations.items
         .anyOf;
-    const pairs = choices.map((choice) => ({
-      path: choice.properties.path.enum[0],
-      heading: choice.properties.heading.enum[0],
-    }));
-    assert.ok(
-      pairs.some(
+    const allows = (path, heading) =>
+      choices.some(
         (choice) =>
-          choice.path === "OBJECTIVE" && choice.heading === "Acceptance",
-      ),
-    );
-    assert.ok(
-      pairs.some(
-        (choice) =>
-          choice.path === "docs/plan.md" && choice.heading === "Wave 0",
-      ),
-    );
-    assert.ok(
-      pairs.some(
-        (choice) => choice.path === "docs/plain.txt" && choice.heading === "",
-      ),
-    );
+          choice.properties.path.enum[0] === path &&
+          choice.properties.heading.enum.includes(heading),
+      );
+    assert.ok(allows("OBJECTIVE", "Acceptance"));
+    assert.ok(allows("docs/plan.md", "Wave 0"));
+    assert.ok(allows("docs/plain.txt", ""));
+    assert.equal(allows("docs/plan.md", "Acceptance"), false);
     assert.equal(
-      pairs.some(
-        (choice) =>
-          choice.path === "docs/plan.md" && choice.heading === "Acceptance",
+      choices.some((choice) =>
+        choice.properties.heading.enum.some((heading) =>
+          heading.startsWith("#"),
+        ),
       ),
       false,
     );
     assert.equal(
-      pairs.some((choice) => choice.heading.startsWith("#")),
-      false,
+      choices.length,
+      new Set(requests[0].sources.map((source) => source.path)).size,
+      "schema must add one object branch per source path, not per heading",
     );
   });
 });

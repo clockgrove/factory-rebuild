@@ -382,20 +382,23 @@ test("Codex adapter passes phase selections to every planning and review thread"
       compileCitationChoices.some(
         (choice) =>
           choice.properties.path.enum[0] === "OBJECTIVE" &&
-          choice.properties.heading.enum[0] === "Acceptance",
+          choice.properties.heading.enum.includes("Acceptance"),
       ),
     );
     assert.ok(
       compileCitationChoices.some(
         (choice) =>
           choice.properties.path.enum[0] === "AGENTS.md" &&
-          choice.properties.heading.enum[0] ===
+          choice.properties.heading.enum.includes(
             "Disposable target instructions",
+          ),
       ),
     );
     assert.equal(
       compileCitationChoices.some((choice) =>
-        choice.properties.heading.enum[0].startsWith("#"),
+        choice.properties.heading.enum.some((heading) =>
+          heading.startsWith("#"),
+        ),
       ),
       false,
     );
