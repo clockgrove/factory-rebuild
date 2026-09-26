@@ -125,9 +125,10 @@ export function resolveLocalExecutable(
   executable: string,
   cwd: string,
   env: NodeJS.ProcessEnv,
+  shell: string,
 ) {
   return spawnSync(
-    "sh",
+    shell,
     [
       ...localValidationShellArguments('command -v "$1"'),
       "factory-preflight",

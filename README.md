@@ -137,6 +137,11 @@ Configuration lives under `$XDG_CONFIG_HOME/clockgrove-factory` (or `~/.config/c
 
 ## Local host-tool preflight
 
+Before running any lookup, preflight inspects the selected `sh` on the effective
+PATH using filesystem checks. Target-owned shells (including symlink aliases)
+and unresolved relative precedence remain `unverified` without execution or a
+fallback shell; provide an approved host shell to qualify that toolchain.
+
 This describes current source; immutable public v0.1.21 bytes are unchanged.
 
 Factory's package supplies Factory, not the target's package manager or toolchain.

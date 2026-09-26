@@ -279,11 +279,17 @@ test("fixed lookups use supplied environment, do not execute target commands, an
     const tools = hostTools(root);
     process.env.PATH = `${tools.bin}:/usr/bin:/bin`;
     assert.notEqual(
-      resolveLocalExecutable("pnpm", root, { PATH: "/usr/bin:/bin" }).status,
+      resolveLocalExecutable("pnpm", root, { PATH: "/usr/bin:/bin" }, "/bin/sh")
+        .status,
       0,
     );
     assert.equal(
-      resolveLocalExecutable("pnpm", root, { PATH: process.env.PATH }).status,
+      resolveLocalExecutable(
+        "pnpm",
+        root,
+        { PATH: process.env.PATH },
+        "/bin/sh",
+      ).status,
       0,
     );
     assert.deepEqual(localValidationShellArguments("literal command"), [
@@ -294,6 +300,8 @@ test("fixed lookups use supplied environment, do not execute target commands, an
     const checks = [
       `test "$(touch ${marker})" = x`,
       'printf "quoted && not_an_executable"',
+      "printf ok # comment; nonexistent_preflight_tool",
+      "printf ok & nonexistent_preflight_tool",
       '"$DYNAMIC_TOOL" --do-not-execute',
       "if false; then no_such_tool; fi",
     ];
@@ -377,6 +385,21 @@ test("target version commands, relative PATH and unsupported policies remain unv
     mkdirSync(nested);
     run({ ...target, checkout: nested });
     assert.equal(existsSync(marker), false);
+    const shellMarker = join(root, "target-shell-hook-ran");
+    writeFileSync(
+      join(targetBin, "sh"),
+      `#!/bin/sh\nprintf hook > '${shellMarker}'\n`,
+      { mode: 0o755 },
+    );
+    for (const checkout of [target.checkout, alias, nested]) {
+      const observations = run({ ...target, checkout });
+      assert.ok(!observations.some((entry) => entry.status === "ready"));
+    }
+    const binAlias = join(root, "target-bin-alias");
+    symlinkSync(targetBin, binAlias, "dir");
+    process.env.PATH = `${binAlias}:/usr/bin:/bin`;
+    run(target);
+    assert.equal(existsSync(shellMarker), false);
     process.env.PATH = `${tools.bin}:.:/usr/bin:/bin`;
     run(target);
     assert.equal(existsSync(tools.calls), false);

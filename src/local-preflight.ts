@@ -27,7 +27,8 @@ function literalEntrypoints(command: string): {
 } {
   const first = (value: string) =>
     value.trim().match(/^([A-Za-z_][A-Za-z0-9_.+-]*|\[|:)(?:\s|$)/)?.[1];
-  const complex = /["'`$\\(){}<>]/.test(command);
+  const background = /(^|[^&])&([^&]|$)/.test(command);
+  const complex = /["'`$\\(){}<>#]/.test(command) || background;
   const segments = complex ? [command] : command.split(/&&|\|\||[;|\n]/);
   const names = segments
     .map(first)
@@ -53,7 +54,8 @@ function literalEntrypoints(command: string): {
   // A literal outer shell/env wrapper does not qualify its nested commands.
   const partial =
     names.length !== segments.length ||
-    /[`$\\(){}<>]/.test(command) ||
+    /[`$\\(){}<>#]/.test(command) ||
+    background ||
     (complex && /[;|&\n]/.test(command)) ||
     names.some((name) =>
       [
@@ -126,6 +128,35 @@ export function preflightLocalExecutables(input: {
     })),
   ];
   let failure: string | undefined;
+  // Inspect the effective shell without executing it. Relative precedence cannot
+  // be qualified against a future worktree, and target-owned shells are not host
+  // lookup tools. Never fall back to a different shell behind the operator's PATH.
+  let shell: string | undefined;
+  let shellStatus: "missing" | "unverified" = "missing";
+  let shellDetail =
+    "Provide an executable host sh on the effective validation PATH; Factory does not substitute shells.";
+  for (const directory of (env.PATH ?? "/usr/bin:/bin").split(":")) {
+    if (!isAbsolute(directory)) {
+      shellStatus = "unverified";
+      shellDetail =
+        "Relative PATH precedence depends on the future validation worktree; no lookup shell was executed.";
+      break;
+    }
+    const candidate = resolve(directory, "sh");
+    try {
+      accessSync(candidate, constants.X_OK);
+      if (!statSync(candidate).isFile()) continue;
+      const physical = realpathSync(candidate);
+      if (candidate.startsWith(targetRoot) || physical.startsWith(targetRoot)) {
+        shellStatus = "unverified";
+        shellDetail =
+          "The selected sh belongs to the target checkout; no target-controlled lookup shell was executed. Provide a host shell to qualify this toolchain.";
+      } else shell = candidate;
+      break;
+    } catch {
+      // Match PATH search by continuing past absent/non-executable candidates.
+    }
+  }
   for (const check of checks) {
     const report = (
       executable: string,
@@ -156,7 +187,16 @@ export function preflightLocalExecutables(input: {
         "Only reliably literal host entrypoints are checked; inspect this command's effective toolchain separately.",
       );
     for (const executable of new Set(["sh", ...names])) {
-      const lookup = resolveLocalExecutable(executable, input.privateRoot, env);
+      if (!shell) {
+        report(executable, shellStatus, shellDetail);
+        continue;
+      }
+      const lookup = resolveLocalExecutable(
+        executable,
+        input.privateRoot,
+        env,
+        shell,
+      );
       if (lookup.error) {
         report(
           "sh",

@@ -88,6 +88,8 @@ This is not a retry of a previously failed run, and source authorization and
 later exact-tree script/hook checks are unchanged.
 
 Read `unverified` preflight observations explicitly: dynamic or nested commands,
+target-owned lookup shells (including symlink aliases), unresolved shell PATH
+precedence,
 quoted compounds, relative PATH entries, generated target executables and
 unsupported version policies require separate operator inspection. Preflight
 does not execute their commands or bodies. Its version probe runs only a safely
