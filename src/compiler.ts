@@ -212,12 +212,16 @@ function markdownHeadings(content: string): string[] {
 }
 
 function citationChoices(
-  sources: { path: string; content: string }[],
+  sources: { path: string; content: string; heading?: string }[],
 ): CitationChoice[] {
   const choices: CitationChoice[] = [];
   const identities = new Set<string>();
   for (const source of sources) {
-    for (const heading of ["", ...markdownHeadings(source.content)]) {
+    const headings = [
+      ...(source.heading === undefined ? [""] : []),
+      ...markdownHeadings(source.content),
+    ];
+    for (const heading of headings) {
       const identity = JSON.stringify([source.path, heading]);
       if (identities.has(identity)) continue;
       identities.add(identity);
@@ -228,7 +232,7 @@ function citationChoices(
 }
 
 export function graphSchemaForSources(
-  sources: { path: string; content: string }[],
+  sources: { path: string; content: string; heading?: string }[],
 ): unknown {
   const schema = structuredClone(graphSchema) as {
     properties: {
@@ -1125,7 +1129,7 @@ function boundedDiagnosticText(value: string): string {
 
 function boundedAllowedHeadings(sources: PlanningSource[]): string {
   const headings = [
-    ...new Set(sources.flatMap((source) => markdownHeadings(source.content))),
+    ...new Set(citationChoices(sources).map((choice) => choice.heading)),
   ];
   const shown = headings
     .slice(0, MAX_CITATION_DIAGNOSTIC_HEADINGS)
@@ -1144,14 +1148,12 @@ function validateCitations(graph: WorkGraph, sources: PlanningSource[]): void {
         throw new Error(
           `Work Item ${item.id} cites unavailable source ${citation.path}`,
         );
+      const heading = citation.heading ?? "";
       if (
-        citation.heading &&
-        !matching.some((source) =>
-          markdownHeadings(source.content).includes(citation.heading!),
-        )
+        !citationChoices(matching).some((choice) => choice.heading === heading)
       )
         throw new Error(
-          `Work Item ${item.id} cites missing heading ${boundedDiagnosticText(citation.heading)} in ${boundedDiagnosticText(citation.path)}; expected exact bare heading ${boundedAllowedHeadings(matching)}`,
+          `Work Item ${item.id} cites missing heading ${citation.heading === undefined ? "<missing>" : citation.heading === "" ? '""' : boundedDiagnosticText(citation.heading)} in ${boundedDiagnosticText(citation.path)}; expected exact bare heading ${boundedAllowedHeadings(matching)}`,
         );
     }
   }

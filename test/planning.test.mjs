@@ -181,6 +181,11 @@ test("compiler schema binds citations to exact supplied path and bare heading pa
       );
     assert.ok(allows("OBJECTIVE", "Acceptance"));
     assert.ok(allows("docs/plan.md", "Wave 0"));
+    assert.equal(
+      allows("docs/plan.md", ""),
+      false,
+      "a selected heading packet must not grant whole-source authority",
+    );
     assert.ok(allows("docs/plain.txt", ""));
     assert.equal(allows("docs/plan.md", "Acceptance"), false);
     assert.equal(
@@ -195,6 +200,29 @@ test("compiler schema binds citations to exact supplied path and bare heading pa
       choices.length,
       new Set(requests[0].sources.map((source) => source.path)).size,
       "schema must add one object branch per source path, not per heading",
+    );
+  });
+});
+
+test("compiler rejects a whole-source citation when only one heading was supplied", async () => {
+  await fixture("citation-selected-heading", async (root) => {
+    const target = createTarget(root, {
+      "docs/plan.md":
+        "# Plan\n\n## Wave 0\nCanonical obligation\n\n## Wave 1\nNot supplied\n",
+    });
+    await assert.rejects(
+      compilePlan(1, body, target.baseSha, target.checkout, {
+        async generateStructured() {
+          return graph(target.baseSha, {
+            path: "docs/plan.md",
+            heading: "",
+          });
+        },
+        async reviewGraph() {
+          throw new Error("review should not run");
+        },
+      }),
+      /cites missing heading "" in docs\/plan\.md; expected exact bare heading \["Wave 0"\]/,
     );
   });
 });
