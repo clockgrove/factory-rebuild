@@ -17,6 +17,7 @@ export class ProviderTurnIncompleteError extends Error {
 export class ProviderTurnGuard {
   private readonly controller = new AbortController();
   private timer: NodeJS.Timeout | undefined;
+  private ended = false;
   private timeoutError: ProviderTurnTimeoutError | undefined;
   private readonly timeout: Promise<never>;
   private rejectTimeout: (error: ProviderTurnTimeoutError) => void = () =>
@@ -36,7 +37,7 @@ export class ProviderTurnGuard {
   }
 
   progress(): void {
-    if (this.controller.signal.aborted) return;
+    if (this.ended || this.controller.signal.aborted) return;
     if (this.timer) clearTimeout(this.timer);
     this.reset();
   }
@@ -50,6 +51,7 @@ export class ProviderTurnGuard {
   }
 
   finish(): void {
+    this.ended = true;
     if (this.timer) clearTimeout(this.timer);
     this.timer = undefined;
   }

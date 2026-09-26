@@ -130,12 +130,17 @@ These later source changes do not alter the already published v0.1.21 bytes or r
 **Provider idle subscription correction (#130):** Callback-driven asynchronous
 progress exposed an accepted-main guard bug: replacing its timeout promise left
 an already active wait subscribed to a cancelled deadline. The focused correction
-retains that promise and resets only the existing idle timer. Four standalone,
+retains that promise and resets only the existing idle timer. Six standalone,
 credential-free regressions cover progress then stall, shared timeout/AbortSignal
-identity, original provider failure, and successful completion/finish. Default
+identity, original provider failure, and successful completion/finish, including
+late cleanup callbacks that must not rearm a finished timer, abort a completed
+turn, or hold a completed process alive. Finish is terminal and idempotent. Default
 Codex stream, capacity and cleanup behavior remains under the full existing
 suite. Scripted optional-worker durable failure and typed terminal usage are
-separate evidence in draft PR #62, not optional dependencies of this fix. Hosted
+separate evidence in draft PR #62, not optional dependencies of this fix.
+The corrected local Node24 full suite passes all 127 tests; eight focused guard,
+scanner and production-engine checks also pass on actual Node22.0.0. The earlier
+125-test gate preceded the terminal-finish correction and is superseded. Hosted
 exact-head review and integrated-main acceptance remain required; #130 must not
 wait for #55's deferred live-provider gate. No provider policy, dependency,
 release, target or #129 scanner change is included.
