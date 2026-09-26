@@ -2,6 +2,12 @@
 
 This file records public releases of Factory. See [BUILD-STATUS.md](docs/BUILD-STATUS.md) for development acceptance evidence.
 
+## 0.1.21 — 2026-09-25
+
+- Bind automatic review to the immutable worker/controller Git boundary for selected media: the retained worker result changes no selected destination, and Factory's exact child commit changes every selected destination and no others.
+- Supply the same bounded materialization evidence to regular and native Work Item review and final Objective review without adding state fields, journals, or diagnostic authority.
+- Add a strict exact two-item same-path ordinary-blob-to-LFS release rehearsal covering automatic Work Item review, native delivery, LFS upload and hydration, final review, and Objective closure.
+
 ## 0.1.20 — 2026-09-25
 
 - Constrain planner citations to exact supplied source paths and bare Markdown heading names in the structured-output schema and production prompt.
