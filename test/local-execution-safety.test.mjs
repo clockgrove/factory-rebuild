@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import {
+  chmodSync,
   mkdtempSync,
   mkdirSync,
   rmSync,
+  statSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -11,7 +13,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { LocalContentStore } from "../dist/content/local.js";
-import { LocalExecutionDriver } from "../dist/execution/local.js";
+import {
+  codexWorkerEnvironment,
+  LocalExecutionDriver,
+} from "../dist/execution/local.js";
 import { sanitizedWorkerEnvironment } from "../dist/process.js";
 
 function git(checkout, ...args) {
@@ -372,5 +377,67 @@ test("worker receives only declared ambient values and an empty GitHub credentia
     assert.equal(declared.GH_TOKEN, undefined);
   } finally {
     process.env = original;
+  }
+});
+
+test("Codex worker gets an attempt-private user-owned 0700 temp root", () => {
+  const root = mkdtempSync(join(tmpdir(), "factory-provider-temp-"));
+  try {
+    const harnessRoot = join(root, "harness");
+    const credentials = join(root, "empty-gh-config");
+    mkdirSync(credentials, { mode: 0o700 });
+    const environment = codexWorkerEnvironment(
+      harnessRoot,
+      "../../untrusted-attempt-id",
+      credentials,
+    );
+    assert.equal(environment.GH_CONFIG_DIR, credentials);
+    assert.equal(environment.TMPDIR.startsWith(`${harnessRoot}/`), true);
+    assert.match(environment.TMPDIR, /\/[a-f0-9]{64}\.provider-tmp$/);
+    assert.equal(statSync(harnessRoot).mode & 0o777, 0o700);
+    assert.equal(statSync(environment.TMPDIR).mode & 0o777, 0o700);
+    assert.equal(statSync(environment.TMPDIR).uid, process.getuid());
+
+    const existing = codexWorkerEnvironment(
+      harnessRoot,
+      "../../untrusted-attempt-id",
+      credentials,
+    );
+    assert.equal(existing.TMPDIR, environment.TMPDIR);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("Codex worker rejects unsafe existing provider temp roots", () => {
+  const root = mkdtempSync(join(tmpdir(), "factory-provider-temp-unsafe-"));
+  try {
+    const harnessRoot = join(root, "harness");
+    const credentials = join(root, "empty-gh-config");
+    const outside = join(root, "outside");
+    mkdirSync(credentials, { mode: 0o700 });
+    mkdirSync(outside, { mode: 0o700 });
+    const first = codexWorkerEnvironment(harnessRoot, "attempt", credentials);
+    chmodSync(first.TMPDIR, 0o755);
+    assert.throws(
+      () => codexWorkerEnvironment(harnessRoot, "attempt", credentials),
+      /Codex provider temp root must be a user-owned 0700 directory/,
+    );
+
+    rmSync(first.TMPDIR, { recursive: true });
+    symlinkSync(outside, first.TMPDIR);
+    assert.throws(
+      () => codexWorkerEnvironment(harnessRoot, "attempt", credentials),
+      /Codex provider temp root must be a user-owned 0700 directory/,
+    );
+
+    rmSync(first.TMPDIR);
+    writeFileSync(first.TMPDIR, "not a directory\n", { mode: 0o600 });
+    assert.throws(
+      () => codexWorkerEnvironment(harnessRoot, "attempt", credentials),
+      /Codex provider temp root must be a user-owned 0700 directory/,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
   }
 });

@@ -49,6 +49,43 @@ type Active = {
   failure?: string;
 };
 
+function requirePrivateDirectory(path: string, label: string): string {
+  try {
+    mkdirSync(path, { mode: 0o700 });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+  }
+  const entry = lstatSync(path);
+  const uid = typeof process.getuid === "function" ? process.getuid() : null;
+  if (
+    !entry.isDirectory() ||
+    realpathSync(path) !== resolve(path) ||
+    uid === null ||
+    entry.uid !== uid ||
+    (entry.mode & 0o777) !== 0o700
+  )
+    throw new Error(`${label} must be a user-owned 0700 directory`);
+  return path;
+}
+
+export function codexWorkerEnvironment(
+  harnessRoot: string,
+  attemptIdentity: string,
+  credentialDirectory: string,
+  allowedSecretNames: string[] = [],
+): Record<string, string> {
+  requirePrivateDirectory(harnessRoot, "Codex harness root");
+  const attemptKey = createHash("sha256").update(attemptIdentity).digest("hex");
+  const providerTemp = requirePrivateDirectory(
+    join(harnessRoot, `${attemptKey}.provider-tmp`),
+    "Codex provider temp root",
+  );
+  return {
+    ...sanitizedWorkerEnvironment(credentialDirectory, allowedSecretNames),
+    TMPDIR: providerTemp,
+  };
+}
+
 interface WorkerHandleData {
   pid: number;
   startTime: string;
@@ -69,7 +106,12 @@ export class CodexHarness implements AgentHarness {
   async start(request: HarnessRequest): Promise<HarnessHandle> {
     const identity = request.attemptId ?? randomUUID();
     const root = join(dirname(this.credentialDirectory), "harness");
-    mkdirSync(root, { recursive: true, mode: 0o700 });
+    const environment = codexWorkerEnvironment(
+      root,
+      identity,
+      this.credentialDirectory,
+      this.allowedSecretNames,
+    );
     const requestPath = join(root, `${identity}.request.json`);
     const resultPath = join(root, `${identity}.result.json`);
     const logPath = join(root, `${identity}.log`);
@@ -93,10 +135,7 @@ export class CodexHarness implements AgentHarness {
       const child = spawn(process.execPath, [worker, requestPath, resultPath], {
         detached: true,
         stdio: ["ignore", log, log],
-        env: sanitizedWorkerEnvironment(
-          this.credentialDirectory,
-          this.allowedSecretNames,
-        ),
+        env: environment,
       });
       if (!child.pid) throw new Error("Failed to launch Codex harness worker");
       pid = child.pid;
