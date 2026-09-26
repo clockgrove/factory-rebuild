@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
@@ -68,6 +68,16 @@ test("isolated scanner preserves literal files, binary detection, masking and ex
       assert.equal(result.stdout, "");
       assert.equal(result.stderr, "Secretlint scan unavailable\n");
     }
+    const isolated = join(root, "missing-dependency.mjs");
+    copyFileSync(scanner, isolated);
+    const unavailable = spawnSync(
+      process.execPath,
+      [isolated, clean, recommended],
+      { encoding: "utf8" },
+    );
+    assert.equal(unavailable.status, 2);
+    assert.equal(unavailable.stdout, "");
+    assert.equal(unavailable.stderr, "Secretlint scan unavailable\n");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

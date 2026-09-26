@@ -1,5 +1,4 @@
 import { isAbsolute } from "node:path";
-import { createEngine } from "@secretlint/node";
 import type { SecretLintEngineOptionsConfigFileJSON } from "@secretlint/node";
 
 /** Private child entry: no CLI config discovery, globs or target ignore files. */
@@ -7,6 +6,8 @@ async function main(): Promise<void> {
   const [source, descriptor, ...extra] = process.argv.slice(2);
   if (!source || !isAbsolute(source) || !descriptor || extra.length)
     throw new Error("Invalid scanner request");
+  // Keep dependency-load failures in the same fatal exit path as scan failures.
+  const { createEngine } = await import("@secretlint/node");
   const configFileJSON = JSON.parse(
     descriptor,
   ) as SecretLintEngineOptionsConfigFileJSON["configFileJSON"];
