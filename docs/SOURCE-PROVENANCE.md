@@ -19,6 +19,12 @@ provider authentication or live target was inspected or used. The optional-worke
 callback regression remains separately evidenced in draft PR #62; no harness or
 dependency change is included here.
 
+Independent exact-source, full/static, actual Node 22.0 and scripted cleanup
+checks accepted PR #132; integrated-main Quality passed at
+`8735797c84c65abd4537c807be4b5590559a5ea9`. The late shared-promise retention
+finding was independently reproduced with synthetic buffers and queued as
+nonblocking #133; no OOM, private-target or new live-provider claim follows.
+
 ## Repository quality tooling (#105)
 
 Issue #105, the repository's effective ESLint/TypeScript-ESLint and Prettier
@@ -159,3 +165,10 @@ Media brief guidance and actual worker packet regressions preserve accepted requ
 ## Default Node 22.0 scanner compatibility (#129)
 
 Issue #129, the accepted changed-file guard, installed Secretlint 13.0.5 public Node client declarations and implementation, and the complete production dependency metadata supplied this correction. No archived implementation, private adopter content or provider execution was inspected or copied. The Secretlint CLI's unused configuration-creation dependencies excluded early Node 22 releases, and its negative-option parsing rejected Factory's scanner arguments on actual Node 22.0. The clean child entry instead invokes the same-version supported `@secretlint/node` file API with the unchanged recommended preset, explicit configuration, compact masked output and literal files. The parent retains isolated synchronous execution, sanitized environment, restricted report files, staged and working-byte checks, and fail-closed rule/path-only reporting. It adds no timeout policy, config discovery, ignored-file exception, scanner downgrade, lifecycle authority or global Node-floor increase. Source and packed security regressions are separate from live-provider, published-release and private-adopter acceptance.
+
+PR #131's reviewed source and independently reproduced package passed a normal
+offline Node 22.0/npm 10.5.1 installation with lifecycle scripts enabled,
+installed clean/refused/fatal scanner checks and exact required-dependency
+verification. Integrated-main Quality passed at
+`57abc0a43b605148a6b3ec191bcedb34c7cf9bc2`; #129 is closed. No immutable public
+v0.1.21 release bytes were rewritten or newly qualified by these source checks.
