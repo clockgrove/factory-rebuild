@@ -347,7 +347,10 @@ export async function runRegularGraph(args: {
     }
     if (work.step !== "execute" || !work.execution || !work.baseSha) {
       throw new Error(
-        `Work Item ${item.id} has ambiguous active state at ${work.step ?? "unknown"}; operator direction required`,
+        `Work Item ${item.id} has ambiguous active state at ${work.step ?? "unknown"}; operator direction required` +
+          (work.step === "deliver"
+            ? "; interrupted regular delivery cannot be resumed automatically. Preserve the original snapshot and exact remote branch/PR evidence; do not retry, edit state, or use a result decision to bypass this refusal"
+            : ""),
       );
     }
     const promise = execute(item, work.baseSha, work.execution).finally(() => {
