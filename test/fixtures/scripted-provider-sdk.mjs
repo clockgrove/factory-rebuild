@@ -120,7 +120,27 @@ export class CopilotClient {
         return { data: { content: "scripted completion" } };
       },
       async abort() {},
-      async disconnect() {},
+      async disconnect() {
+        if (scenario !== "cleanup-progress") return;
+        // Match the SDK boundary: handlers remain registered until detach RPC
+        // resolves, so a notification can arrive after the worker ends its turn.
+        await new Promise((resolve) => {
+          setTimeout(() => {
+            const cleanupProgressAt = performance.now();
+            event("session.shutdown", { currentModel: options.model });
+            process.once("beforeExit", () => {
+              writeFileSync(
+                process.env.FACTORY_SCRIPTED_PROVIDER_CLEANUP,
+                JSON.stringify({
+                  callbacks: 1,
+                  elapsed: performance.now() - cleanupProgressAt,
+                }),
+              );
+            });
+            resolve();
+          }, 10);
+        });
+      },
     };
   }
   async deleteSession() {}

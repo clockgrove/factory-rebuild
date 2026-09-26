@@ -94,6 +94,7 @@ test("optional production workers bound turns, require terminals and report unav
               "startup-async",
               "startup-idle",
               "progress-timeout",
+              "cleanup-progress",
             ]
           : []),
       ]) {
@@ -101,11 +102,17 @@ test("optional production workers bound turns, require terminals and report unav
         const input = join(root, `${attemptId}.request.json`);
         const result = join(root, `${attemptId}.result.json`);
         const sent = join(root, `${attemptId}.sent`);
-        const complete = ["complete", "startup-async"].includes(scenario);
+        const cleanup = join(root, `${attemptId}.cleanup.json`);
+        const complete = [
+          "complete",
+          "startup-async",
+          "cleanup-progress",
+        ].includes(scenario);
         writeFileSync(
           input,
           JSON.stringify({
-            providerTurnIdleTimeoutMs: 100,
+            providerTurnIdleTimeoutMs:
+              scenario === "cleanup-progress" ? 1_000 : 100,
             request: {
               attemptId,
               worktree: root,
@@ -155,6 +162,7 @@ test("optional production workers bound turns, require terminals and report unav
               PATH: process.env.PATH,
               FACTORY_SCRIPTED_PROVIDER_SCENARIO: scenario,
               FACTORY_SCRIPTED_PROVIDER_SENT: sent,
+              FACTORY_SCRIPTED_PROVIDER_CLEANUP: cleanup,
             },
             encoding: "utf8",
             timeout: 5_000,
@@ -168,6 +176,14 @@ test("optional production workers bound turns, require terminals and report unav
           `${attemptId}: ${child.stderr}`,
         );
         assert.equal(child.status, complete ? 0 : 1, attemptId);
+        if (scenario === "cleanup-progress") {
+          const exit = JSON.parse(readFileSync(cleanup, "utf8"));
+          assert.equal(exit.callbacks, 1);
+          assert.ok(
+            exit.elapsed < 500,
+            `completed worker must exit without waiting for its 1000 ms idle deadline; cleanup-to-exit=${exit.elapsed} ms`,
+          );
+        }
         if (provider === "github-copilot")
           assert.equal(
             existsSync(sent),
