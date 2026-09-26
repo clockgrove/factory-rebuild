@@ -209,10 +209,10 @@ export async function runCodexWorker(
     turn = new ProviderTurnGuard(
       providerTurnIdleTimeoutMs ?? DEFAULT_PROVIDER_TURN_IDLE_TIMEOUT_MS,
     );
+    observeUsage("started");
     const streamed = await turn.race(
       thread.runStreamed(prompt, { signal: turn.signal }),
     );
-    observeUsage("started");
     let finalResponse = "";
     let turnCompleted = false;
     const commandOffsets = new Map<string, number>();

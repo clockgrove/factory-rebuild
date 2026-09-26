@@ -20,6 +20,7 @@ import {
 } from "../dist/controller-capabilities.js";
 import { codexWorkerInput } from "../dist/execution/local.js";
 import { runCodexWorker } from "../dist/execution/worker.js";
+import { summarizeDiagnosticUsage } from "../dist/diagnostics.js";
 import * as publicModule from "../dist/index.js";
 import { createTarget, factoryConfig } from "./support/integration-fixture.mjs";
 
@@ -1690,6 +1691,7 @@ test("Codex worker closes completed streams and durably fails nonterminal stream
     return {
       id: `worker-${scenario}`,
       async runStreamed() {
+        if (scenario === "creation-stall") await new Promise(() => {});
         async function* events() {
           try {
             yield {
@@ -1743,6 +1745,7 @@ test("Codex worker closes completed streams and durably fails nonterminal stream
       "no-usage",
       "eof",
       "silent",
+      "creation-stall",
       "validation-fail",
     ]) {
       const inputPath = join(root, `${scenario}.request.json`);
@@ -1779,7 +1782,22 @@ test("Codex worker closes completed streams and durably fails nonterminal stream
       );
       if (scenario === "validation-fail")
         writeFileSync(join(root, ".factory-assets.json"), "not-json");
-      const completed = await runCodexWorker(inputPath, resultPath);
+      const pending = runCodexWorker(inputPath, resultPath);
+      if (scenario === "creation-stall") {
+        // Inspect while stream creation is still pending, before timeout.
+        const started = JSON.parse(
+          readFileSync(
+            resultPath.replace(/\.result\.json$/, ".progress.ndjson"),
+            "utf8",
+          ).trim(),
+        );
+        assert.equal(started.workerUsage.type, "started");
+        const active = summarizeDiagnosticUsage([started]);
+        assert.equal(active.workerUsage.activeCount, 1);
+        assert.equal(active.workerUsage.failedCount, 0);
+        assert.deepEqual(active.workerUsage.tokenTotals, {});
+      }
+      const completed = await pending;
       const result = JSON.parse(readFileSync(resultPath, "utf8"));
       const observations = readFileSync(
         resultPath.replace(/\.result\.json$/, ".progress.ndjson"),
@@ -1829,6 +1847,13 @@ test("Codex worker closes completed streams and durably fails nonterminal stream
         continue;
       }
       assert.deepEqual(terminal.usage, {});
+      if (scenario === "creation-stall") {
+        const failed = summarizeDiagnosticUsage(observations);
+        assert.equal(failed.workerUsage.activeCount, 0);
+        assert.equal(failed.workerUsage.failedCount, 1);
+        assert.equal(failed.workerUsage.usageUnavailableCount, 1);
+        assert.deepEqual(failed.workerUsage.tokenTotals, {});
+      }
       assert.match(
         result.error,
         scenario === "eof"
