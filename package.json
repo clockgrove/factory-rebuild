@@ -60,10 +60,10 @@
   "devDependencies": {
     "@biomejs/biome": "2.5.14",
     "@types/node": "^24.5.2",
-    "eslint": "^10.11.0",
+    "eslint": "9.39.5",
     "prettier": "^3.6.2",
     "typescript": "^5.9.2",
-    "typescript-eslint": "^8.70.1"
+    "typescript-eslint": "8.44.1"
   },
   "dependencies": {
     "@openai/codex-sdk": "0.156.0",

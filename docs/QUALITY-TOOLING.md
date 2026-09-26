@@ -21,67 +21,68 @@ upstream recommended-preset change cannot silently alter Factory's gate.
 
 ## Effective lint mapping
 
-| Previous ESLint rule                                                                                                                  | Current check                                    |
-| ------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------ |
-| `for-direction`                                                                                                                       | `lint/correctness/useValidForDirection`          |
-| `no-async-promise-executor`                                                                                                           | `lint/suspicious/noAsyncPromiseExecutor`         |
-| `no-case-declarations`                                                                                                                | `lint/correctness/noSwitchDeclarations`          |
-| `no-compare-neg-zero`                                                                                                                 | `lint/suspicious/noCompareNegZero`               |
-| `no-cond-assign`                                                                                                                      | `lint/suspicious/noAssignInExpressions`          |
-| `no-constant-binary-expression`                                                                                                       | `lint/suspicious/noConstantBinaryExpressions`    |
-| `no-constant-condition`                                                                                                               | `lint/correctness/noConstantCondition`           |
-| `no-control-regex`                                                                                                                    | `lint/suspicious/noControlCharactersInRegex`     |
-| `no-debugger`                                                                                                                         | `lint/suspicious/noDebugger`                     |
-| `no-delete-var`                                                                                                                       | Biome parser rejects invalid delete targets      |
-| `no-dupe-else-if`                                                                                                                     | `lint/suspicious/noDuplicateElseIf`              |
-| `no-duplicate-case`                                                                                                                   | `lint/suspicious/noDuplicateCase`                |
-| `no-empty`, `no-empty-static-block`                                                                                                   | `lint/suspicious/noEmptyBlockStatements`         |
-| `no-empty-character-class`                                                                                                            | `lint/correctness/noEmptyCharacterClassInRegex`  |
-| `no-empty-pattern`                                                                                                                    | `lint/correctness/noEmptyPattern`                |
-| `no-ex-assign`                                                                                                                        | `lint/suspicious/noCatchAssign`                  |
-| `no-extra-boolean-cast`                                                                                                               | `lint/complexity/noExtraBooleanCast`             |
-| `no-fallthrough`                                                                                                                      | `lint/suspicious/noFallthroughSwitchClause`      |
-| `no-global-assign`                                                                                                                    | `lint/suspicious/noGlobalAssign`                 |
-| `no-irregular-whitespace`                                                                                                             | `lint/suspicious/noIrregularWhitespace`          |
-| `no-loss-of-precision`                                                                                                                | `lint/correctness/noPrecisionLoss`               |
-| `no-misleading-character-class`                                                                                                       | `lint/suspicious/noMisleadingCharacterClass`     |
-| `no-nonoctal-decimal-escape`                                                                                                          | `lint/correctness/noNonoctalDecimalEscape`       |
-| `no-octal`                                                                                                                            | Biome parser and `npm run typecheck`             |
-| `no-prototype-builtins`                                                                                                               | `lint/suspicious/noPrototypeBuiltins`            |
-| `no-regex-spaces`                                                                                                                     | `lint/complexity/noAdjacentSpacesInRegex`        |
-| `no-self-assign`                                                                                                                      | `lint/correctness/noSelfAssign`                  |
-| `no-shadow-restricted-names`                                                                                                          | `lint/suspicious/noShadowRestrictedNames`        |
-| `no-sparse-arrays`                                                                                                                    | `lint/suspicious/noSparseArray`                  |
-| `no-unsafe-finally`                                                                                                                   | `lint/correctness/noUnsafeFinally`               |
-| `no-unsafe-optional-chaining`                                                                                                         | `lint/correctness/noUnsafeOptionalChaining`      |
-| `no-unused-labels`                                                                                                                    | `lint/correctness/noUnusedLabels`                |
-| `no-unused-private-class-members`                                                                                                     | `lint/correctness/noUnusedPrivateClassMembers`   |
-| `no-useless-backreference`                                                                                                            | `lint/suspicious/noUselessRegexBackrefs`         |
-| `no-useless-catch`                                                                                                                    | `lint/complexity/noUselessCatch`                 |
-| `no-useless-escape`                                                                                                                   | `lint/complexity/noUselessEscapeInRegex`         |
-| `require-yield`                                                                                                                       | `lint/correctness/useYield`                      |
-| `use-isnan`                                                                                                                           | `lint/correctness/useIsNan`                      |
-| `valid-typeof`                                                                                                                        | `lint/correctness/useValidTypeof`                |
-| `no-var`                                                                                                                              | `lint/suspicious/noVar`                          |
-| `prefer-const`                                                                                                                        | `lint/style/useConst`                            |
-| `prefer-rest-params`                                                                                                                  | `lint/complexity/noArguments`                    |
-| `prefer-spread`                                                                                                                       | `lint/style/useSpreadOverApply`                  |
-| `@typescript-eslint/no-array-constructor`                                                                                             | `lint/style/useArrayLiterals`                    |
-| `@typescript-eslint/no-duplicate-enum-values`                                                                                         | `lint/suspicious/noDuplicateEnumValues`          |
-| `@typescript-eslint/no-empty-object-type`, `@typescript-eslint/no-unsafe-function-type`, `@typescript-eslint/no-wrapper-object-types` | `lint/complexity/noBannedTypes`                  |
-| `@typescript-eslint/no-explicit-any`                                                                                                  | `lint/suspicious/noExplicitAny`                  |
-| `@typescript-eslint/no-extra-non-null-assertion`                                                                                      | `lint/suspicious/noExtraNonNullAssertion`        |
-| `@typescript-eslint/no-misused-new`                                                                                                   | `lint/suspicious/noMisleadingInstantiator`       |
-| `@typescript-eslint/no-namespace`                                                                                                     | `lint/style/noNamespace`                         |
-| `@typescript-eslint/no-non-null-asserted-optional-chain`                                                                              | `lint/suspicious/noNonNullAssertedOptionalChain` |
-| `@typescript-eslint/no-require-imports`                                                                                               | `lint/style/noCommonJs`                          |
-| `@typescript-eslint/no-this-alias`                                                                                                    | `lint/complexity/noUselessThisAlias`             |
-| `@typescript-eslint/no-unnecessary-type-constraint`                                                                                   | `lint/complexity/noUselessTypeConstraint`        |
-| `@typescript-eslint/no-unsafe-declaration-merging`                                                                                    | `lint/suspicious/noUnsafeDeclarationMerging`     |
-| `@typescript-eslint/no-unused-expressions`                                                                                            | `lint/suspicious/noUnusedExpressions`            |
-| `@typescript-eslint/no-unused-vars`                                                                                                   | `lint/correctness/noUnusedVariables`             |
-| `@typescript-eslint/prefer-as-const`                                                                                                  | `lint/style/useAsConstAssertion`                 |
-| `@typescript-eslint/prefer-namespace-keyword`                                                                                         | `lint/suspicious/useNamespaceKeyword`            |
+| Previous ESLint rule                                                                       | Current check                                     |
+| ------------------------------------------------------------------------------------------ | ------------------------------------------------- |
+| `for-direction`                                                                            | `lint/correctness/useValidForDirection`           |
+| `no-async-promise-executor`                                                                | `lint/suspicious/noAsyncPromiseExecutor`          |
+| `no-case-declarations`                                                                     | `lint/correctness/noSwitchDeclarations`           |
+| `no-compare-neg-zero`                                                                      | `lint/suspicious/noCompareNegZero`                |
+| `no-cond-assign`                                                                           | `lint/suspicious/noAssignInExpressions`           |
+| `no-constant-binary-expression`                                                            | `lint/suspicious/noConstantBinaryExpressions`     |
+| `no-constant-condition`                                                                    | `lint/correctness/noConstantCondition`            |
+| `no-control-regex`                                                                         | `lint/suspicious/noControlCharactersInRegex`      |
+| `no-debugger`                                                                              | `lint/suspicious/noDebugger`                      |
+| `no-delete-var`                                                                            | Biome parser rejects invalid delete targets       |
+| `no-dupe-else-if`                                                                          | `lint/suspicious/noDuplicateElseIf`               |
+| `no-duplicate-case`                                                                        | `lint/suspicious/noDuplicateCase`                 |
+| `no-empty`, `no-empty-static-block`                                                        | `lint/suspicious/noEmptyBlockStatements`          |
+| `no-empty-character-class`                                                                 | `lint/correctness/noEmptyCharacterClassInRegex`   |
+| `no-empty-pattern`                                                                         | `lint/correctness/noEmptyPattern`                 |
+| `no-ex-assign`                                                                             | `lint/suspicious/noCatchAssign`                   |
+| `no-extra-boolean-cast`                                                                    | `lint/complexity/noExtraBooleanCast`              |
+| `no-fallthrough`                                                                           | `lint/suspicious/noFallthroughSwitchClause`       |
+| `no-global-assign`                                                                         | `lint/suspicious/noGlobalAssign`                  |
+| `no-irregular-whitespace`                                                                  | `lint/suspicious/noIrregularWhitespace`           |
+| `no-loss-of-precision`                                                                     | `lint/correctness/noPrecisionLoss`                |
+| `no-misleading-character-class`                                                            | `lint/suspicious/noMisleadingCharacterClass`      |
+| `no-nonoctal-decimal-escape`                                                               | `lint/correctness/noNonoctalDecimalEscape`        |
+| `no-octal`                                                                                 | Biome parser and `npm run typecheck`              |
+| `no-prototype-builtins`                                                                    | `lint/suspicious/noPrototypeBuiltins`             |
+| `no-regex-spaces`                                                                          | `lint/complexity/noAdjacentSpacesInRegex`         |
+| `no-self-assign`                                                                           | `lint/correctness/noSelfAssign`                   |
+| `no-shadow-restricted-names`                                                               | `lint/suspicious/noShadowRestrictedNames`         |
+| `no-sparse-arrays`                                                                         | `lint/suspicious/noSparseArray`                   |
+| `no-unsafe-finally`                                                                        | `lint/correctness/noUnsafeFinally`                |
+| `no-unsafe-optional-chaining`                                                              | `lint/correctness/noUnsafeOptionalChaining`       |
+| `no-unused-labels`                                                                         | `lint/correctness/noUnusedLabels`                 |
+| `no-unused-private-class-members`                                                          | `lint/correctness/noUnusedPrivateClassMembers`    |
+| `no-useless-backreference`                                                                 | `lint/suspicious/noUselessRegexBackrefs`          |
+| `no-useless-catch`                                                                         | `lint/complexity/noUselessCatch`                  |
+| `no-useless-escape`                                                                        | Biome for regex; ESLint for strings and templates |
+| `require-yield`                                                                            | `lint/correctness/useYield`                       |
+| `use-isnan`                                                                                | `lint/correctness/useIsNan`                       |
+| `valid-typeof`                                                                             | `lint/correctness/useValidTypeof`                 |
+| `no-var`                                                                                   | `lint/suspicious/noVar`                           |
+| `prefer-const`                                                                             | `lint/style/useConst`                             |
+| `prefer-rest-params`                                                                       | `lint/complexity/noArguments`                     |
+| `prefer-spread`                                                                            | `lint/style/useSpreadOverApply`                   |
+| `@typescript-eslint/no-array-constructor`                                                  | `lint/style/useArrayLiterals`                     |
+| `@typescript-eslint/no-duplicate-enum-values`                                              | `lint/suspicious/noDuplicateEnumValues`           |
+| `@typescript-eslint/no-empty-object-type`                                                  | Biome for `{}`; ESLint for empty interfaces       |
+| `@typescript-eslint/no-unsafe-function-type`, `@typescript-eslint/no-wrapper-object-types` | `lint/complexity/noBannedTypes`                   |
+| `@typescript-eslint/no-explicit-any`                                                       | `lint/suspicious/noExplicitAny`                   |
+| `@typescript-eslint/no-extra-non-null-assertion`                                           | `lint/suspicious/noExtraNonNullAssertion`         |
+| `@typescript-eslint/no-misused-new`                                                        | `lint/suspicious/noMisleadingInstantiator`        |
+| `@typescript-eslint/no-namespace`                                                          | `lint/style/noNamespace`                          |
+| `@typescript-eslint/no-non-null-asserted-optional-chain`                                   | `lint/suspicious/noNonNullAssertedOptionalChain`  |
+| `@typescript-eslint/no-require-imports`                                                    | `lint/style/noCommonJs`                           |
+| `@typescript-eslint/no-this-alias`                                                         | `lint/complexity/noUselessThisAlias`              |
+| `@typescript-eslint/no-unnecessary-type-constraint`                                        | `lint/complexity/noUselessTypeConstraint`         |
+| `@typescript-eslint/no-unsafe-declaration-merging`                                         | `lint/suspicious/noUnsafeDeclarationMerging`      |
+| `@typescript-eslint/no-unused-expressions`                                                 | `lint/suspicious/noUnusedExpressions`             |
+| `@typescript-eslint/no-unused-vars`                                                        | `lint/correctness/noUnusedVariables`              |
+| `@typescript-eslint/prefer-as-const`                                                       | `lint/style/useAsConstAssertion`                  |
+| `@typescript-eslint/prefer-namespace-keyword`                                              | `lint/suspicious/useNamespaceKeyword`             |
 
 The focused `eslint.config.js` retains only these effective checks because
 Biome 2.5.14 does not implement them or does not match the TypeScript rule's
@@ -89,17 +90,41 @@ full directive behavior:
 
 - `no-invalid-regexp`
 - `no-unexpected-multiline`
+- `no-useless-escape` for string and template literals
 - `@typescript-eslint/ban-ts-comment`
+- `@typescript-eslint/no-empty-object-type` for empty interfaces
 - `@typescript-eslint/triple-slash-reference`
 
 Biome's `lint/suspicious/noTsIgnore` remains enabled as an overlapping check
 for `@ts-ignore`, while the ESLint fallback also rejects `@ts-nocheck` and
 enforces the TypeScript preset's `@ts-expect-error` description policy. The
-focused quality-tooling test exercises the four fallback gaps and proves that
-Biome or TypeScript still reject the three checks removed from ESLint. The
-migrator also reported `no-new-symbol` as unavailable, but that core rule was
-disabled by the previous TypeScript preset; `npm run typecheck` continues to
-reject constructing `Symbol`.
+focused quality-tooling test exercises every fallback gap and proves that Biome
+or TypeScript still reject the three checks removed from ESLint.
+
+The parity audit also probes every non-identical or combined migration in this
+effective ruleset: assignments in expressions, `arguments`, `.apply`, banned
+TypeScript types, CommonJS imports, `this` aliases, empty blocks, adjacent regex
+spaces, and regex escapes. Exact-source mappings use Biome's published
+rule-source metadata. The audit found two additional partial mappings:
+
+- `noUselessEscapeInRegex` does not cover useless escapes in string or template
+  literals, so that part of `no-useless-escape` remains in ESLint.
+- `noBannedTypes` covers the `{}` type, `Function`, and wrapper object types,
+  but not empty interfaces or interfaces with only one extension. Those cases
+  remain under `@typescript-eslint/no-empty-object-type`.
+
+The migrator also reported `no-new-symbol` as unavailable, but that core rule
+was disabled by the previous TypeScript preset; `npm run typecheck` continues
+to reject constructing `Symbol`.
+
+The residual ESLint stack is pinned to ESLint 9.39.5 and typescript-eslint
+8.44.1 because their Node engine ranges include every supported Node 22
+release. Upstream now marks ESLint 9 as out of standard support, but ESLint 10
+and newer typescript-eslint transitive dependencies require Node 22.13 or newer
+and would contradict Factory's declared and documented `node >=22`
+compatibility floor. The compatibility shim is temporary and should disappear
+with the remaining Biome parity gaps rather than raising Factory's runtime
+floor for a development tool.
 
 Secret scanning is unchanged. Packaged Secretlint remains a production
 dependency and still checks changed staged and working bytes before publication;
