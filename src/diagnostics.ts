@@ -190,6 +190,9 @@ export class DiagnosticEmitter {
         observationType: observation.type,
       };
       for (const [key, value] of Object.entries({
+        providerAttempt: observation.providerAttempt,
+        providerMaxAttempts: observation.providerMaxAttempts,
+        retryDelayMs: observation.retryDelayMs,
         provider: observation.provider,
         model: observation.model,
         reasoningEffort: observation.reasoningEffort,
@@ -337,13 +340,18 @@ export function summarizeModelInvocations(
       typeof scopeId !== "string"
     )
       continue;
-    const entry = invocations.get(invocationId) ?? {
+    const providerAttempt =
+      typeof event.metadata?.providerAttempt === "number"
+        ? event.metadata.providerAttempt
+        : 1;
+    const invocationKey = `${invocationId}:${providerAttempt}`;
+    const entry = invocations.get(invocationKey) ?? {
       phase: phase as ModelInvocationPhase,
       scopeId,
       events: [],
     };
     entry.events.push(event);
-    invocations.set(invocationId, entry);
+    invocations.set(invocationKey, entry);
   }
   const all = [...invocations.values()];
   const aggregate = (selected: typeof all): ModelInvocationAggregate => {

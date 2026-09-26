@@ -1006,6 +1006,12 @@ function observeInvalidReview(
       invocationId: invocation.invocationId,
       phase: invocation.phase,
       ordinal: invocation.ordinal,
+      ...(invocation.providerAttempt === undefined
+        ? {}
+        : { providerAttempt: invocation.providerAttempt }),
+      ...(invocation.providerMaxAttempts === undefined
+        ? {}
+        : { providerMaxAttempts: invocation.providerMaxAttempts }),
       type: "response-invalid",
       failureClass: "semantic-validation",
       failureField: field,

@@ -14,9 +14,15 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { once } from "node:events";
 import test from "node:test";
+import { Codex } from "@openai/codex-sdk";
+import { CodexPlanningModel } from "../dist/compiler.js";
 import { parseFactoryState } from "../dist/state.js";
 import { readState, statePath } from "../dist/state-store.js";
-import { readDiagnostics, statusDocument } from "../dist/diagnostics.js";
+import {
+  readDiagnostics,
+  statusDocument,
+  summarizeModelInvocations,
+} from "../dist/diagnostics.js";
 import { selectAssetSetFromCli } from "../dist/runner.js";
 import {
   createTarget,
@@ -554,6 +560,277 @@ ${commands.map((command) => `- \`${command}\``).join("\n")}
       assert.deepEqual(reviewedScopes, new Set(["work-item", "objective"]));
     } finally {
       process.env.PATH = previousPath;
+    }
+  });
+});
+
+test("application retries capacity for exact Work Item and final review requests without replaying work", async () => {
+  await fixture("review-capacity-retry", async (root) => {
+    const original = Codex.prototype.startThread;
+    const target = createTarget(root);
+    const fakeRoot = join(root, "fake");
+    const command = 'test "$(cat review.txt)" = reviewed';
+    const graph = {
+      objective,
+      baseSha: target.baseSha,
+      items: [item("review-capacity", { path: "review.txt", command })],
+    };
+    const prompts = { work: [], final: [] };
+    const successes = { work: false, final: false };
+    let threadIndex = 0;
+    Codex.prototype.startThread = function () {
+      const id = `application-capacity-${threadIndex++}`;
+      return {
+        id,
+        async runStreamed(prompt) {
+          async function* events() {
+            yield { type: "thread.started", thread_id: id };
+            if (prompt.startsWith("Compile this human Objective")) {
+              yield {
+                type: "item.completed",
+                item: {
+                  id: `${id}-message`,
+                  type: "agent_message",
+                  text: JSON.stringify(graph),
+                },
+              };
+              yield { type: "turn.completed", usage: null };
+              return;
+            }
+            if (
+              prompt.startsWith(
+                "Independently review this complete proposed Factory plan",
+              )
+            ) {
+              yield {
+                type: "item.completed",
+                item: {
+                  id: `${id}-message`,
+                  type: "agent_message",
+                  text: JSON.stringify({ findings: [] }),
+                },
+              };
+              yield { type: "turn.completed", usage: null };
+              return;
+            }
+            const scope = prompt.includes('"reviewedItemId":"review-capacity"')
+              ? "work"
+              : "final";
+            prompts[scope].push(prompt);
+            if (!successes[scope]) {
+              successes[scope] = true;
+              yield {
+                type: "turn.failed",
+                error: { message: "Selected model is at capacity" },
+              };
+              return;
+            }
+            const criteria = JSON.parse(
+              prompt.match(/Criteria: (\[[^\n]*\])/)?.[1] ?? "[]",
+            );
+            yield {
+              type: "item.completed",
+              item: {
+                id: `${id}-message`,
+                type: "agent_message",
+                text: JSON.stringify({
+                  findings: criteria.map((criterion) => ({
+                    criterion,
+                    verdict: "pass",
+                    source: "OBJECTIVE",
+                    quote: "## Acceptance",
+                    detail:
+                      "The exact validated result satisfies the criterion.",
+                    question: "",
+                  })),
+                }),
+              },
+            };
+            yield { type: "turn.completed", usage: null };
+          }
+          return { events: events() };
+        },
+      };
+    };
+    try {
+      const waits = [];
+      const planningModel = new CodexPlanningModel(
+        target.checkout,
+        { model: "planner-choice", reasoningEffort: "medium" },
+        { model: "reviewer-choice", reasoningEffort: "high" },
+        undefined,
+        {
+          reviewCapacityRetryDelaysMs: [0, 0],
+          wait: async (milliseconds) => {
+            waits.push(milliseconds);
+          },
+        },
+      );
+      const descriptor = {
+        config: factoryConfig(
+          target.checkout,
+          "example/review-capacity-retry",
+          "regular",
+          1,
+        ),
+        graph,
+        objectiveBody: body([command]),
+        fakeRoot,
+        planningModel,
+        actions: {
+          "review-capacity": {
+            files: [{ path: "review.txt", text: "reviewed\n" }],
+          },
+        },
+      };
+      const { application, eventsPath } = makeApplication(descriptor);
+      const plan = await application.planObjective(objective);
+      assert.equal(plan.review.status, "clean");
+      const completed = await application.runObjective(objective, plan);
+      assert.equal(completed.finalValidation.passed, true);
+      assert.equal(completed.finalAcceptancePending, undefined);
+      assert.equal(
+        completed.work["review-capacity"].acceptancePending,
+        undefined,
+      );
+      assert.equal(
+        readEvents(eventsPath).filter(
+          (event) => event.type === "start" && event.item === "review-capacity",
+        ).length,
+        1,
+      );
+      assert.deepEqual(waits, [0, 0]);
+      assert.equal(prompts.work.length, 2);
+      assert.equal(prompts.work[0], prompts.work[1]);
+      assert.equal(prompts.final.length, 2);
+      assert.equal(prompts.final[0], prompts.final[1]);
+      const summary = summarizeModelInvocations(
+        readDiagnostics(descriptor.config.repository, objective),
+      );
+      assert.equal(summary.byPhase["result-review"].invocationCount, 2);
+      assert.equal(summary.byPhase["result-review"].failedCount, 1);
+      assert.equal(summary.byPhase["result-review"].completedCount, 1);
+      assert.equal(summary.byPhase["objective-review"].invocationCount, 2);
+      assert.equal(summary.byPhase["objective-review"].failedCount, 1);
+      assert.equal(summary.byPhase["objective-review"].completedCount, 1);
+    } finally {
+      Codex.prototype.startThread = original;
+    }
+  });
+});
+
+test("application fails closed once after exhausted result-review capacity without replaying work", async () => {
+  await fixture("review-capacity-exhausted", async (root) => {
+    const original = Codex.prototype.startThread;
+    const target = createTarget(root);
+    const fakeRoot = join(root, "fake");
+    const command = 'test "$(cat exhausted.txt)" = validated';
+    const graph = {
+      objective,
+      baseSha: target.baseSha,
+      items: [item("review-exhausted", { path: "exhausted.txt", command })],
+    };
+    const resultPrompts = [];
+    let threadIndex = 0;
+    Codex.prototype.startThread = function () {
+      const id = `application-exhausted-${threadIndex++}`;
+      return {
+        id,
+        async runStreamed(prompt) {
+          async function* events() {
+            if (prompt.startsWith("Compile this human Objective")) {
+              yield {
+                type: "item.completed",
+                item: {
+                  id: `${id}-message`,
+                  type: "agent_message",
+                  text: JSON.stringify(graph),
+                },
+              };
+              yield { type: "turn.completed", usage: null };
+              return;
+            }
+            if (
+              prompt.startsWith(
+                "Independently review this complete proposed Factory plan",
+              )
+            ) {
+              yield {
+                type: "item.completed",
+                item: {
+                  id: `${id}-message`,
+                  type: "agent_message",
+                  text: JSON.stringify({ findings: [] }),
+                },
+              };
+              yield { type: "turn.completed", usage: null };
+              return;
+            }
+            resultPrompts.push(prompt);
+            yield {
+              type: "turn.failed",
+              error: { message: "reviewer capacity unavailable" },
+            };
+          }
+          return { events: events() };
+        },
+      };
+    };
+    try {
+      const planningModel = new CodexPlanningModel(
+        target.checkout,
+        { model: "planner-choice", reasoningEffort: "medium" },
+        { model: "reviewer-choice", reasoningEffort: "high" },
+        undefined,
+        {
+          reviewCapacityRetryDelaysMs: [0, 0],
+          wait: async () => {},
+        },
+      );
+      const descriptor = {
+        config: factoryConfig(
+          target.checkout,
+          "example/review-capacity-exhausted",
+          "regular",
+          1,
+        ),
+        graph,
+        objectiveBody: body([command]),
+        fakeRoot,
+        planningModel,
+        actions: {
+          "review-exhausted": {
+            files: [{ path: "exhausted.txt", text: "validated\n" }],
+          },
+        },
+      };
+      const { application, eventsPath, github } = makeApplication(descriptor);
+      const plan = await application.planObjective(objective);
+      const waiting = await application.runObjective(objective, plan);
+      assert.equal(waiting.work["review-exhausted"].status, "waiting");
+      assert.equal(waiting.work["review-exhausted"].step, "approve-result");
+      assert.match(
+        waiting.work["review-exhausted"].acceptancePending.detail,
+        /Independent result review failed: reviewer capacity unavailable/,
+      );
+      assert.equal(resultPrompts.length, 3);
+      assert.ok(resultPrompts.every((prompt) => prompt === resultPrompts[0]));
+      assert.equal(
+        readEvents(eventsPath).filter(
+          (event) =>
+            event.type === "start" && event.item === "review-exhausted",
+        ).length,
+        1,
+      );
+      assert.equal(Object.keys(github.state().pullRequests).length, 0);
+      const summary = summarizeModelInvocations(
+        readDiagnostics(descriptor.config.repository, objective),
+      );
+      assert.equal(summary.byPhase["result-review"].invocationCount, 3);
+      assert.equal(summary.byPhase["result-review"].failedCount, 3);
+      assert.equal(summary.byPhase["result-review"].completedCount, 0);
+    } finally {
+      Codex.prototype.startThread = original;
     }
   });
 });

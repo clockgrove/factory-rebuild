@@ -52,10 +52,21 @@ export interface ModelInvocationUsage {
 }
 
 export interface ModelInvocationObservation {
-  type: "started" | "progress" | "completed" | "failed" | "response-invalid";
+  type:
+    | "started"
+    | "progress"
+    | "retry-scheduled"
+    | "completed"
+    | "failed"
+    | "response-invalid";
   invocationId: string;
   phase: ModelInvocationPhase;
   ordinal: number;
+  /** One-based provider attempt within this logical model invocation. */
+  providerAttempt?: number;
+  /** Maximum provider attempts allowed for this logical model invocation. */
+  providerMaxAttempts?: number;
+  retryDelayMs?: number;
   provider?: string;
   model?: string;
   reasoningEffort?: string;
@@ -87,6 +98,10 @@ export interface ModelInvocationContext {
   invocationId: string;
   phase: ModelInvocationPhase;
   ordinal: number;
+  /** Adapter-owned current provider attempt, exposed for correlated diagnostics. */
+  providerAttempt?: number;
+  /** Adapter-owned bounded provider-attempt count. */
+  providerMaxAttempts?: number;
   observe?: (observation: ModelInvocationObservation) => void;
 }
 

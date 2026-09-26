@@ -43,7 +43,11 @@ function observeModelInvocation(
   invocation: ModelInvocationContext | undefined,
   observation: Omit<
     ModelInvocationObservation,
-    "invocationId" | "phase" | "ordinal"
+    | "invocationId"
+    | "phase"
+    | "ordinal"
+    | "providerAttempt"
+    | "providerMaxAttempts"
   >,
 ): void {
   if (!invocation) return;
@@ -52,6 +56,12 @@ function observeModelInvocation(
       invocationId: invocation.invocationId,
       phase: invocation.phase,
       ordinal: invocation.ordinal,
+      ...(invocation.providerAttempt === undefined
+        ? {}
+        : { providerAttempt: invocation.providerAttempt }),
+      ...(invocation.providerMaxAttempts === undefined
+        ? {}
+        : { providerMaxAttempts: invocation.providerMaxAttempts }),
       ...observation,
     });
   } catch (error) {
@@ -61,7 +71,15 @@ function observeModelInvocation(
   }
 }
 
+class ProviderCapacityFailure extends Error {
+  constructor(cause: unknown) {
+    super(cause instanceof Error ? cause.message : String(cause), { cause });
+    this.name = "ProviderCapacityFailure";
+  }
+}
+
 function providerFailureClass(error: unknown): string {
+  if (error instanceof ProviderCapacityFailure) return "provider-capacity";
   if (error instanceof ProviderTurnTimeoutError) return "provider-timeout";
   if (error instanceof ProviderTurnIncompleteError)
     return "provider-interrupted";
@@ -70,6 +88,21 @@ function providerFailureClass(error: unknown): string {
   if (/capacity|overloaded|temporarily unavailable/i.test(detail))
     return "provider-capacity";
   return "provider";
+}
+
+const REVIEW_PHASES = new Set<ModelInvocationPhase>([
+  "graph-review",
+  "result-review",
+  "objective-review",
+]);
+
+export const DEFAULT_REVIEW_CAPACITY_RETRY_DELAYS_MS = [250, 1_000] as const;
+const MAX_REVIEW_CAPACITY_RETRIES = 2;
+const MAX_REVIEW_CAPACITY_RETRY_DELAY_MS = 10_000;
+
+export interface CodexPlanningModelOptions {
+  reviewCapacityRetryDelaysMs?: readonly number[];
+  wait?: (milliseconds: number) => Promise<void>;
 }
 
 export const graphSchema = {
@@ -167,12 +200,37 @@ export const graphSchema = {
 };
 
 export class CodexPlanningModel implements PlanningModel {
+  private readonly reviewCapacityRetryDelaysMs: readonly number[];
+  private readonly wait: (milliseconds: number) => Promise<void>;
+
   constructor(
     private checkout: string,
     private planner: CodexModelSelection,
     private reviewer: CodexModelSelection,
     private providerTurnIdleTimeoutMs = DEFAULT_PROVIDER_TURN_IDLE_TIMEOUT_MS,
-  ) {}
+    options: CodexPlanningModelOptions = {},
+  ) {
+    this.reviewCapacityRetryDelaysMs = [
+      ...(options.reviewCapacityRetryDelaysMs ??
+        DEFAULT_REVIEW_CAPACITY_RETRY_DELAYS_MS),
+    ];
+    if (
+      this.reviewCapacityRetryDelaysMs.length > MAX_REVIEW_CAPACITY_RETRIES ||
+      this.reviewCapacityRetryDelaysMs.some(
+        (delay) =>
+          !Number.isSafeInteger(delay) ||
+          delay < 0 ||
+          delay > MAX_REVIEW_CAPACITY_RETRY_DELAY_MS,
+      )
+    )
+      throw new Error(
+        "Review capacity retry policy exceeds its bounded attempts or delay",
+      );
+    this.wait =
+      options.wait ??
+      ((milliseconds) =>
+        new Promise((resolve) => setTimeout(resolve, milliseconds)));
+  }
 
   private startThread(selection: CodexModelSelection) {
     const codex = new Codex();
@@ -198,6 +256,46 @@ export class CodexPlanningModel implements PlanningModel {
       phase: args.defaultPhase,
       ordinal: 0,
     };
+    invocation.phase = args.defaultPhase;
+    const retryDelays = REVIEW_PHASES.has(args.defaultPhase)
+      ? this.reviewCapacityRetryDelaysMs
+      : [];
+    const maxAttempts = retryDelays.length + 1;
+    invocation.providerMaxAttempts = maxAttempts;
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      invocation.providerAttempt = attempt;
+      try {
+        return await this.runStructuredAttempt<T>({ ...args, invocation });
+      } catch (error) {
+        if (
+          !(error instanceof ProviderCapacityFailure) ||
+          attempt === maxAttempts
+        )
+          throw error;
+        const retryDelayMs = retryDelays[attempt - 1]!;
+        observeModelInvocation(invocation, {
+          type: "retry-scheduled",
+          provider: "openai-codex-sdk",
+          model: args.selection.model,
+          reasoningEffort: args.selection.reasoningEffort,
+          failureClass: "provider-capacity",
+          retryDelayMs,
+        });
+        await this.wait(retryDelayMs);
+      }
+    }
+    throw new Error("Review capacity retry loop exhausted unexpectedly");
+  }
+
+  private async runStructuredAttempt<T>(args: {
+    selection: CodexModelSelection;
+    prompt: string;
+    schema: unknown;
+    invocation: ModelInvocationContext;
+    defaultPhase: ModelInvocationPhase;
+    sourcePacket?: string;
+  }): Promise<T> {
+    const invocation = args.invocation;
     const provider = "openai-codex-sdk";
     const schema = JSON.stringify(args.schema);
     const started = Date.now();
@@ -343,7 +441,8 @@ export class CodexPlanningModel implements PlanningModel {
       });
       return parsed;
     } catch (error) {
-      if (!invalidStructuredOutput)
+      if (!invalidStructuredOutput) {
+        const failureClass = providerFailureClass(error);
         observeModelInvocation(invocation, {
           type: "failed",
           provider,
@@ -359,9 +458,12 @@ export class CodexPlanningModel implements PlanningModel {
             : {}),
           usage,
           usageAvailable: Boolean(usage),
-          failureClass: providerFailureClass(error),
+          failureClass,
           detail: error instanceof Error ? error.message : String(error),
         });
+        if (failureClass === "provider-capacity")
+          throw new ProviderCapacityFailure(error);
+      }
       throw error;
     } finally {
       turn.finish();
