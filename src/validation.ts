@@ -37,7 +37,7 @@ import {
   pinnedGitEnvironment,
   sanitizedWorkerEnvironment,
 } from "./process.js";
-import type { HydrationReceipt } from "./media.js";
+import { assetSelectionDigest, type HydrationReceipt } from "./media.js";
 
 export interface CriterionEvidence {
   criterion: string;
@@ -268,6 +268,117 @@ export function workItemReviewObservations(
           }
         : null,
   });
+}
+
+/**
+ * Describe the exact worker/controller boundary for a selected AssetSet from
+ * immutable Git objects and the validated atomic snapshot. The controller's
+ * materialization commit retains the worker result as its sole parent, so a
+ * restart does not require a second receipt or diagnostic history.
+ */
+export function workItemMaterializationEvidence(args: {
+  state: FactoryState;
+  item: WorkItem;
+  checkout: string;
+}): ResultReviewEvidenceSource[] {
+  const { state, item, checkout } = args;
+  const current = state.work[item.id];
+  if (!current?.selectedAssetSet) return [];
+  if (
+    !current.executionBaseSha ||
+    !current.baseSha ||
+    !current.changeRef ||
+    !current.treeSha ||
+    !current.selection ||
+    !current.selectionDigest
+  )
+    throw new Error(
+      `Work Item ${item.id} lacks complete materialization identity`,
+    );
+  const selected = current.assets?.find(
+    (candidate) => candidate.id === current.selectedAssetSet,
+  );
+  if (!selected || assetSelectionDigest(selected) !== current.selectionDigest)
+    throw new Error(`Work Item ${item.id} selected AssetSet is not bound`);
+
+  assertCommitTree(
+    checkout,
+    current.changeRef,
+    current.treeSha,
+    `Work Item ${item.id} materialized result`,
+  );
+  assertResultCommitShape(checkout, item, {
+    ...current,
+    executionBaseSha: current.executionBaseSha,
+    baseSha: current.baseSha,
+    changeRef: current.changeRef,
+  });
+  const workerResultCommitSha = commitParents(checkout, current.changeRef)[0]!;
+  const workerResultTreeSha = pinnedGit(
+    checkout,
+    "rev-parse",
+    `${workerResultCommitSha}^{tree}`,
+  );
+  const perBoundaryBudget = Math.floor(configuredResultReviewTextBudget() / 2);
+  const worker = resultChangePacket(
+    checkout,
+    current.baseSha,
+    workerResultCommitSha,
+    perBoundaryBudget,
+  );
+  const materialization = resultChangePacket(
+    checkout,
+    workerResultCommitSha,
+    current.changeRef,
+    perBoundaryBudget,
+  );
+  const workerPacket = parseResultChangePacket(worker.change);
+  const materializationPacket = parseResultChangePacket(materialization.change);
+  const destinations = current.selection.destinations.map(
+    ({ role, path, digest }) => ({ role, path, digest }),
+  );
+  const destinationPaths = new Set(destinations.map(({ path }) => path));
+  const workerDestinationChanges = workerPacket.changes
+    .map(({ path }) => path)
+    .filter((path) => destinationPaths.has(path));
+  if (workerDestinationChanges.length)
+    throw new Error(
+      `Work Item ${item.id} worker result changed controller-owned destinations: ${workerDestinationChanges.join(", ")}`,
+    );
+  const materializedPaths = materializationPacket.changes.map(
+    ({ path }) => path,
+  );
+  if (
+    materializedPaths.length !== destinationPaths.size ||
+    materializedPaths.some((path) => !destinationPaths.has(path))
+  )
+    throw new Error(
+      `Work Item ${item.id} controller materialization differs from selected destinations`,
+    );
+
+  return [
+    {
+      path: `Work Item Git delta: ${item.id} controller materialization`,
+      complete:
+        worker.truncatedPaths.length === 0 &&
+        materialization.truncatedPaths.length === 0,
+      content: JSON.stringify({
+        authority: "Factory supervisor controller materialization evidence",
+        workItemId: item.id,
+        selectedSetId: selected.id,
+        selectionDigest: current.selectionDigest,
+        destinations,
+        resultBaseCommitSha: current.baseSha,
+        workerResultCommitSha,
+        workerResultTreeSha,
+        materializationCommitSha: current.changeRef,
+        materializationTreeSha: current.treeSha,
+        workerDestinationChanges,
+        workerChange: workerPacket,
+        materializationChange: materializationPacket,
+      }),
+    },
+  ];
 }
 
 function resultChangePacket(
@@ -770,6 +881,9 @@ export function objectiveReviewEvidence(args: {
         change,
       }),
     });
+    evidence.push(
+      ...workItemMaterializationEvidence({ state, item, checkout }),
+    );
     return {
       id: item.id,
       status: current.status,

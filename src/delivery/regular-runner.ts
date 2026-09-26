@@ -23,6 +23,7 @@ import {
   AcceptanceDecisionRequired,
   reviewAcceptance,
   validateWorkItem,
+  workItemMaterializationEvidence,
   workItemReviewObservations,
 } from "../validation.js";
 import { planningSources } from "../compiler.js";
@@ -188,6 +189,11 @@ export async function runRegularGraph(args: {
             config.checkout,
           ),
           decisions: work.acceptanceDecisions,
+          evidenceSources: workItemMaterializationEvidence({
+            state,
+            item,
+            checkout: config.checkout,
+          }),
           observations: workItemReviewObservations(
             state,
             item,

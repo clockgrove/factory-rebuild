@@ -231,6 +231,7 @@ class ScriptedPlanningModel {
       observations: request.observations
         ? JSON.parse(request.observations)
         : null,
+      evidence: request.evidence ?? [],
     });
     const source = request.sources.find((item) => item.path === "OBJECTIVE");
     return {
@@ -248,6 +249,47 @@ class ScriptedPlanningModel {
               "The controller receipt binds successful hydration to the reviewed result",
             question: "",
           };
+        if (
+          /worker does not write, remove, or change the final destination/i.test(
+            criterion,
+          )
+        ) {
+          const materialization = request.evidence?.find(
+            (item) =>
+              item.path.startsWith("Work Item Git delta:") &&
+              item.path.endsWith("controller materialization"),
+          );
+          const packet = materialization
+            ? JSON.parse(materialization.content)
+            : null;
+          if (
+            materialization?.complete === true &&
+            packet?.authority ===
+              "Factory supervisor controller materialization evidence" &&
+            packet.workerDestinationChanges?.length === 0 &&
+            packet.materializationChange?.changes?.length ===
+              packet.destinations?.length
+          )
+            return {
+              criterion,
+              verdict: "pass",
+              source: materialization.path,
+              quote: '"workerDestinationChanges":[]',
+              detail:
+                "Exact supervisor Git evidence separates the unchanged worker destinations from the controller-only selected-set commit",
+              question: "",
+            };
+          return {
+            criterion,
+            verdict: "needs-human",
+            source: "Delivery observations",
+            quote: '"assetSelectionReceipt"',
+            detail:
+              "The review packet does not prove the worker/controller materialization boundary",
+            question:
+              "Did the worker leave final destinations unchanged and only Factory materialize the selected set?",
+          };
+        }
         if (/\.factory-assets\.json/.test(criterion)) {
           const observations = request.observations
             ? JSON.parse(request.observations)
@@ -289,14 +331,17 @@ class ScriptedPlanningModel {
           const receipt = observations?.assetCaptureReceipts?.find(
             (candidate) => candidate?.setId === selectedSetId,
           );
-          const input = receipt?.inputs?.find(
-            (candidate) =>
-              candidate.binding.path === "approved/model.bin" &&
-              candidate.binding.kind === "repository",
-          );
-          const member = receipt?.members?.find(
-            (candidate) => candidate.destination === input?.binding.path,
-          );
+          const pair = receipt?.inputs
+            ?.filter((candidate) => candidate.binding.kind === "repository")
+            .map((input) => ({
+              input,
+              member: receipt.members?.find(
+                (candidate) => candidate.destination === input.binding.path,
+              ),
+            }))
+            .find(({ member }) => member);
+          const input = pair?.input;
+          const member = pair?.member;
           if (
             input &&
             member &&
