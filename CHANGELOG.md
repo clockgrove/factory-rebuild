@@ -2,6 +2,12 @@
 
 This file records public releases of Factory. See [BUILD-STATUS.md](docs/BUILD-STATUS.md) for development acceptance evidence.
 
+## 0.1.20 — 2026-09-25
+
+- Constrain planner citations to exact supplied source paths and bare Markdown heading names in the structured-output schema and production prompt.
+- Preserve selected-section scope by allowing the empty whole-source heading only when the pinned planning packet includes an actual whole-source entry.
+- Retain strict non-normalizing semantic validation and expose bounded expected-heading diagnostics when a provider response violates the citation contract.
+
 ## 0.1.19 — 2026-09-25
 
 - Bind every controller-imported source binding and exact content identity into the controller-owned capture receipt for each candidate set.
