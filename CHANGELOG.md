@@ -2,6 +2,12 @@
 
 This file records public releases of Factory. See [BUILD-STATUS.md](docs/BUILD-STATUS.md) for development acceptance evidence.
 
+## 0.1.19 — 2026-09-25
+
+- Bind every controller-imported source binding and exact content identity into the controller-owned capture receipt for each candidate set.
+- Reject missing, edited, reordered, cross-candidate, accepted-binding-mismatched, or unrecognized input receipt fields during state ingress.
+- Expose only bounded controller input/member identities to result review so matching digest, byte count, and media type can prove exact imported-byte identity without trusting harness prose.
+
 ## 0.1.18 — 2026-09-25
 
 - Bind the exact source, rights basis, visibility, and lineage parsed from `.factory-assets.json` into the controller-owned capture receipt alongside its declaration digest.
