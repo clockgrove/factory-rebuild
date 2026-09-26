@@ -264,6 +264,14 @@ test("fresh packed artifact installs and exposes documented install/status/plan 
       ["diagnostics", "--objective", "1", "--config", config],
       { encoding: "utf8", env: environment },
     );
+    const followed = spawnSync(
+      cli,
+      ["diagnostics", "--objective", "1", "--follow", "--config", config],
+      { encoding: "utf8", env: environment, timeout: 1_500 },
+    );
+    assert.equal(followed.error?.code, "ETIMEDOUT");
+    assert.equal(followed.stdout, timeline);
+    assert.equal(followed.stderr, "");
     const diagnosticEvents = timeline.trim().split("\n").map(JSON.parse);
     const completed = diagnosticEvents.filter(
       (event) =>
