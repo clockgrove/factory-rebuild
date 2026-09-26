@@ -29,6 +29,24 @@ const {
   validateConfig,
 } = configModule;
 
+function structuredOutputSchemaBudget(schema) {
+  const budget = { objectProperties: 0, enumValues: 0 };
+  const visit = (value) => {
+    if (Array.isArray(value)) {
+      for (const item of value) visit(item);
+      return;
+    }
+    if (!value || typeof value !== "object") return;
+    if (value.properties && typeof value.properties === "object") {
+      budget.objectProperties += Object.keys(value.properties).length;
+    }
+    if (Array.isArray(value.enum)) budget.enumValues += value.enum.length;
+    for (const child of Object.values(value)) visit(child);
+  };
+  visit(schema);
+  return budget;
+}
+
 test("package root exports only role-specific model defaults", () => {
   assert.equal(
     Object.hasOwn(publicModule, "DEFAULT_CODEX_MODEL_SELECTION"),
@@ -259,7 +277,11 @@ test("Codex adapter passes phase selections to every planning and review thread"
               type: "agent_message",
               text:
                 index === 0
-                  ? JSON.stringify({ result: "compiled" })
+                  ? JSON.stringify({
+                      objective: 1,
+                      baseSha: "a".repeat(40),
+                      items: [{ citations: [{ choiceIndex: 3 }] }],
+                    })
                   : JSON.stringify({ findings: [] }),
             },
           };
@@ -295,14 +317,15 @@ test("Codex adapter passes phase selections to every planning and review thread"
     const compileSources = [
       {
         path: "OBJECTIVE",
-        content: "# Objective\n\n## Acceptance\nRequired",
+        content:
+          "# Objective\n\n## Acceptance\nRequired\n\n## Cost ($5)? [draft] | exact.*\nLiteral heading",
       },
       {
         path: "AGENTS.md",
         content: "# Disposable target instructions\n\nFollow the Objective.",
       },
     ];
-    await model.generateStructured({
+    const compiled = await model.generateStructured({
       objective: "private-objective-marker",
       baseSha,
       sources: compileSources,
@@ -311,6 +334,9 @@ test("Codex adapter passes phase selections to every planning and review thread"
       schema: graphSchemaForSources(compileSources),
       invocation: invocation("compile", 0),
     });
+    assert.deepEqual(compiled.items[0].citations, [
+      { path: "OBJECTIVE", heading: "Cost ($5)? [draft] | exact.*" },
+    ]);
     await model.reviewGraph({
       objective: "Objective",
       baseSha,
@@ -375,37 +401,33 @@ test("Codex adapter passes phase selections to every planning and review thread"
       captured[1].outputSchema.properties.findings.items.properties.source,
       { type: "string", enum: ["OBJECTIVE", "docs/plan.md"] },
     );
-    const compileCitationChoices =
-      captured[0].outputSchema.properties.items.items.properties.citations.items
-        .anyOf;
-    assert.ok(
-      compileCitationChoices.some(
-        (choice) =>
-          choice.properties.path.enum[0] === "OBJECTIVE" &&
-          choice.properties.heading.enum.includes("Acceptance"),
-      ),
-    );
-    assert.ok(
-      compileCitationChoices.some(
-        (choice) =>
-          choice.properties.path.enum[0] === "AGENTS.md" &&
-          choice.properties.heading.enum.includes(
-            "Disposable target instructions",
-          ),
-      ),
-    );
-    assert.equal(
-      compileCitationChoices.some((choice) =>
-        choice.properties.heading.enum.some((heading) =>
-          heading.startsWith("#"),
-        ),
-      ),
-      false,
-    );
+    const compileCitationSchema =
+      captured[0].outputSchema.properties.items.items.properties.citations
+        .items;
+    assert.deepEqual(compileCitationSchema, {
+      type: "object",
+      properties: {
+        choiceIndex: {
+          type: "integer",
+          minimum: 0,
+          maximum: 5,
+          description:
+            "Exact zero-based index from the supplied citation choice list.",
+        },
+      },
+      required: ["choiceIndex"],
+      additionalProperties: false,
+    });
     assert.match(
       captured[0].prompt,
-      /set path and heading to exactly one pair from this supplied citation JSON list/,
+      /set choiceIndex to exactly one index from this supplied citation choice JSON list/,
     );
+    assert.ok(
+      captured[0].prompt.includes(
+        '"choiceIndex":3,"path":"OBJECTIVE","heading":"Cost ($5)? [draft] | exact.*"',
+      ),
+    );
+    assert.doesNotMatch(captured[0].prompt, /Do not add a Markdown marker/);
     assert.match(
       captured[0].prompt,
       /exact bare Markdown heading text without # markers/,
@@ -505,6 +527,147 @@ test("Codex adapter passes phase selections to every planning and review thread"
       JSON.stringify(observations),
       /private-command-marker|private-command-output/,
     );
+  } finally {
+    Codex.prototype.startThread = original;
+  }
+});
+
+test("Codex citation indexes preserve exact headings without schema-budget growth", async () => {
+  const original = Codex.prototype.startThread;
+  const captured = [];
+  const returnedChoiceIndexes = [1, 1_000];
+  Codex.prototype.startThread = function () {
+    const index = captured.length;
+    const entry = { index };
+    captured.push(entry);
+    return {
+      id: `citation-budget-${index}`,
+      async runStreamed(prompt, options) {
+        entry.prompt = prompt;
+        entry.outputSchema = options.outputSchema;
+        async function* events() {
+          yield {
+            type: "thread.started",
+            thread_id: `citation-budget-${index}`,
+          };
+          yield { type: "turn.started" };
+          yield {
+            type: "item.completed",
+            item: {
+              id: `message-${index}`,
+              type: "agent_message",
+              text: JSON.stringify({
+                objective: 1,
+                baseSha: "a".repeat(40),
+                items: [
+                  {
+                    citations:
+                      index === 2
+                        ? [{ choiceIndex: 1, heading: "One heading\n" }]
+                        : [{ choiceIndex: returnedChoiceIndexes[index] }],
+                  },
+                ],
+              }),
+            },
+          };
+          yield { type: "turn.completed", usage: null };
+        }
+        return { events: events() };
+      },
+    };
+  };
+  try {
+    const specialHeading = "Cost ($5)? [draft] | exact.*";
+    const headings = [
+      specialHeading,
+      ...Array.from({ length: 999 }, (_, index) => `Heading ${index}`),
+    ];
+    const sourcePackets = [
+      [{ path: "docs/many.md", content: "## One heading\nbody" }],
+      [
+        {
+          path: "docs/many.md",
+          content: headings.map((heading) => `## ${heading}\nbody`).join("\n"),
+        },
+      ],
+    ];
+    const model = new CodexPlanningModel(
+      "/tmp/model-config-test",
+      { model: "planner-choice", reasoningEffort: "high" },
+      { model: "reviewer-choice", reasoningEffort: "medium" },
+    );
+    const decoded = [];
+    for (const sources of sourcePackets) {
+      decoded.push(
+        await model.generateStructured({
+          objective: "objective",
+          baseSha: "a".repeat(40),
+          sources,
+          controllerCapabilities: installedControllerCapabilities(),
+          controllerCapabilitiesDigest: CONTROLLER_CAPABILITIES_DIGEST,
+          schema: graphSchemaForSources(sources),
+        }),
+      );
+    }
+    assert.deepEqual(decoded[0].items[0].citations, [
+      { path: "docs/many.md", heading: "One heading" },
+    ]);
+    assert.deepEqual(decoded[1].items[0].citations, [
+      { path: "docs/many.md", heading: "Heading 998" },
+    ]);
+    await assert.rejects(
+      model.generateStructured({
+        objective: "objective",
+        baseSha: "a".repeat(40),
+        sources: sourcePackets[0],
+        controllerCapabilities: installedControllerCapabilities(),
+        controllerCapabilitiesDigest: CONTROLLER_CAPABILITIES_DIGEST,
+        schema: graphSchemaForSources(sourcePackets[0]),
+      }),
+      /citation choice must contain only choiceIndex/,
+    );
+    assert.ok(captured[1].prompt.includes(specialHeading));
+    assert.ok(
+      captured[1].prompt.includes(
+        '"choiceIndex":1000,"path":"docs/many.md","heading":"Heading 998"',
+      ),
+    );
+
+    const smallBudget = structuredOutputSchemaBudget(captured[0].outputSchema);
+    const headingHeavyBudget = structuredOutputSchemaBudget(
+      captured[1].outputSchema,
+    );
+    assert.deepEqual(headingHeavyBudget, smallBudget);
+    assert.deepEqual(headingHeavyBudget, {
+      objectProperties: 27,
+      enumValues: 7,
+    });
+    assert.equal(
+      JSON.stringify(captured[1].outputSchema).length -
+        JSON.stringify(captured[0].outputSchema).length,
+      3,
+      "only the decimal width of the maximum choice index may grow",
+    );
+    assert.ok(
+      headingHeavyBudget.objectProperties <= 5_000,
+      "official Structured Outputs object-property budget",
+    );
+    assert.ok(
+      headingHeavyBudget.enumValues <= 1_000,
+      "official Structured Outputs total-enum budget",
+    );
+    const citationSchema =
+      captured[1].outputSchema.properties.items.items.properties.citations
+        .items;
+    assert.deepEqual(citationSchema.properties.choiceIndex, {
+      type: "integer",
+      minimum: 0,
+      maximum: 1_000,
+      description:
+        "Exact zero-based index from the supplied citation choice list.",
+    });
+    assert.equal(Object.hasOwn(citationSchema.properties, "heading"), false);
+    assert.equal(Object.hasOwn(citationSchema.properties, "path"), false);
   } finally {
     Codex.prototype.startThread = original;
   }

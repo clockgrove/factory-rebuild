@@ -71,6 +71,16 @@ ${finalCommands.map((command) => `- \`${command}\``).join("\n")}
 `;
 }
 
+function encodeCodexCitationIndexes(graph, citationChoiceIndex = 2) {
+  return {
+    ...graph,
+    items: graph.items.map((workItem) => ({
+      ...workItem,
+      citations: [{ choiceIndex: citationChoiceIndex }],
+    })),
+  };
+}
+
 async function fixture(name, callback) {
   const root = mkdtempSync(join(tmpdir(), `factory-${name}-`));
   const previous = process.env.XDG_STATE_HOME;
@@ -598,7 +608,7 @@ test("application retries capacity for exact Work Item and final review requests
                 item: {
                   id: `${id}-message`,
                   type: "agent_message",
-                  text: JSON.stringify(graph),
+                  text: JSON.stringify(encodeCodexCitationIndexes(graph)),
                 },
               };
               yield { type: "turn.completed", usage: null };
@@ -751,7 +761,7 @@ test("application fails closed once after exhausted result-review capacity witho
                 item: {
                   id: `${id}-message`,
                   type: "agent_message",
-                  text: JSON.stringify(graph),
+                  text: JSON.stringify(encodeCodexCitationIndexes(graph)),
                 },
               };
               yield { type: "turn.completed", usage: null };
