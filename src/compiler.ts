@@ -1569,6 +1569,11 @@ export class PlanValidationError extends CompletedModelInvocationError {
   override readonly name = "PlanValidationError";
 }
 
+/** Planning stopped for an operator decision before it had a plan to show. */
+export class PlanningNeedsDecision extends Error {
+  override readonly name = "PlanningNeedsDecision";
+}
+
 export async function compileObjective(
   objective: number,
   body: string,
@@ -2245,7 +2250,7 @@ async function compileRecoverablePlan(
           review,
           record.history.length,
         );
-      throw new Error(
+      throw new PlanningNeedsDecision(
         `Planning needs an undelegated decision: ${diagnosis.diagnosis || failure}`,
       );
     }
