@@ -136,7 +136,13 @@ for (const delivery of ["regular", "native-stack"])
         let calls = 0;
         github.merge = async (...args) => {
           const result = await original(...args);
-          if (++calls === 1) throw new GitHubOutcomeUnknown();
+          // As the client raises it: a lost response, outcome unknown.
+          if (++calls === 1)
+            throw attachFault(new GitHubOutcomeUnknown(), {
+              kind: "transient",
+              detail: "GitHub PUT response was lost; it may have taken effect",
+              outcomeUnknown: true,
+            });
           return result;
         };
         const state = await application.runObjective(objective);
@@ -146,7 +152,7 @@ for (const delivery of ["regular", "native-stack"])
       });
     });
 
-    test("a merge the default branch does not show yet is classified as lag", async () => {
+    test("a merge the default branch does not show is lag for GitHub's lag window, then a defect", async () => {
       await withApp(
         "ancestry",
         delivery,
@@ -177,11 +183,10 @@ for (const delivery of ["regular", "native-stack"])
           const error = await application
             .runObjective(objective)
             .catch((caught) => caught);
+          // The merge step repeats while GitHub may lag (two minutes), then
+          // stops: the default branch lost a merge GitHub confirmed.
           assert.match(error.message, /Default branch does not contain/);
-          assert.deepEqual(
-            [faultOf(error).kind, faultOf(error).outcomeUnknown],
-            ["transient", false],
-          );
+          assert.equal(faultOf(error).kind, "defect");
         },
       );
     });

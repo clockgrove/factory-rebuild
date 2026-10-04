@@ -8,6 +8,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { Octokit } from "@octokit/core";
 import { laterIntegration } from "../dist/delivery/integration.js";
+import { notYet, settled } from "../dist/delivery/lag.js";
 import { NativeStackDelivery } from "../dist/delivery/native-stack.js";
 import { deliveryReadiness } from "../dist/delivery/readiness.js";
 import { faultOf } from "../dist/fault.js";
@@ -296,4 +297,17 @@ test("the integrated head never moves back when merges are recorded out of order
     (caught) => caught,
   );
   assert.equal(faultOf(error).kind, "defect");
+});
+
+test("a postcondition that does not hold is lag for GitHub's lag window, then its final fault", () => {
+  const start = Date.parse("2026-10-03T00:00:00Z");
+  const key = `test:${start}`;
+  const kind = (now) =>
+    faultOf(notYet(key, "not merged yet", undefined, now)).kind;
+  assert.equal(kind(start), "transient");
+  assert.equal(kind(start + 119_000), "transient");
+  assert.equal(kind(start + 120_000), "defect");
+  // Once it held, a later failure starts a new window.
+  settled(key);
+  assert.equal(kind(start + 300_000), "transient");
 });
