@@ -86,6 +86,7 @@ import {
   reviewPacket,
 } from "./review-evidence.js";
 import { validateAndOrderGraph } from "./scheduler.js";
+import type { StepContext } from "./step.js";
 import { codexRawTokenUsage } from "./usage.js";
 import {
   assertPinnedNpmScripts,
@@ -123,6 +124,25 @@ export function observeModelInvocation(
       `Factory model diagnostics unavailable: ${error instanceof Error ? error.message : String(error)}\n`,
     );
   }
+}
+
+/**
+ * The planning model with every call made as its step's paid call (see
+ * src/step.ts), so only the model's own faults count toward the bound.
+ */
+export function paidModel(
+  model: PlanningModel,
+  step: Pick<StepContext, "paid">,
+): PlanningModel {
+  const reviewResult = model.reviewResult?.bind(model);
+  return {
+    generateStructured: (request) =>
+      step.paid(() => model.generateStructured(request)),
+    reviewGraph: (request) => step.paid(() => model.reviewGraph(request)),
+    ...(reviewResult && {
+      reviewResult: (request) => step.paid(() => reviewResult(request)),
+    }),
+  };
 }
 
 export class MalformedPlannerOutput extends CompletedModelInvocationError {}
@@ -2050,6 +2070,10 @@ async function checkedPlanReview(
     });
     return { findings };
   } catch (error) {
+    // No completed answer arrived: the review did not happen. The plan step
+    // repeats it; it is never an invalid review.
+    if (!responseReceived && !(error instanceof CompletedModelInvocationError))
+      throw error;
     if (responseReceived) {
       const rejections = [{ field: "findings", reason: "invalid" }];
       for (const rejection of rejections)

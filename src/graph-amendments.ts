@@ -4,7 +4,6 @@ import {
   failureDigest,
   type RepairCorrection,
 } from "./repair-policy.js";
-import { isCompletedProjectionRejection } from "./github-client.js";
 import { preflightObjective } from "./local-preflight.js";
 import { planningPrerequisites } from "./objective-prerequisites.js";
 import { createHash, randomUUID } from "node:crypto";
@@ -12,6 +11,7 @@ import { isDeepStrictEqual } from "node:util";
 import {
   commandAuthority,
   compileObjective,
+  paidModel,
   finalObjectiveCommands,
   hydrateWorkerInputSources,
   objectiveCriteria,
@@ -30,9 +30,9 @@ import type {
   WorkGraph,
   WorkItem,
 } from "./contracts.js";
-import { CompletedModelInvocationError, Interruption } from "./contracts.js";
-import { setTimeout as delay } from "node:timers/promises";
-import { MAX_INTERRUPTIONS } from "./work-repair.js";
+import { CompletedModelInvocationError } from "./contracts.js";
+import { attachedFault, attachFault } from "./fault.js";
+import { step, type StepOptions } from "./step.js";
 import { linearDeliveryUnits } from "./delivery/plan.js";
 import {
   executionProfileChoices,
@@ -70,8 +70,6 @@ export interface PendingAmendment {
   error?: string;
   /** The revision allowance was charged; a repeat does not charge again. */
   charged?: boolean;
-  /** Interrupted repeats of the current call; reset when a call completes. */
-  interruptions?: number;
   rejectionStage?:
     | "compilation"
     | "validation"
@@ -580,25 +578,23 @@ export function validateAmendment(
   }
 }
 
-/** Advance the pending amendment, repeating an interrupted call at most twice. */
-export async function applyPendingAmendment(
-  args: Parameters<typeof advanceAmendment>[0],
-  backoffMs = 1_000,
+/**
+ * Advance the pending amendment as the Objective's `amend` step: its compile
+ * and review are paid calls, and a call that ended without a completed
+ * answer repeats from the last completed phase.
+ */
+export function applyPendingAmendment(
+  args: Parameters<typeof advanceAmendment>[0] &
+    Pick<StepOptions, "signal" | "clock">,
 ): Promise<boolean> {
-  // An operator resume after exhausted repeats starts a fresh budget.
-  const pending = args.state.pendingAmendment;
-  if (pending && (pending.interruptions ?? 0) >= MAX_INTERRUPTIONS)
-    delete pending.interruptions;
-  for (;;) {
-    try {
-      return await advanceAmendment(args);
-    } catch (error) {
-      if (!(error instanceof Interruption)) throw error;
-      await delay(
-        backoffMs * (args.state.pendingAmendment?.interruptions ?? 1),
-      );
-    }
-  }
+  const { signal, clock, ...rest } = args;
+  return step(
+    args.state,
+    { scope: "objective", name: "amend", paid: true },
+    (context) =>
+      advanceAmendment({ ...rest, model: paidModel(args.model, context) }),
+    { save: args.save, signal, clock },
+  );
 }
 
 /** One compile, review and projection pass from the last completed phase. */
@@ -737,7 +733,6 @@ async function advanceAmendment(args: {
       }
       calling = undefined;
       pending.phase = "compiled";
-      delete pending.interruptions;
       save();
     }
     if (args.cancelled()) throw new Error("Objective cancelled");
@@ -804,7 +799,6 @@ async function advanceAmendment(args: {
         .update(JSON.stringify({ packet, findings }))
         .digest("hex");
       pending.phase = "reviewed";
-      delete pending.interruptions;
       save();
     }
     if (args.cancelled()) throw new Error("Objective cancelled");
@@ -835,7 +829,6 @@ async function advanceAmendment(args: {
       calling = undefined;
       pending.issueByItemId = projected.issueByItemId;
       pending.phase = "projected";
-      delete pending.interruptions;
       save();
     }
     if (args.cancelled()) throw new Error("Objective cancelled");
@@ -864,29 +857,28 @@ async function advanceAmendment(args: {
     save();
     return true;
   } catch (error) {
-    // A call that ended without a completed answer was interrupted: the
-    // amendment stays at its last completed phase and the next run repeats
-    // the call. Anything else is a real rejection.
-    const interrupted =
+    // A call that ended without a completed answer leaves the amendment at
+    // its last completed phase: the step repeats it, and a missing
+    // prerequisite waits for its fix. Anything else is a real rejection.
+    const fault = attachedFault(error);
+    const repeatable =
       calling !== undefined &&
       !(error instanceof CompletedModelInvocationError) &&
       !(calling === "compile" && compilationResponseObserved) &&
-      !(calling === "projection" && isCompletedProjectionRejection(error));
-    if (!interrupted) {
-      pending.rejectionStage = stage;
-      pending.phase = "rejected";
-    }
+      (fault?.kind === "transient" || fault?.kind === "config");
+    if (repeatable) throw error;
+    pending.rejectionStage = stage;
+    pending.phase = "rejected";
     pending.error = error instanceof Error ? error.message : String(error);
-    if (interrupted && (pending.interruptions ?? 0) < MAX_INTERRUPTIONS) {
-      pending.interruptions = (pending.interruptions ?? 0) + 1;
-      save();
-      throw new Interruption(error);
-    }
     if (state.coordinator) {
       state.coordinator.mode = "paused";
       state.coordinator.waitReason = pending.error;
     }
     save();
-    throw error;
+    // The amendment's result is refused, whatever the call reported.
+    throw attachFault(new Error(pending.error, { cause: error }), {
+      kind: "work",
+      evidence: { detail: pending.error || "Amendment rejected" },
+    });
   }
 }

@@ -123,7 +123,6 @@ export interface CoordinatorDisposition {
   phaseStartedAt: string;
   deadlineAt?: string;
   observedAt?: string;
-  observationError?: string;
   waitReason?: string;
   cancelError?: string;
   processes?: { pid: number; startTime: string }[];
@@ -207,7 +206,6 @@ export interface FactoryState {
   finalAcceptanceDecisions?: AcceptanceDecision[];
   objectiveBodyDigest?: string;
   objectiveClosure?: "pending" | "complete";
-  githubClosureError?: string;
   cancelRequested?: boolean;
   cancelledAt?: string;
   error?: string;
@@ -1033,11 +1031,6 @@ export function parseFactoryState(
       !["pending", "complete"].includes(String(state.objectiveClosure)))
   )
     throw new Error("Objective GitHub closure is invalid");
-  if (
-    state.githubClosureError !== undefined &&
-    typeof state.githubClosureError !== "string"
-  )
-    throw new Error("githubClosureError is invalid");
   if (state.error !== undefined && typeof state.error !== "string")
     throw new Error("state.error is invalid");
   assertRepeats(state.repeats, "repeats");
