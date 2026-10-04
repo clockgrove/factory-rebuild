@@ -12,6 +12,7 @@ import type {
   PullRequestPublication,
   WorkItem,
 } from "./contracts.js";
+import { notYet as lagged, settled } from "./delivery/lag.js";
 import type { NativeStackDelivery } from "./delivery/native-stack.js";
 import { attachFault, decision, transient } from "./fault.js";
 import {
@@ -37,9 +38,11 @@ type Pull = {
   number: number;
   state: string;
   merged: boolean;
+  closed_at?: string | null;
   head: { sha: string; ref: string };
   base: { ref: string };
 };
+export type MergeMethod = "merge" | "squash" | "rebase";
 
 export function projectedIssueBody(item: WorkItem, objective: number): string {
   const marker = `<!-- factory:objective=${objective};item=${item.id} -->`;
@@ -76,6 +79,9 @@ function unverifiedCreate(message: string): Error {
 }
 
 export class RealGitHubGateway implements GitHubGateway {
+  /** Branches whose PR create this process sent without seeing its outcome. */
+  private readonly pullCreates = new Set<string>();
+
   constructor(
     readonly repository: string,
     private readonly native: NativeStackDelivery,
@@ -165,33 +171,76 @@ export class RealGitHubGateway implements GitHubGateway {
       : undefined;
   }
 
-  async findOpenPullRequest(
-    branch: string,
-    base: string,
-    headSha: string,
+  /**
+   * The open PR for Factory's branch, found by its head. A PR on a head an
+   * earlier attempt pushed has not caught up with the push yet; any other
+   * head or base is a change Factory did not make.
+   */
+  private async pullByHead(
+    request: PullRequestPublication,
   ): Promise<PullRequestIdentity | undefined> {
     const owner = this.repository.split("/")[0]!;
     const pulls = await this.pages<Pull>(
-      `pulls?state=open&head=${encodeURIComponent(`${owner}:${branch}`)}`,
+      `pulls?state=open&head=${encodeURIComponent(`${owner}:${request.branch}`)}`,
     );
     if (pulls.length > 1)
-      throw foreignChange(`Multiple open PRs for ${branch}`);
+      throw foreignChange(`Multiple open PRs for ${request.branch}`);
     const pull = pulls[0];
     if (!pull) return undefined;
-    if (
-      pull.head.sha !== headSha ||
-      pull.base.ref !== base ||
-      pull.head.ref !== branch
-    )
-      throw foreignChange(`Existing PR for ${branch} changed head or base`);
-    return { number: pull.number, branch, headSha };
+    if (pull.head.ref !== request.branch || pull.base.ref !== request.base)
+      throw foreignChange(`Existing PR for ${request.branch} changed base`);
+    if (pull.head.sha === request.headSha)
+      return {
+        number: pull.number,
+        branch: request.branch,
+        headSha: request.headSha,
+      };
+    if (request.earlierHeads?.includes(pull.head.sha))
+      throw notYet(
+        `PR #${pull.number} does not show the pushed head ${request.headSha} yet`,
+      );
+    throw foreignChange(`Existing PR for ${request.branch} changed head`);
   }
 
   async defaultBranch(): Promise<string> {
-    const result = await this.api<{ default_branch: string }>("GET", "");
+    return (await this.settings()).defaultBranch;
+  }
+
+  /** The default branch, and the merge method the repository allows. */
+  private async settings(): Promise<{
+    defaultBranch: string;
+    mergeMethod: () => MergeMethod;
+  }> {
+    const result = await this.api<{
+      default_branch: string;
+      allow_merge_commit?: boolean;
+      allow_squash_merge?: boolean;
+      allow_rebase_merge?: boolean;
+    }>("GET", "");
     if (!result.default_branch)
       throw new Error("Repository has no default branch");
-    return result.default_branch;
+    return {
+      defaultBranch: result.default_branch,
+      mergeMethod: () => {
+        const allowed = (
+          [
+            ["merge", result.allow_merge_commit],
+            ["squash", result.allow_squash_merge],
+            ["rebase", result.allow_rebase_merge],
+          ] as const
+        ).find(([, allows]) => allows === true);
+        if (!allowed)
+          throw attachFault(
+            new Error("The repository allows no merge method"),
+            {
+              kind: "config",
+              detail: "The repository allows no merge method",
+              fix: "Allow merge commits, squash merging or rebase merging in the repository settings, then `factory run`",
+            },
+          );
+        return allowed[0];
+      },
+    };
   }
 
   async objective(number: number): Promise<ObjectiveIssue> {
@@ -716,13 +765,32 @@ export class RealGitHubGateway implements GitHubGateway {
     return { issueByItemId };
   }
 
-  /** Observe old/new facts only. This never completes or accepts a graph projection. */
+  /**
+   * The open PR for Factory's pushed branch: found by its head, else created.
+   * After a create whose outcome is unknown, GitHub's list may not show the
+   * PR for a moment, so the next repeat looks once more before sending it
+   * again; a later "already exists" is read back on the repeat after it.
+   */
   async publish(request: PullRequestPublication): Promise<PullRequestIdentity> {
+    const found = await this.pullByHead(request);
+    if (found) {
+      this.pullCreates.delete(request.branch);
+      return found;
+    }
+    if (this.pullCreates.delete(request.branch))
+      throw notYet(`GitHub does not list the PR for ${request.branch} yet`);
+    this.pullCreates.add(request.branch);
     const detail = await this.api<Pull>("POST", "pulls", {
       head: request.branch,
       base: request.base,
       title: request.title,
       body: request.body,
+    }).catch((error: unknown) => {
+      // GitHub answered: the create did not happen (or "already exists"
+      // names a PR the lookup reads back), so nothing is in flight.
+      if (error instanceof GitHubRequestError)
+        this.pullCreates.delete(request.branch);
+      throw error;
     });
     if (
       !Number.isSafeInteger(detail.number) ||
@@ -731,6 +799,15 @@ export class RealGitHubGateway implements GitHubGateway {
     )
       throw unverifiedCreate(
         "Cannot verify created PR identity; outcome unknown",
+      );
+    this.pullCreates.delete(request.branch);
+    if (request.earlierHeads?.includes(detail.head.sha))
+      throw notYet(
+        `PR #${detail.number} does not show the pushed head ${request.headSha} yet`,
+      );
+    if (detail.head.sha !== request.headSha)
+      throw foreignChange(
+        `PR #${detail.number} opened on head ${detail.head.sha}, not the pushed ${request.headSha}`,
       );
     return {
       number: detail.number,
@@ -854,12 +931,17 @@ export class RealGitHubGateway implements GitHubGateway {
             runs.some((run) => run.status !== "completed") ||
             (statuses.total_count > 0 && statuses.state === "pending")
               ? "waiting"
-              : "blocked";
+              : "failing";
+          break;
+        // Strict protection: GitHub or its owner updates the branch.
+        case "BEHIND":
+          mergeReadiness = "waiting";
           break;
         case "DIRTY":
-        case "BEHIND":
+          mergeReadiness = "conflict";
+          break;
         case "DRAFT":
-          mergeReadiness = "blocked";
+          mergeReadiness = "draft";
           break;
         default:
           throw new Error("GitHub PR readiness status is unsupported");
@@ -868,6 +950,9 @@ export class RealGitHubGateway implements GitHubGateway {
     return {
       namedChecks,
       ...(mergeReadiness ? { mergeReadiness } : {}),
+      ...(!detail.merged && detail.state === "closed" && detail.closed_at
+        ? { closedAt: detail.closed_at }
+        : {}),
       state: detail.merged
         ? "merged"
         : detail.state === "closed"
@@ -888,43 +973,58 @@ export class RealGitHubGateway implements GitHubGateway {
   ): Promise<MergeResult> {
     if (expectedHead !== identity.headSha)
       throw new Error("Merge expected head differs from PR identity");
-    // A merge whose response was lost has already happened: confirm it
-    // rather than merging again.
+    // Observe first: a merge whose response was lost has already happened,
+    // so it is confirmed rather than sent again.
     const current = await this.api<Pull>("GET", `pulls/${identity.number}`);
-    if (current.merged) {
-      if (
-        current.head.sha !== expectedHead ||
-        current.head.ref !== identity.branch
-      )
-        throw foreignChange(
-          `PR #${identity.number} was merged at a different head; operator direction required`,
-        );
-      return {
-        integratedSha: await classifiedGitHubCall(
-          this.client,
-          this.repository,
-          { method: "GET", path: `issues/${identity.number}/timeline` },
-          () =>
-            timelineMergeCommit(this.client, this.repository, identity.number),
+    if (current.merged) return this.confirmMerged(identity, current);
+    if (current.state === "closed")
+      throw lagged(
+        `closed:${identity.number}`,
+        `PR #${identity.number} is closed without a merge`,
+        decision(
+          `PR #${identity.number} was closed without merging. Start a new attempt or cancel?`,
+          `PR #${identity.number} closed${current.closed_at ? ` at ${current.closed_at}` : ""}`,
         ),
-      };
+      );
+    if (
+      current.head.sha !== expectedHead ||
+      current.head.ref !== identity.branch
+    )
+      throw foreignChange(
+        `PR #${identity.number} head changed from ${expectedHead} to ${current.head.sha}`,
+      );
+    const method = (await this.settings()).mergeMethod();
+    let result: { merged: boolean; sha: string };
+    try {
+      result = await this.api<{ merged: boolean; sha: string }>(
+        "PUT",
+        `pulls/${identity.number}/merge`,
+        { sha: expectedHead, merge_method: method },
+        undefined,
+        // GitHub refuses a head that moved (409). The PR held Factory's head
+        // a moment ago, so a refusal is lag until the repeat observes it.
+        { head: "ours" },
+      );
+    } catch (error) {
+      // "Not mergeable" also answers a merge that is in progress or that a
+      // lost earlier request made: observe again before judging it.
+      if (
+        error instanceof GitHubRequestError &&
+        error.status === 405 &&
+        !error.refusal
+      ) {
+        const after = await this.api<Pull>("GET", `pulls/${identity.number}`);
+        if (after.merged) return this.confirmMerged(identity, after);
+      }
+      throw error;
     }
-    const result = await this.api<{ merged: boolean; sha: string }>(
-      "PUT",
-      `pulls/${identity.number}/merge`,
-      { sha: expectedHead, merge_method: "merge" },
-      undefined,
-      // GitHub refuses a head that moved (409). Factory pushed the head it
-      // just observed, so a refusal against that head is lag; any other
-      // head is a change Factory did not make.
-      { head: current.head.sha === expectedHead ? "ours" : "foreign" },
-    );
     if (
       result.merged !== true ||
       typeof result.sha !== "string" ||
       !/^[a-f0-9]{40}$/.test(result.sha)
     )
       throw new Error("PR merge did not produce an integrated commit");
+    const key = `merge:${identity.number}`;
     const detail = await this.api<Pull>("GET", `pulls/${identity.number}`);
     if (
       detail.state !== "closed" ||
@@ -932,8 +1032,37 @@ export class RealGitHubGateway implements GitHubGateway {
       detail.head.sha !== expectedHead ||
       detail.head.ref !== identity.branch
     )
-      throw notYet("PR merge has not confirmed the exact integrated commit");
+      throw lagged(
+        key,
+        `PR #${identity.number} does not show its merge ${result.sha} yet`,
+      );
+    settled(key);
     return { integratedSha: result.sha };
+  }
+
+  /** A merged PR: its head must be Factory's, its merge commit on the timeline. */
+  private async confirmMerged(
+    identity: PullRequestIdentity,
+    pull: Pull,
+  ): Promise<MergeResult> {
+    if (pull.head.sha !== identity.headSha || pull.head.ref !== identity.branch)
+      throw foreignChange(
+        `PR #${identity.number} was merged at head ${pull.head.sha}, not ${identity.headSha}`,
+      );
+    const key = `timeline:${identity.number}`;
+    const integratedSha = await classifiedGitHubCall(
+      this.client,
+      this.repository,
+      { method: "GET", path: `issues/${identity.number}/timeline` },
+      () => timelineMergeCommit(this.client, this.repository, identity.number),
+    );
+    if (!integratedSha)
+      throw lagged(
+        key,
+        `PR #${identity.number} merge is not on its timeline yet`,
+      );
+    settled(key);
+    return { integratedSha };
   }
 
   async ensureNativeStack(
@@ -948,11 +1077,13 @@ export class RealGitHubGateway implements GitHubGateway {
     expectedStack: number,
     options: {
       resumeUuid?: string;
-      beforeMerge?: () => void;
       onPending: (uuid: string) => void;
-      cancelled: () => boolean;
+      progress?: () => void;
     },
   ): Promise<string> {
-    return this.native.mergeStack(layers, baseBranch, expectedStack, options);
+    return this.native.mergeStack(layers, baseBranch, expectedStack, {
+      ...options,
+      mergeMethod: async () => (await this.settings()).mergeMethod(),
+    });
   }
 }

@@ -34,6 +34,7 @@ export function scenarioConcurrency() {
 }
 
 const KINDS = ["crash-before", "crash-after", "lost", "unavailable"];
+const MERGE_ASYNC = "PUT /repos/{owner}/{repo}/pulls/{number}/merge-async";
 const PAID = new Set(["crash-after", "lost"]);
 
 /** The run every case is compared with, once per process and delivery. */
@@ -246,7 +247,21 @@ export async function assertEndState(result, { foreignIssues = 0 } = {}) {
     fake.log
       .filter(
         (entry) =>
-          [405, 409, 422].includes(entry.status) || entry.unhandled === true,
+          // A refusal the test injected is not Factory's request refused.
+          (entry.fault !== "status" &&
+            [405, 409, 422].includes(entry.status) &&
+            // After a lost merge-async response (or a crash), the 409 naming the pending
+            // request is the only way to learn its uuid.
+            !(
+              entry.endpoint === MERGE_ASYNC &&
+              entry.status === 409 &&
+              fake.log.some(
+                (other) =>
+                  other.endpoint === MERGE_ASYNC &&
+                  ["dropped", "crash"].includes(other.status),
+              )
+            )) ||
+          entry.unhandled === true,
       )
       .map((entry) => `${entry.endpoint} → ${entry.status}`),
     [],

@@ -606,9 +606,15 @@ export interface DeliveryObservation {
   /** Successful uniquely named check runs observed on this exact PR head. */
   namedChecks?: NamedCheckEvidence[];
   state: "open" | "merged" | "closed";
+  /** When a closed PR was closed. */
+  closedAt?: string;
   checks: "pending" | "passing" | "failing";
-  /** Authenticated target protection readiness; absent only on custom gateways. */
-  mergeReadiness?: "ready" | "waiting" | "blocked";
+  /**
+   * Authenticated target protection readiness; absent only on custom
+   * gateways. `conflict`: the head conflicts with the base; `failing`:
+   * commit statuses failed; `draft`: someone made the PR a draft.
+   */
+  mergeReadiness?: "ready" | "waiting" | "conflict" | "failing" | "draft";
 }
 export interface MergeResult {
   integratedSha: string;
@@ -616,10 +622,8 @@ export interface MergeResult {
 export interface DeliveryStrategy {
   publish(request: DeliveryRequest): Promise<DeliveryResult>;
   observe(result: DeliveryResult): Promise<DeliveryObservation>;
-  merge(
-    result: DeliveryResult,
-    beforeMerge?: (observation: DeliveryObservation) => void,
-  ): Promise<MergeResult>;
+  /** Merge the published head, or confirm a merge already made. */
+  merge(result: DeliveryResult): Promise<MergeResult>;
 }
 
 export interface ContentMetadata {
@@ -763,6 +767,10 @@ export interface ProjectedGraph {
 export interface PullRequestPublication {
   branch: string;
   base: string;
+  /** The commit Factory pushed to `branch`. */
+  headSha: string;
+  /** Heads earlier attempts pushed to `branch`; a PR may still show one. */
+  earlierHeads?: string[];
   treeSha: string;
   title: string;
   body: string;
@@ -814,11 +822,7 @@ export interface GitHubGateway {
     expected: { body?: string; workItem?: { objective: number; id: string } },
   ): Promise<void>;
   projectGraph(request: GraphProjection): Promise<ProjectedGraph>;
-  findOpenPullRequest(
-    branch: string,
-    base: string,
-    headSha: string,
-  ): Promise<PullRequestIdentity | undefined>;
+  /** The open PR for the pushed branch, found by its head before it is created. */
   publish(request: PullRequestPublication): Promise<PullRequestIdentity>;
   observe(identity: PullRequestIdentity): Promise<PullRequestObservation>;
   merge(
@@ -834,10 +838,12 @@ export interface GitHubGateway {
     baseBranch: string,
     expectedStack: number,
     options: {
+      /** The pending merge request an earlier repeat recorded. */
       resumeUuid?: string;
-      beforeMerge?: () => void;
+      /** Record a pending merge request before it is polled. */
       onPending: (uuid: string) => void;
-      cancelled: () => boolean;
+      /** A poll answered: the merge is progressing. */
+      progress?: () => void;
     },
   ): Promise<string>;
 }

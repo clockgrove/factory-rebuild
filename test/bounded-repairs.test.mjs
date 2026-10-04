@@ -218,7 +218,7 @@ test("exact candidate recovery retains failure and rejects ambiguity and unchang
     () => applyWorkCorrection(state, "result", correction),
     /Unchanged/,
   );
-  work.pullRequest = 1;
+  work.integratedSha = "a".repeat(40);
   assert.throws(
     () => applyWorkCorrection(state, "result", correction),
     /unsettled/,
@@ -271,7 +271,7 @@ test("settled failures ignore sibling processes while correction still requires 
     );
     assert.equal(state.allowanceConsumption, undefined);
     for (const guard of [
-      { work: { pullRequest: 1 } },
+      { work: { integratedSha: "a".repeat(40) } },
       { coordinator: { cancelError: "owned cancellation unresolved" } },
     ]) {
       const uncertain = structuredClone(state);
