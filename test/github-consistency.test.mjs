@@ -210,6 +210,8 @@ scenarios.push({
   ],
   checks: ["refusal"],
   refuses: /does not contain the merge/,
+  // A missing merge is GitHub lag for two minutes before Factory refuses.
+  runTimeoutMs: 240_000,
 });
 
 const known = KNOWN.consistency;
@@ -244,6 +246,9 @@ describe("GitHub consistency, rate limits and other actors", {
             fake: scenario.fake ?? {},
             beforeRun: scenario.beforeRun,
             earlierIssues: scenario.earlierIssues ?? 0,
+            ...(scenario.runTimeoutMs && {
+              runTimeoutMs: scenario.runTimeoutMs,
+            }),
           }),
         {
           checks: checksOf(scenario),

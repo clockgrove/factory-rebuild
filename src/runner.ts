@@ -86,6 +86,7 @@ import {
 import {
   fetchHead,
   git,
+  gitAsync,
   linuxProcessIdentity,
   pinnedGit,
   processGroupExists,
@@ -825,6 +826,9 @@ export async function runObjective(
         },
       ).catch((error: unknown) => {
         const current = owner.snapshot;
+        // A pass stopped by the cancel request (a step answers `cancelled`):
+        // the loop records the cancellation.
+        if (current?.cancelRequested && !owner.handoff) return undefined;
         // Planning stops at a pause or drain; the owner keeps serving control until resume.
         if (
           current?.schemaVersion === 7 &&
@@ -837,6 +841,8 @@ export async function runObjective(
       });
       if (!result) continue;
       owner.snapshot = result;
+      // A pass that stopped for the cancel request: the loop records it.
+      if (result.cancelRequested && !owner.handoff) continue;
       // A preparation comes back only when its plan needs a human decision.
       if (
         result.schemaVersion === 7 ||
@@ -1516,6 +1522,25 @@ async function runObjectivePass(
       await github.defaultBranch(),
     );
     const finalGraphDigest = graphDigest(state.graph);
+    // Others may push to the default branch after the last merge: final
+    // validation covers the head that contains every merge.
+    if (
+      objectiveCandidate(state)!.basis === "current-graph-integration" &&
+      observedHead !== state.integratedSha &&
+      (await gitAsync(
+        config.checkout,
+        "merge-base",
+        "--is-ancestor",
+        state.integratedSha!,
+        observedHead,
+      ).then(
+        () => true,
+        () => false,
+      ))
+    ) {
+      state.integratedSha = observedHead;
+      save(state);
+    }
     const candidateCommitSha = objectiveCandidate(state)!.commitSha;
     if (observedHead !== candidateCommitSha)
       throw new Error(

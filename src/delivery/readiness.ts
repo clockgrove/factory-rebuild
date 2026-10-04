@@ -1,15 +1,8 @@
 import { createHash } from "node:crypto";
 import type { WorkGraph, DeliveryObservation } from "../contracts.js";
+import { decision, StepFault } from "../fault.js";
 import type { FactoryState } from "../state.js";
-
-/** A read-only wait, never an uncertain submitted delivery effect. */
-export class DeliveryReadinessPending extends Error {
-  constructor(
-    message = "Awaiting exact published head checks or target protection readiness",
-  ) {
-    super(message);
-  }
-}
+import { notYet, settled } from "./lag.js";
 
 export function assertPreIntegrationCheckShape(graph: WorkGraph): void {
   const gates = graph.requiredPreIntegrationChecks;
@@ -58,17 +51,49 @@ export function assertPreIntegrationCheckSources(
   }
 }
 
-export function assertDeliveryReady(
+/**
+ * Whether a published PR may merge. Returns undefined when it may (or has
+ * already merged), or what it is waiting for. A failing check, a conflict
+ * with the base or failing statuses are `work` on the published result; a
+ * PR made a draft or closed without merging is a decision.
+ */
+export function deliveryReadiness(
+  pullRequest: number,
   observation: DeliveryObservation,
   requiredChecks: string[] = [],
   expectedHead?: string,
-): void {
-  if (observation.state !== "open" || observation.checks === "failing")
-    throw new Error(
-      `PR is not mergeable: ${observation.state}, checks ${observation.checks}`,
+): string | undefined {
+  const work = (detail: string) =>
+    new StepFault({ kind: "work", evidence: { detail } });
+  if (observation.state === "merged") return undefined;
+  if (observation.state === "closed")
+    // A merge GitHub has not shown yet reads as closed for a moment.
+    throw notYet(
+      `closed:${pullRequest}`,
+      `PR #${pullRequest} is closed without a merge`,
+      decision(
+        `PR #${pullRequest} was closed without merging. Start a new attempt or cancel?`,
+        `PR #${pullRequest} closed${observation.closedAt ? ` at ${observation.closedAt}` : ""}`,
+      ),
     );
-  if (observation.mergeReadiness === "blocked")
-    throw new Error("PR is not mergeable under authenticated target readiness");
+  settled(`closed:${pullRequest}`);
+  if (observation.checks === "failing")
+    throw work(`Checks failed on PR #${pullRequest} at ${expectedHead}`);
+  switch (observation.mergeReadiness) {
+    case "conflict":
+      throw work(
+        `PR #${pullRequest} conflicts with its base branch; rebase the change`,
+      );
+    case "failing":
+      throw work(`Commit statuses failed on PR #${pullRequest}`);
+    case "draft":
+      throw new StepFault(
+        decision(
+          `PR #${pullRequest} was made a draft. Mark it ready, then retry, or cancel?`,
+          `PR #${pullRequest} is a draft`,
+        ),
+      );
+  }
   if (
     observation.checks === "pending" ||
     observation.mergeReadiness === "waiting" ||
@@ -91,21 +116,24 @@ export function assertDeliveryReady(
       );
     })
   )
-    throw new DeliveryReadinessPending(
-      requiredChecks.length
-        ? `Awaiting successful exact-head source-required checks: ${requiredChecks.join(", ")}`
-        : undefined,
-    );
+    return requiredChecks.length
+      ? `Awaiting successful exact-head source-required checks: ${requiredChecks.join(", ")}`
+      : `Awaiting checks and protection readiness on PR #${pullRequest}`;
+  return undefined;
 }
 
-/** Existing publication/QA identity is the durable continuation, not another store. */
+/**
+ * A published item waiting for CI (its await-ci step's wait), or a QA item
+ * waiting for named CI. Existing publication/QA identity is the durable
+ * continuation, not another store.
+ */
 export function isReadinessWait(state: FactoryState, id: string): boolean {
   const work = state.work[id];
   return Boolean(
     work &&
-      work.waitingReason &&
-      (work.status === "published" ||
-        (work.status === "running" &&
+      ((work.status === "published" && work.wait?.kind === "ci") ||
+        (work.waitingReason &&
+          work.status === "running" &&
           work.step === "validate" &&
           state.graph.items.find((item) => item.id === id)?.kind === "qa")),
   );

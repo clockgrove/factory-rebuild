@@ -11,6 +11,7 @@ import {
   ProviderTurnTimeoutError,
 } from "./provider-turn.js";
 import type { DiagnosticEmitter } from "./diagnostics.js";
+import { faultOf } from "./fault.js";
 import type { PlanningModel, WorkItem } from "./contracts.js";
 import {
   installedControllerCapabilities,
@@ -200,12 +201,15 @@ export function recordWorkFailure(
 ): boolean {
   const work = state.work[id]!;
   const detail = error instanceof Error ? error.message : String(error);
+  // A published result that fails (a failed check, a conflict) is repaired
+  // by a new attempt that republishes the branch with a lease.
   const isolated =
-    !work.pullRequest &&
+    !work.integratedSha &&
     !state.coordinator?.cancelError &&
     (error instanceof SettledAttemptFailure ||
       error instanceof CandidateValidationFailure ||
-      error instanceof CandidateEnvironmentFailure);
+      error instanceof CandidateEnvironmentFailure ||
+      (work.pullRequest !== undefined && faultOf(error).kind === "work"));
   const failure: FailureDisposition = {
     digest: failureDigest(detail),
     detail,
@@ -250,7 +254,6 @@ export function applyWorkCorrection(
   const work = state.work[id];
   if (
     !work ||
-    work.pullRequest ||
     work.integratedSha ||
     state.cancelRequested ||
     state.cancelledAt ||
@@ -258,7 +261,7 @@ export function applyWorkCorrection(
     state.coordinator?.processes?.length
   )
     throw new Error(
-      "Repair cannot cross an unsettled, published or cancelled boundary",
+      "Repair cannot cross an unsettled, integrated or cancelled boundary",
     );
   validateCorrection(work, correction);
   if (work.recovery?.failure?.classification === "uncertain")
@@ -268,10 +271,8 @@ export function applyWorkCorrection(
   recovery.correction = correction;
   recovery.phase = "ready";
   if (correction.kind === "implementation") {
-    if (work.status !== "failed" || work.step === "deliver")
-      throw new Error(
-        "Implementation repair needs an unpublished failed attempt",
-      );
+    if (work.status !== "failed")
+      throw new Error("Implementation repair needs a failed attempt");
     if (!alreadyCharged)
       chargeRepair(state, correction.kind, repairScopes(state, id));
     state.work[id] = { status: "pending", recovery };
