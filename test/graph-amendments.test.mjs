@@ -42,6 +42,20 @@ import {
 } from "../dist/github-client.js";
 import { CompletedModelInvocationError } from "../dist/contracts.js";
 import { encodeCompilerWire } from "./support/compiler-wire.mjs";
+import { attachFault, transient } from "../dist/fault.js";
+import { clearRepeats } from "../dist/step.js";
+
+// Step backoff runs on a virtual clock, so repeats never sleep in real time.
+let virtualTime = Date.now();
+const clock = {
+  now: () => virtualTime,
+  sleep: async (milliseconds) => {
+    virtualTime += milliseconds;
+  },
+};
+/** A response lost in transit, as a model or GitHub adapter classifies it. */
+const lost = (message) =>
+  attachFault(new Error(message), transient(message, true));
 import { packetFromPrompt } from "./support/review-protocol.mjs";
 
 const discovery = {
@@ -823,6 +837,7 @@ test("operator amendment source inputs are hydrated from pinned citations before
         },
         save() {},
         cancelled: () => false,
+        clock,
       }),
       true,
     );
@@ -874,8 +889,8 @@ function assertAmendmentCompleted(state) {
   assert.equal(state.allowanceConsumption.planningRevisions, 1);
 }
 
-async function assertProjectionRepeats(name, lostError, pattern) {
-  // One lost response is repeated by the same call; three pause the coordinator.
+async function assertProjectionRepeats(name, lostError) {
+  // Projection is a free effect: lost responses repeat until it completes.
   for (const losses of [1, 3])
     await fixture(`${name}-${losses}`, async ({ config, initial }) => {
       const obligations = coverageObligations(body, objectiveCriteria(body));
@@ -900,7 +915,6 @@ async function assertProjectionRepeats(name, lostError, pattern) {
         graph: qaGraph(graph),
       });
       let reviews = 0;
-      const saved = [];
       const github = markerGitHub(lostError, losses);
       const args = {
         state,
@@ -916,75 +930,30 @@ async function assertProjectionRepeats(name, lostError, pattern) {
           },
         },
         github,
-        save() {
-          if (state.pendingAmendment)
-            saved.push(structuredClone(state.pendingAmendment));
-        },
+        save() {},
         cancelled: () => false,
+        clock,
       };
-      if (losses === 1) {
-        assert.equal(await applyPendingAmendment(args, 1), true);
-        // The repeat projects again with the known issues and finds the issue
-        // the lost call created by its marker instead of creating a duplicate.
-        assert.deepEqual(github.knownIssues, [{ result: 2 }, { result: 2 }]);
-        assert.equal(github.creates, 1);
-        assert.equal(reviews, 1);
-        const interrupted = saved.find((entry) => entry.interruptions === 1);
-        assert.equal(interrupted.phase, "reviewed");
-        assert.match(interrupted.error, pattern);
-        assert.equal(interrupted.rejectionStage, undefined);
-        assert.equal(state.coordinator.mode, "running");
-        assert.equal(state.work.result.attempt, "preserved");
-        assertAmendmentCompleted(state);
-        return;
-      }
-      await assert.rejects(applyPendingAmendment(args, 1), pattern);
-      // Interrupted, not rejected: the amendment stays at its last completed phase.
-      assert.equal(state.pendingAmendment.phase, "reviewed");
-      assert.equal(state.pendingAmendment.interruptions, 2);
-      assert.equal(state.pendingAmendment.rejectionStage, undefined);
-      assert.ok(state.pendingAmendment.reviewDigest);
-      // Repeats found the lost create's issue by marker and kept its number.
-      assert.deepEqual(state.pendingAmendment.issueByItemId, {
-        result: 2,
-        qa: 3,
-      });
-      assert.deepEqual(github.knownIssues, [
-        { result: 2 },
-        { result: 2 },
-        { result: 2, qa: 3 },
-      ]);
-      assert.equal(state.coordinator.mode, "paused");
-      assert.equal(state.coordinator.waitReason, state.pendingAmendment.error);
-      assert.equal(state.graph.items.length, 1);
-      assert.equal(state.work.result.attempt, "preserved");
-      assert.equal(github.creates, 1);
-      // A paused coordinator does not repeat the call by itself.
-      assert.equal(await applyPendingAmendment(args, 1), false);
-      assert.equal(github.knownIssues.length, 3);
-
-      state.coordinator.mode = "running";
-      assert.equal(await applyPendingAmendment(args, 1), true);
-      assert.deepEqual(github.knownIssues.at(-1), { result: 2, qa: 3 });
-      assert.equal(github.knownIssues.length, 4);
+      assert.equal(await applyPendingAmendment(args), true);
+      // Each repeat projects again from the reviewed phase and finds the
+      // issue the lost call created by its marker instead of a duplicate.
+      assert.equal(github.knownIssues.length, losses + 1);
       assert.equal(github.creates, 1);
       assert.equal(reviews, 1);
+      assert.equal(state.repeats, undefined);
+      assert.equal(state.coordinator.mode, "running");
       assert.equal(state.work.result.attempt, "preserved");
       assertAmendmentCompleted(state);
     });
 }
 
 test("partial/unknown projection repeats without duplicate issues", async () => {
-  await assertProjectionRepeats(
-    "projection",
-    new Error("response lost"),
-    /response lost/,
-  );
+  await assertProjectionRepeats("projection", lost("response lost"));
 });
 
 test("interrupted amendment compile is repeated and charged once", async () => {
-  // One lost compile is repeated by the same call; three pause the coordinator.
-  for (const losses of [1, 3])
+  // Lost compiles repeat within the paid bound; a fourth asks the operator.
+  for (const losses of [1, 3, 4])
     await fixture(
       `compile-interrupted-${losses}`,
       async ({ config, initial }) => {
@@ -1025,7 +994,7 @@ test("interrupted amendment compile is repeated and charged once", async () => {
           model: {
             async generateStructured(request) {
               compiles++;
-              if (compiles <= losses) throw new Error("compile response lost");
+              if (compiles <= losses) throw lost("compile response lost");
               const wire = compilerWire(
                 request,
                 compilerCitationChoices(request.sources),
@@ -1048,30 +1017,25 @@ test("interrupted amendment compile is repeated and charged once", async () => {
               saved.push(structuredClone(state.pendingAmendment));
           },
           cancelled: () => false,
+          clock,
         };
-        if (losses === 1) {
-          assert.equal(await applyPendingAmendment(args, 1), true);
-          const interrupted = saved.find((entry) => entry.interruptions === 1);
-          assert.equal(interrupted.phase, "ready");
-          assert.equal(interrupted.charged, true);
+        if (losses <= 3) {
+          assert.equal(await applyPendingAmendment(args), true);
+          const repeated = saved.find((entry) => entry.phase === "ready");
+          assert.equal(repeated.charged, true);
         } else {
-          await assert.rejects(
-            applyPendingAmendment(args, 1),
-            /compile response lost/,
-          );
+          await assert.rejects(applyPendingAmendment(args), /unknown outcome/);
+          // Not rejected: the amendment waits at its last completed phase.
           assert.equal(state.pendingAmendment.phase, "ready");
           assert.equal(state.pendingAmendment.charged, true);
-          assert.equal(state.pendingAmendment.interruptions, 2);
           assert.equal(state.pendingAmendment.rejectionStage, undefined);
-          assert.equal(state.coordinator.mode, "paused");
-          assert.equal(
-            state.coordinator.waitReason,
-            state.pendingAmendment.error,
-          );
-          assert.equal(compiles, 3);
+          assert.equal(state.wait.kind, "decision");
+          assert.equal(compiles, 4);
           assert.equal(state.allowanceConsumption.planningRevisions, 1);
-          state.coordinator.mode = "running";
-          assert.equal(await applyPendingAmendment(args, 1), true);
+          // The operator's retry clears the step's records; the repeat is
+          // not charged again.
+          assert.equal(clearRepeats(state, "objective"), true);
+          assert.equal(await applyPendingAmendment(args), true);
         }
         assert.equal(compiles, losses + 1);
         assert.equal(reviews, 1);
@@ -1388,8 +1352,10 @@ test("native amendments cannot repartition a started published stack", async () 
           state,
           config,
           body,
+          model: {},
           save() {},
           cancelled: () => false,
+          clock,
         }),
         false,
       );
@@ -1434,6 +1400,7 @@ test("planning consumption survives acceptance and cannot reset for a second rev
       },
       save() {},
       cancelled: () => false,
+      clock,
     };
     submitAmendment(state, {
       ...discovery,
@@ -1504,6 +1471,9 @@ test("real gateway reconciles reviewed issue bodies, native hierarchy and depend
   const hierarchy = new Map();
   const calls = [];
   const client = {
+    async viewer() {
+      return "factory-bot";
+    },
     async paginate(route) {
       if (route.endsWith("/labels"))
         return ["factory:objective", "factory:work-item"].map((name) => ({
@@ -1561,6 +1531,7 @@ test("real gateway reconciles reviewed issue bodies, native hierarchy and depend
           number,
           state: "open",
           repository_url: "https://api.github.com/repos/example/projection",
+          user: { login: "factory-bot" },
           ...value,
         };
         issues.set(number, issue);
@@ -1753,6 +1724,7 @@ for (const mode of ["paused", "draining"])
           config,
           body,
           cancelled: () => false,
+          clock,
           save: () => {
             saved = JSON.stringify(state);
           },
@@ -2426,7 +2398,7 @@ test("actual review provider/protocol failures cannot authorize amendment replac
             if (reviewAnswers || (failure === "unknown-once" && reviewed > 1))
               return { packetId: request.reviewPacket.id, findings: [] };
             if (failure.startsWith("unknown"))
-              throw new Error("Unknown review submission outcome");
+              throw lost("Unknown review submission outcome");
             if (failure === "completed-provider")
               throw new CompletedModelInvocationError(
                 "Provider refused the request",
@@ -2457,13 +2429,12 @@ test("actual review provider/protocol failures cannot authorize amendment replac
             saved.push(structuredClone(state.pendingAmendment));
         },
         cancelled: () => false,
+        clock,
       };
       if (failure === "unknown-once") {
-        // The same call repeats the lost review and completes.
-        assert.equal(await applyPendingAmendment(args, 1), true);
-        const interrupted = saved.find((entry) => entry.interruptions === 1);
-        assert.equal(interrupted.phase, "compiled");
-        assert.equal(interrupted.rejectionStage, undefined);
+        // The step repeats the lost review and completes.
+        assert.equal(await applyPendingAmendment(args), true);
+        assert.ok(saved.some((entry) => entry.phase === "compiled"));
         assert.equal(compiled, 1);
         assert.equal(reviewed, 2);
         assert.equal(projected, 1);
@@ -2473,20 +2444,13 @@ test("actual review provider/protocol failures cannot authorize amendment replac
         assert.equal(state.allowanceConsumption.planningRevisions, 1);
         return;
       }
-      await assert.rejects(applyPendingAmendment(args, 1));
-      // Lost answers are repeated twice before pausing; answers are not.
-      assert.equal(
-        reviewed,
-        failure === "unknown" ? 3 : 1,
-        state.pendingAmendment.error,
-      );
-      assert.equal(
-        state.pendingAmendment.interruptions,
-        failure === "unknown" ? 2 : undefined,
-      );
+      await assert.rejects(applyPendingAmendment(args));
+      // Lost answers repeat within the paid bound, then ask the operator;
+      // completed answers are not repeated.
+      assert.equal(reviewed, failure === "unknown" ? 4 : 1);
       assert.equal(projected, 0);
-      // A lost transport answer is an interruption: the amendment stays at its
-      // last completed phase. A completed refusal or protocol failure rejects it.
+      // A lost answer leaves the amendment at its last completed phase. A
+      // completed refusal or protocol failure rejects it.
       assert.equal(
         state.pendingAmendment.phase,
         failure === "unknown" ? "compiled" : "rejected",
@@ -2496,15 +2460,23 @@ test("actual review provider/protocol failures cannot authorize amendment replac
         failure === "unknown" ? undefined : "review",
       );
       assert.equal(state.pendingAmendment.reviewDigest, undefined);
-      assert.equal(state.coordinator.mode, "paused");
-      assert.equal(state.coordinator.waitReason, state.pendingAmendment.error);
+      if (failure === "unknown") assert.equal(state.wait.kind, "decision");
+      else {
+        assert.equal(state.coordinator.mode, "paused");
+        assert.equal(
+          state.coordinator.waitReason,
+          state.pendingAmendment.error,
+        );
+      }
       assert.equal(state.allowanceConsumption.planningRevisions, 1);
       const correction = {
         ...state.pendingAmendment.proposal,
         replacement: {
           amendmentId: state.pendingAmendment.id,
           correction: {
-            failureDigest: failureDigest(state.pendingAmendment.error),
+            failureDigest: failureDigest(
+              state.pendingAmendment.error ?? "unknown review outcome",
+            ),
             kind: "planning-output",
             actor: "operator",
             diagnosis:
@@ -2521,19 +2493,17 @@ test("actual review provider/protocol failures cannot authorize amendment replac
       );
       assert.equal(JSON.stringify(state), before);
       if (failure !== "unknown") {
-        await assert.rejects(
-          applyPendingAmendment(args, 1),
-          /cannot be replayed/,
-        );
+        await assert.rejects(applyPendingAmendment(args), /cannot be replayed/);
         assert.equal(reviewed, 1);
         return;
       }
-      // Resuming repeats only the interrupted review, then completes.
-      state.coordinator.mode = "running";
+      // The operator's retry repeats only the interrupted review.
+      assert.equal(clearRepeats(state, "objective"), true);
       reviewAnswers = true;
-      assert.equal(await applyPendingAmendment(args, 1), true);
+      assert.equal(await applyPendingAmendment(args), true);
       assert.equal(compiled, 1);
-      assert.equal(reviewed, 4);
+      assert.equal(reviewed, 5);
+      assert.equal(state.wait, undefined);
       assert.equal(projected, 1);
       assert.equal(state.pendingAmendment, undefined);
       assert.deepEqual(state.issueByItemId, { result: 2, qa: 3 });
@@ -2589,6 +2559,7 @@ test("completed-rejection preserves projection history without replay", async ()
         },
         save() {},
         cancelled: () => false,
+        clock,
       };
       await assert.rejects(applyPendingAmendment(args), /GitHub/);
       assert.equal(state.pendingAmendment.phase, "rejected");
@@ -2607,8 +2578,10 @@ test("completed-rejection preserves projection history without replay", async ()
 test("mutation-unknown projection repeats without duplicate issues", async () => {
   await assertProjectionRepeats(
     "projection-mutation-unknown",
-    new GitHubOutcomeUnknown(),
-    /GitHub/,
+    attachFault(
+      new GitHubOutcomeUnknown(),
+      transient("GitHub POST response was lost", true),
+    ),
   );
 });
 
@@ -2660,6 +2633,7 @@ test("completed-auth-rejection preserves projection history without replay", asy
         },
         save() {},
         cancelled: () => false,
+        clock,
       };
       await assert.rejects(applyPendingAmendment(args), /GitHub/);
       assert.equal(state.pendingAmendment.phase, "rejected");

@@ -13,6 +13,7 @@ import { stateRoot } from "../../dist/config.js";
 import { NativeStackDelivery } from "../../dist/delivery/native-stack.js";
 import { LocalExecutionDriver } from "../../dist/execution/local.js";
 import { GitHubClient } from "../../dist/github-client.js";
+import { attachFault, transient } from "../../dist/fault.js";
 import { RealGitHubGateway } from "../../dist/github.js";
 import { Interruption, composeWithLocalHarness } from "../../dist/index.js";
 import {
@@ -60,12 +61,17 @@ process.on("SIGTERM", () => {
   );
 });
 
+// The scripted model stands in for a model adapter, so its failures carry
+// the classification a real adapter gives them.
+
 /** The error a caller sees when the call never reached its service. */
 function unavailable(target) {
   const cause = Object.assign(new Error("503 Service Unavailable"), {
     status: 503,
   });
-  return target === "driver" ? new Interruption(cause) : cause;
+  return target === "driver"
+    ? new Interruption(cause)
+    : attachFault(cause, transient(cause.message, false));
 }
 
 /** The error a caller sees when the call happened but its response was lost. */
@@ -73,7 +79,9 @@ function lost(target) {
   const cause = Object.assign(new Error("socket hang up"), {
     code: "ECONNRESET",
   });
-  return target === "driver" ? new Interruption(cause) : cause;
+  return target === "driver"
+    ? new Interruption(cause)
+    : attachFault(cause, transient(cause.message, true));
 }
 
 /** Log the call, apply a due fault, and run `call` unless the fault prevents it. */
